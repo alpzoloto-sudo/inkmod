@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="/style.css?v={{ v }}" />
+  <script src="/js/i18n.js"></script>
+{{ head_extra }}
+  <style>
+{{ styles }}
+  </style>
+</head>
+<body>
+  <h1><img class="logo-mark" src="/logo.png?v={{ v }}" alt="" /><span class="wordmark">inkMOD</span></h1>
+
+  <div class="nav-links">
+    <a href="/"{{ cls_home }} data-i18n="nav.home">Home</a>
+    <a href="/files"{{ cls_files }} data-i18n="nav.files">File Manager</a>
+    <a href="/epubkit"{{ cls_epubkit }} data-i18n="nav.epubkit">EPUB Kit</a>
+    <a href="/settings"{{ cls_settings }} data-i18n="nav.settings">Settings</a>
+    <a href="/fonts"{{ cls_fonts }} data-i18n="nav.fonts">Fonts</a>
+  </div>
+
+{{ body }}
+
+  <p class="footer" data-i18n="footer.tagline">inkMOD &bull; Open Source</p>
+
+{{ script }}
+</body>
+</html>

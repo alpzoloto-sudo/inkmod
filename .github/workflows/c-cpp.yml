@@ -1,0 +1,33 @@
+name: Firmware CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-tiny:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO and build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -U platformio
+          pip install -r requirements.txt
+
+      - name: Validate release metadata
+        run: python scripts/release_check.py
+
+      - name: Build tiny firmware
+        run: pio run -e tiny

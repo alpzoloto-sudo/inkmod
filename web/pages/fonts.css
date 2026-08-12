@@ -1,0 +1,249 @@
+h2 {
+        color: var(--title-color);
+        margin-top: 0;
+        font-size: 1.15em;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+h3 {
+        margin: 0 0 8px 0;
+        color: var(--title-color);
+        font-size: 1em;
+      }
+.family {
+        border-bottom: 1px solid var(--border-color);
+        padding: 14px 0;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+      }
+.family:last-child { border-bottom: none; }
+.family-info {
+        flex: 1;
+        min-width: 0;
+      }
+.family-meta { color: var(--label-color); font-size: 0.9em; }
+.btn {
+        padding: 8px 18px;
+        border: 1px solid transparent;
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+        font-size: 0.9em;
+        font-weight: 600;
+        transition: color 0.15s, background-color 0.15s, border-color 0.15s;
+      }
+.btn-danger {
+        background: transparent;
+        border-color: var(--border-color);
+        color: var(--label-color);
+      }
+.btn-danger:hover {
+        border-color: var(--danger-color);
+        color: var(--danger-color);
+        background-color: rgba(220, 38, 38, 0.06);
+      }
+.btn-primary {
+        background: var(--accent-color);
+        border-color: var(--accent-color);
+        color: white;
+      }
+.btn-primary:hover {
+        background: var(--accent-hover-color);
+        border-color: var(--accent-hover-color);
+      }
+.upload-form {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+.upload-form input[type="text"] {
+        padding: 8px 12px;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-sm);
+        background: var(--bg);
+        color: var(--font-color);
+      }
+.upload-form input[type="file"] { flex: 1; min-width: 200px; }
+#status {
+        margin-top: 12px;
+        padding: 12px;
+        border-radius: var(--radius-sm);
+        display: none;
+        text-align: center;
+        font-weight: 500;
+      }
+.status-ok {
+        background: rgba(22, 163, 74, 0.1);
+        border: 1px solid rgba(22, 163, 74, 0.25);
+        color: #15803d;
+        display: block !important;
+      }
+.status-err {
+        background: rgba(220, 38, 38, 0.08);
+        border: 1px solid rgba(220, 38, 38, 0.25);
+        color: #b91c1c;
+        display: block !important;
+      }
+.empty { color: var(--label-color); text-align: center; padding: 20px; }
+
+.hint { color: var(--label-color); font-size: 0.85em; margin: 0 0 12px; }
+.hint code { color: var(--font-color); }
+
+.badge-experimental {
+        display: inline-block;
+        margin-left: 8px;
+        padding: 2px 9px;
+        border-radius: 999px;
+        font-size: 0.65em;
+        font-weight: 700;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+        background: rgba(217, 119, 6, 0.12);
+        border: 1px solid rgba(217, 119, 6, 0.35);
+        color: #b45309;
+        vertical-align: middle;
+      }
+
+.convert-form {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        align-items: flex-start;
+      }
+.convert-row {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        width: 100%;
+      }
+.field-inline {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        flex: 1;
+        min-width: 160px;
+      }
+.field-label-text {
+        /* One field's label+hint (e.g. "Additional sizes...") wraps to 2 lines
+           while the sibling field's label (e.g. "Unicode range") stays on 1 -
+           without a shared reserved height, the shorter label leaves its
+           input sitting higher than the sibling's, so the two fields'
+           inputs/selects don't line up as a row. Reserving room for 2 lines
+           here keeps both inputs flush regardless of how much either label
+           text wraps. */
+        min-height: 50px;
+      }
+.field-inline em {
+        /* The hint (e.g. "(optional - 12, 14, 16, 18 always included)") reads
+           better as its own line under the label instead of running on
+           directly after it. */
+        display: block;
+        margin-top: 2px;
+      }
+.field-inline span {
+        font-size: 0.85em;
+        color: var(--label-color);
+      }
+.field-inline input, .field-inline select {
+        padding: 8px 12px;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-sm);
+        background-color: var(--bg);
+        color: var(--font-color);
+        /* Flex items default to min-width: auto, which sizes to the widest
+           <option> text - long translated labels (esp. ru/uk "Comprehensive")
+           then force the field past the card edge instead of shrinking to
+           fit. width: 100% + min-width: 0 + border-box lets it shrink. */
+        width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+      }
+.field-inline select {
+        /* The native dropdown arrow doesn't reserve its own space in every
+           browser, so a long selected-value label can render right under
+           (or past) it. Replace it with our own arrow in a fixed spot with
+           guaranteed padding, and force the visible value to ellipsize
+           instead of overflowing the card. */
+        appearance: none;
+        -webkit-appearance: none;
+        -moz-appearance: none;
+        padding-right: 30px;
+        background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20width%3D%2712%27%20height%3D%278%27%20viewBox%3D%270%200%2012%208%27%3E%3Cpath%20d%3D%27M1%201l5%205%205-5%27%20fill%3D%27none%27%20stroke%3D%27%236b7280%27%20stroke-width%3D%271.6%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27/%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 10px center;
+        background-size: 11px 7px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+@media (prefers-color-scheme: dark) {
+        .field-inline select {
+          background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20width%3D%2712%27%20height%3D%278%27%20viewBox%3D%270%200%2012%208%27%3E%3Cpath%20d%3D%27M1%201l5%205%205-5%27%20fill%3D%27none%27%20stroke%3D%27%239aa3af%27%20stroke-width%3D%271.6%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27/%3E%3C/svg%3E");
+        }
+      }
+
+.style-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        width: 100%;
+      }
+.file-slot {
+        border: 1px dashed var(--border-color);
+        border-radius: var(--radius-sm);
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        cursor: pointer;
+      }
+.file-slot-label { font-size: 0.9em; }
+.file-slot-label em { color: var(--label-color); font-style: normal; font-size: 0.85em; }
+.file-slot input[type="file"] { font-size: 0.8em; color: var(--label-color); }
+.file-slot-name { font-size: 0.8em; color: var(--label-color); }
+.file-slot.has-file { border-style: solid; border-color: var(--accent-color); }
+
+#convertStatus {
+        margin-top: 12px;
+        padding: 12px;
+        border-radius: var(--radius-sm);
+        display: none;
+        text-align: center;
+        font-weight: 500;
+      }
+
+@media (max-width: 600px) {
+        .style-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+@media (max-width: 600px) {
+        body {
+          padding: 16px 12px 40px;
+          font-size: 14px;
+        }
+        .card {
+          padding: 16px;
+          margin: 12px 0;
+        }
+        h1 {
+          font-size: 1.5em;
+        }
+        .nav-links a {
+          padding: 7px 14px;
+          font-size: 0.9em;
+        }
+        .family {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+        .upload-form {
+          align-items: stretch;
+          flex-direction: column;
+        }
+        .upload-form input[type="file"] {
+          min-width: 0;
+        }
+      }

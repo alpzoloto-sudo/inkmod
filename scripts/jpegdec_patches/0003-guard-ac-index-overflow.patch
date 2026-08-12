@@ -1,0 +1,35 @@
+From 07baf88b2bfa52495546f9a1f2f6a1392826ec80 Mon Sep 17 00:00:00 2001
+From: patch <patch@local>
+Date: Thu, 6 Aug 2026 11:13:28 +0000
+Subject: [PATCH] Guard AC coefficient write against skip-amount overflow past
+ index 63
+
+---
+ src/jpeg.inl | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/src/jpeg.inl b/src/jpeg.inl
+index 63b870d..49d79c1 100644
+--- a/src/jpeg.inl
++++ b/src/jpeg.inl
+@@ -2076,7 +2076,16 @@ static int JPEGDecodeMCU_P(JPEGIMAGE *pJPEG, int iMCU, int *iDCPredictor)
+                             ulCode -= 0xffffffff>>(REGISTER_WIDTH - 16 - -usHuff);
+                         ulBitOff += usHuff; // add (SSSS) extra length
+                         ulCode <<= pJPEG->cApproxBitsLow; // successive approximation shift value
+-                        pMCU[iIndex++] = (signed short)ulCode; // store AC coefficient
++                        // inkMOD patch: this skip amount (RRRR, up to 15) can push iIndex
++                        // past the last valid coefficient (63) near the end of a block -
++                        // upstream already guards the equivalent write in the successive-
++                        // approximation branch above ("iIndex < 0x40"), but this first-scan
++                        // branch was missing the same check, letting it write past this
++                        // MCUs own 64-coefficient slot into whatever follows sMCUs in
++                        // memory.
++                        if (iIndex < 0x40)
++                            pMCU[iIndex] = (signed short)ulCode; // store AC coefficient
++                        iIndex++;
+                     }
+                 }
+             } // while
+-- 
+2.43.0
+

@@ -1,0 +1,17 @@
+# Force LF endings for all text files regardless of platform/OS checkout settings.
+# Without this, Windows checkouts (core.autocrlf=true) convert web/ template sources
+# to CRLF; scripts/build_web.py then gzips that CRLF content into src/network/html/
+# *.generated.h, producing spurious diffs on every Windows build even when nothing
+# actually changed (the embedded gzip bytes differ from what a Linux/Mac build - or
+# GitHub Actions - produces from the same LF source).
+* text=auto eol=lf
+
+# Binaries: never touch line endings.
+*.bin binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.cpfont binary
+*.ttf binary
+*.otf binary
+*.zip binary

@@ -1,0 +1,5 @@
+remote_theme: just-the-docs/just-the-docs
+title: inkMOD
+description: Personal fork of InkMOD Reader
+mermaid:
+  version: "10.9.0"

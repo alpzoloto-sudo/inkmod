@@ -1,0 +1,99 @@
+* { box-sizing: border-box; }
+.epubkit-hero { text-align:center; margin:8px 0 26px; }
+.epubkit-title { display:flex; justify-content:center; align-items:center; gap:9px; }
+.epubkit-title span { font-size:30px; }
+.epubkit-title h2 { margin:0; color:var(--title-color); font-size:2em; letter-spacing:-.03em; }
+.epubkit-hero p { margin:6px 0 0; color:var(--label-color); }
+.epubkit-about { margin-bottom:20px; }
+.epubkit-lead { max-width:630px; text-align:center; margin:0 auto 14px; color:var(--label-color); font-size:.94em; }
+.epubkit-about-grid { display:grid; grid-template-columns:1fr 1fr; gap:9px; }
+.epubkit-about-grid > div { display:flex; gap:10px; padding:12px; border:1px solid var(--border-color); background:var(--card-bg); border-radius:var(--radius-md); }
+.epubkit-about-grid > div > span { font-size:19px; }
+.epubkit-about-grid p { display:flex; flex-direction:column; margin:0; }
+.epubkit-about-grid strong { font-size:.9em; }
+.epubkit-about-grid small { margin-top:2px; color:var(--label-color); line-height:1.35; }
+.epubkit-source { display:block; width:max-content; max-width:100%; margin:10px auto 0; padding:7px 12px; color:var(--label-color); text-decoration:none; font-size:.84em; border:1px solid var(--border-color); border-radius:var(--radius-sm); background:var(--card-bg); }
+.epubkit-source:hover { color:var(--font-color); border-color:var(--accent-color); }
+.epubkit-drop { display:flex; min-height:190px; flex-direction:column; align-items:center; justify-content:center; gap:7px; padding:28px; border:2px dashed var(--border-color); border-radius:var(--radius-lg); background:var(--card-bg); cursor:pointer; transition:.15s ease; text-align:center; }
+.epubkit-drop:hover,.epubkit-drop.dragover,.epubkit-drop:focus { outline:none; border-color:var(--accent-color); background:var(--accent-soft); }
+.epubkit-drop svg { width:42px; height:42px; fill:none; stroke:var(--label-color); stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
+.epubkit-drop strong { font-size:1.05em; }
+.epubkit-drop span { color:var(--label-color); font-size:.88em; }
+.epubkit-file-list { margin-top:14px; }
+.epubkit-file-card { position:relative; display:grid; grid-template-columns:54px minmax(0,1fr) 30px; gap:13px; padding:14px; margin-bottom:9px; border:1px solid var(--border-color); border-radius:var(--radius-md); background:var(--card-bg); box-shadow:var(--shadow-sm); }
+.epubkit-cover { display:flex; align-items:center; justify-content:center; width:54px; height:74px; overflow:hidden; border-radius:6px; background:var(--bg); color:var(--label-color); font-size:10px; text-align:center; }
+.epubkit-cover img { width:100%; height:100%; object-fit:cover; }
+.epubkit-file-main { min-width:0; }
+.epubkit-file-name { overflow:hidden; text-overflow:ellipsis; font-size:.92em; font-weight:650; white-space:nowrap; }
+.epubkit-file-meta { color:var(--label-color); font-size:.82em; margin-top:2px; }
+.epubkit-file-edit { display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-top:9px; }
+.epubkit-file-edit input,.epubkit-path input { min-width:0; width:100%; padding:7px 9px; border:1px solid var(--border-color); border-radius:var(--radius-sm); background:var(--bg); color:var(--font-color); font:inherit; font-size:.84em; }
+.epubkit-remove { align-self:start; border:0; background:transparent; color:var(--label-color); font-size:23px; line-height:1; cursor:pointer; }
+.epubkit-remove:hover { color:var(--danger-color); }
+.epubkit-file-error { color:var(--danger-color); font-size:.82em; margin-top:5px; }
+.epubkit-panel { padding:22px; margin-top:15px; border:1px solid var(--border-color); border-radius:var(--radius-lg); background:var(--card-bg); box-shadow:var(--shadow-sm); }
+.epubkit-section-title { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:15px; }
+.epubkit-section-title h3 { margin:0; color:var(--title-color); font-size:1.06em; }
+.epubkit-section-title span { color:var(--label-color); font-size:.78em; }
+.epubkit-device-row { display:flex; align-items:center; gap:12px; margin-bottom:15px; }
+.epubkit-device-row > strong { font-size:.88em; }
+.epubkit-segmented { display:flex; flex:1; overflow:hidden; border:1px solid var(--border-color); border-radius:var(--radius-md); }
+.epubkit-segmented button { flex:1; padding:8px 12px; border:0; background:transparent; color:var(--font-color); cursor:pointer; }
+.epubkit-segmented button + button { border-left:1px solid var(--border-color); }
+.epubkit-segmented b,.epubkit-segmented small { display:block; }
+.epubkit-segmented small { color:var(--label-color); }
+.epubkit-segmented .active { background:var(--font-color); color:var(--card-bg); }
+.epubkit-segmented .active small { color:inherit; opacity:.7; }
+.epubkit-presets { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:18px; }
+.epubkit-presets button { display:flex; flex-direction:column; align-items:center; padding:10px 7px; border:1px solid var(--border-color); border-radius:var(--radius-md); background:transparent; color:var(--font-color); cursor:pointer; }
+.epubkit-presets button:hover { border-color:var(--accent-color); }
+.epubkit-presets button.active { border-color:var(--accent-color); background:var(--accent-soft); }
+.epubkit-presets b { font-size:.88em; }
+.epubkit-presets small { color:var(--label-color); }
+.epubkit-options-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.epubkit-options-grid label,.epubkit-upload-toggle { display:flex; align-items:flex-start; gap:9px; padding:11px; border:1px solid var(--border-color); border-radius:var(--radius-md); cursor:pointer; }
+.epubkit-options-grid input,.epubkit-upload-toggle input { width:17px; height:17px; margin:2px 0 0; accent-color:var(--accent-color); flex:none; }
+.epubkit-options-grid span,.epubkit-upload-toggle span { display:flex; flex-direction:column; min-width:0; }
+.epubkit-options-grid b,.epubkit-upload-toggle b { font-size:.88em; }
+.epubkit-options-grid small,.epubkit-upload-toggle small { color:var(--label-color); line-height:1.35; }
+.epubkit-quality,.epubkit-destination { margin-top:16px; padding-top:16px; border-top:1px solid var(--border-color); }
+.epubkit-quality > div:first-child { display:flex; justify-content:space-between; font-size:.9em; }
+.epubkit-quality output { color:var(--accent-color); font-weight:700; }
+.epubkit-quality-buttons { display:flex; gap:6px; margin:9px 0; }
+.epubkit-quality-buttons button { flex:1; padding:6px; border:1px solid var(--border-color); border-radius:var(--radius-sm); background:transparent; color:var(--font-color); cursor:pointer; }
+.epubkit-quality-buttons button.active { color:#fff; border-color:var(--accent-color); background:var(--accent-color); }
+.epubkit-quality input[type=range] { width:100%; accent-color:var(--accent-color); }
+.epubkit-destination { display:grid; grid-template-columns:1.4fr 1fr; gap:10px; align-items:stretch; }
+.epubkit-path { display:flex; flex-direction:column; gap:5px; padding:8px 10px; border:1px solid var(--border-color); border-radius:var(--radius-md); color:var(--label-color); font-size:.78em; }
+.epubkit-actions { display:flex; gap:9px; margin-top:16px; }
+.epubkit-actions button,.epubkit-result-actions button,.epubkit-result-actions a { min-height:42px; padding:9px 15px; border:1px solid var(--border-color); border-radius:var(--radius-md); background:transparent; color:var(--font-color); font:inherit; font-weight:600; text-decoration:none; cursor:pointer; }
+.epubkit-actions .epubkit-primary { flex:1; color:#fff; border-color:var(--accent-color); background:var(--accent-color); }
+.epubkit-actions .epubkit-primary:hover { background:var(--accent-hover-color); }
+.epubkit-actions button:disabled { cursor:not-allowed; opacity:.55; }
+.epubkit-progress-item,.epubkit-result-item { padding:13px; margin-top:9px; border:1px solid var(--border-color); border-radius:var(--radius-md); }
+.epubkit-progress-head { display:flex; justify-content:space-between; gap:10px; font-size:.86em; font-weight:600; }
+.epubkit-progress-track { height:7px; overflow:hidden; margin:8px 0 6px; border-radius:20px; background:var(--bg); }
+.epubkit-progress-bar { width:0; height:100%; background:var(--accent-color); transition:width .15s linear; }
+.epubkit-progress-message { color:var(--label-color); font-size:.8em; min-height:1.3em; }
+.epubkit-progress-log { max-height:145px; overflow:auto; padding:8px; margin-top:8px; border-radius:var(--radius-sm); background:var(--bg); color:var(--label-color); font:11px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre-wrap; }
+.epubkit-result-item.success { border-color:rgba(22,163,74,.45); }
+.epubkit-result-item.error { border-color:rgba(220,38,38,.55); }
+.epubkit-result-title { display:flex; justify-content:space-between; gap:10px; font-weight:650; }
+.epubkit-result-summary { margin:7px 0; color:var(--label-color); font-size:.82em; }
+.epubkit-result-stats { display:grid; grid-template-columns:repeat(3,1fr); gap:7px; margin:9px 0; }
+.epubkit-result-stats span { padding:7px; border-radius:var(--radius-sm); background:var(--bg); font-size:.76em; text-align:center; }
+.epubkit-result-actions { display:flex; gap:7px; flex-wrap:wrap; }
+.epubkit-result-actions a,.epubkit-result-actions button { min-height:36px; padding:6px 11px; font-size:.82em; }
+.epubkit-result-actions .uploaded { color:var(--success-color); cursor:default; }
+@media(max-width:600px){
+  .epubkit-about-grid,.epubkit-options-grid,.epubkit-destination { grid-template-columns:1fr; }
+  .epubkit-panel { padding:15px; }
+  .epubkit-drop { min-height:155px; padding:20px 14px; }
+  .epubkit-file-card { grid-template-columns:48px minmax(0,1fr) 24px; gap:10px; padding:11px; }
+  .epubkit-cover { width:48px; height:66px; }
+  .epubkit-file-edit { grid-template-columns:1fr; }
+  .epubkit-device-row { align-items:flex-start; flex-direction:column; }
+  .epubkit-segmented { width:100%; }
+  .epubkit-presets small { font-size:.72em; }
+  .epubkit-result-stats { grid-template-columns:1fr; }
+}

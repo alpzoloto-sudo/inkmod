@@ -1,0 +1,563 @@
+#include "JsonSettingsIO.h"
+
+#include <ArduinoJson.h>
+#ifdef SIMULATOR
+#include <ArduinoJsonStringCompat.h>
+#endif
+#include <HalStorage.h>
+#include <Logging.h>
+#include <ObfuscationUtils.h>
+
+#include <algorithm>
+#include <cstring>
+#include <string>
+#include <vector>
+
+#include "InkMODSettings.h"
+#include "InkMODState.h"
+#include "OpdsServerStore.h"
+#include "RecentBooksStore.h"
+#include "SettingsList.h"
+#include "WifiCredentialStore.h"
+
+// Convert legacy settings.
+void applyLegacyStatusBarSettings(InkMODSettings& settings) {
+  switch (static_cast<InkMODSettings::STATUS_BAR_MODE>(settings.statusBar)) {
+    case InkMODSettings::NONE:
+      settings.statusBarChapterPageCount = 0;
+      settings.statusBarBookProgressPercentage = 0;
+      settings.statusBarProgressBar = InkMODSettings::HIDE_PROGRESS;
+      settings.statusBarTitle = InkMODSettings::HIDE_TITLE;
+      settings.statusBarBattery = 0;
+      break;
+    case InkMODSettings::NO_PROGRESS:
+      settings.statusBarChapterPageCount = 0;
+      settings.statusBarBookProgressPercentage = 0;
+      settings.statusBarProgressBar = InkMODSettings::HIDE_PROGRESS;
+      settings.statusBarTitle = InkMODSettings::CHAPTER_TITLE;
+      settings.statusBarBattery = 1;
+      break;
+    case InkMODSettings::BOOK_PROGRESS_BAR:
+      settings.statusBarChapterPageCount = 1;
+      settings.statusBarBookProgressPercentage = 0;
+      settings.statusBarProgressBar = InkMODSettings::BOOK_PROGRESS;
+      settings.statusBarTitle = InkMODSettings::CHAPTER_TITLE;
+      settings.statusBarBattery = 1;
+      break;
+    case InkMODSettings::ONLY_BOOK_PROGRESS_BAR:
+      settings.statusBarChapterPageCount = 1;
+      settings.statusBarBookProgressPercentage = 0;
+      settings.statusBarProgressBar = InkMODSettings::BOOK_PROGRESS;
+      settings.statusBarTitle = InkMODSettings::HIDE_TITLE;
+      settings.statusBarBattery = 0;
+      break;
+    case InkMODSettings::CHAPTER_PROGRESS_BAR:
+      settings.statusBarChapterPageCount = 0;
+      settings.statusBarBookProgressPercentage = 1;
+      settings.statusBarProgressBar = InkMODSettings::CHAPTER_PROGRESS;
+      settings.statusBarTitle = InkMODSettings::CHAPTER_TITLE;
+      settings.statusBarBattery = 1;
+      break;
+    case InkMODSettings::FULL:
+    default:
+      settings.statusBarChapterPageCount = 1;
+      settings.statusBarBookProgressPercentage = 1;
+      settings.statusBarProgressBar = InkMODSettings::HIDE_PROGRESS;
+      settings.statusBarTitle = InkMODSettings::CHAPTER_TITLE;
+      settings.statusBarBattery = 1;
+      break;
+  }
+}
+
+bool isEnumRawValueAllowed(const SettingInfo& info, uint8_t value) {
+  if (info.enumRawValues.empty()) {
+    return value < settingEnumOptionCount(info);
+  }
+  return std::find(info.enumRawValues.begin(), info.enumRawValues.end(), value) != info.enumRawValues.end();
+}
+
+uint8_t defaultEnumRawValue(const SettingInfo& info, uint8_t fieldDefault) {
+  if (isEnumRawValueAllowed(info, fieldDefault)) {
+    return fieldDefault;
+  }
+  if (!info.enumRawValues.empty()) {
+    return info.enumRawValues.front();
+  }
+  return 0;
+}
+
+bool isSleepScreenSetting(const SettingInfo& info) { return info.key && strcmp(info.key, "sleepScreen") == 0; }
+
+// ---- InkMODState ----
+
+bool JsonSettingsIO::saveState(const InkMODState& s, const char* path) {
+  JsonDocument doc;
+  doc["openEpubPath"] = s.openEpubPath;
+  doc["favoriteSleepImagePath"] = s.favoriteSleepImagePath;
+  doc["preferredSleepFolderPath"] = s.preferredSleepFolderPath;
+  JsonArray recentArr = doc["recentSleepImages"].to<JsonArray>();
+  for (int i = 0; i < InkMODState::SLEEP_RECENT_COUNT; i++) recentArr.add(s.recentSleepImages[i]);
+  doc["recentSleepPos"] = s.recentSleepPos;
+  doc["recentSleepFill"] = s.recentSleepFill;
+  doc["readerActivityLoadCount"] = s.readerActivityLoadCount;
+  doc["lastSleepFromReader"] = s.lastSleepFromReader;
+  doc["pendingBookmarkSpine"] = s.pendingBookmarkSpine;
+  doc["pendingBookmarkProgress"] = s.pendingBookmarkProgress;
+  doc["pendingBookmarkParagraphIndex"] = s.pendingBookmarkParagraphIndex;
+  doc["showBootScreen"] = s.showBootScreen;
+  doc["lastChargeEpochSeconds"] = s.lastChargeEpochSeconds;
+
+  String json;
+  serializeJson(doc, json);
+  return Storage.writeFile(path, json);
+}
+
+bool JsonSettingsIO::loadState(InkMODState& s, const char* json) {
+  JsonDocument doc;
+  auto error = deserializeJson(doc, json);
+  if (error) {
+    LOG_ERR("CPS", "JSON parse error: %s", error.c_str());
+    return false;
+  }
+
+  s.openEpubPath = doc["openEpubPath"] | std::string("");
+  s.favoriteSleepImagePath = doc["favoriteSleepImagePath"] | std::string("");
+  s.preferredSleepFolderPath = doc["preferredSleepFolderPath"] | std::string("");
+  memset(s.recentSleepImages, 0, sizeof(s.recentSleepImages));
+  JsonArrayConst recentArr = doc["recentSleepImages"];
+  const int actualCount = recentArr.isNull() ? 0
+                                             : std::min(static_cast<int>(recentArr.size()),
+                                                        static_cast<int>(InkMODState::SLEEP_RECENT_COUNT));
+  for (int i = 0; i < actualCount; i++) s.recentSleepImages[i] = recentArr[i] | static_cast<uint16_t>(0);
+  s.recentSleepPos = doc["recentSleepPos"] | static_cast<uint8_t>(0);
+  if (s.recentSleepPos >= InkMODState::SLEEP_RECENT_COUNT)
+    s.recentSleepPos = actualCount > 0 ? s.recentSleepPos % InkMODState::SLEEP_RECENT_COUNT : 0;
+  s.recentSleepFill = doc["recentSleepFill"] | static_cast<uint8_t>(0);
+  s.recentSleepFill = static_cast<uint8_t>(std::min(static_cast<int>(s.recentSleepFill), actualCount));
+  // Migrate legacy single-image field from old state.json (pre-recency-buffer).
+  // Only seeds the buffer if the new buffer is empty (fresh migration, not a resave).
+  if (s.recentSleepFill == 0 && !doc["lastSleepImage"].isNull()) {
+    const uint8_t legacy = doc["lastSleepImage"] | static_cast<uint8_t>(UINT8_MAX);
+    if (legacy != UINT8_MAX) s.pushRecentSleep(static_cast<uint16_t>(legacy));
+  }
+  s.readerActivityLoadCount = doc["readerActivityLoadCount"] | static_cast<uint8_t>(0);
+  s.lastSleepFromReader = doc["lastSleepFromReader"] | false;
+  s.pendingBookmarkSpine = doc["pendingBookmarkSpine"] | static_cast<uint16_t>(UINT16_MAX);
+  s.pendingBookmarkProgress = doc["pendingBookmarkProgress"] | static_cast<float>(-1.0f);
+  s.pendingBookmarkParagraphIndex = doc["pendingBookmarkParagraphIndex"] | static_cast<uint16_t>(UINT16_MAX);
+  s.showBootScreen = doc["showBootScreen"] | true;
+  s.lastChargeEpochSeconds = doc["lastChargeEpochSeconds"] | 0ULL;
+  return true;
+}
+
+// ---- InkMODSettings ----
+
+bool JsonSettingsIO::saveSettings(const InkMODSettings& s, const char* path) {
+  JsonDocument doc;
+
+  for (const auto& info : getSettingsList()) {
+    if (!info.key) continue;
+    // Dynamic entries (KOReader etc.) are stored in their own files — skip.
+    if (!info.valuePtr && !info.stringOffset) continue;
+
+    if (info.stringOffset) {
+      const char* strPtr = (const char*)&s + info.stringOffset;
+      if (info.obfuscated) {
+        doc[std::string(info.key) + "_obf"] = obfuscation::obfuscateToBase64(strPtr);
+      } else {
+        doc[info.key] = strPtr;
+      }
+    } else {
+      uint8_t value = s.*(info.valuePtr);
+      if (isSleepScreenSetting(info)) {
+        value = InkMODSettings::sleepScreenModeToStorage(value);
+      }
+      doc[info.key] = value;
+    }
+  }
+
+  // Front button remap — managed by RemapFrontButtons sub-activity, not in SettingsList.
+  doc["frontButtonBack"] = s.frontButtonBack;
+  doc["frontButtonConfirm"] = s.frontButtonConfirm;
+  doc["frontButtonLeft"] = s.frontButtonLeft;
+  doc["frontButtonRight"] = s.frontButtonRight;
+  // Reader-specific front button remap.
+  doc["readerFrontButtonsEnabled"] = s.readerFrontButtonsEnabled;
+  doc["readerFrontButtonBack"] = s.readerFrontButtonBack;
+  doc["readerFrontButtonConfirm"] = s.readerFrontButtonConfirm;
+  doc["readerFrontButtonLeft"] = s.readerFrontButtonLeft;
+  doc["readerFrontButtonRight"] = s.readerFrontButtonRight;
+  // Font family — uses dynamic getter/setter in SettingsList so the generic loop skips it.
+  doc["fontFamily"] = s.fontFamily;
+  // SD card font family name — not in SettingsList, save manually
+  if (s.sdFontFamilyName[0] != '\0') {
+    doc["sdFontFamilyName"] = s.sdFontFamilyName;
+  }
+
+  // Language -- managed by LanguageSelectActivity, not in SettingsList.
+  // Stored as ISO code string ("EN", "DE", ...) for stability across enum reorders.
+  doc["language"] = (s.language < getLanguageCount()) ? LANGUAGE_CODES[s.language] : "EN";
+  // Separate from the legacy clock sync flag because older builds synced time
+  // only, leaving the RTC date registers at their placeholder/default value.
+  doc["clockDateHasBeenSynced"] = s.clockDateHasBeenSynced;
+  // X4 software-clock fallback seed - see the field comment in InkMODSettings.h.
+  if (s.clockLastSyncedEpoch != 0) {
+    doc["clockLastSyncedEpoch"] = s.clockLastSyncedEpoch;
+  }
+
+  String json;
+  serializeJson(doc, json);
+  return Storage.writeFile(path, json);
+}
+
+bool JsonSettingsIO::loadSettings(InkMODSettings& s, const char* json, bool* needsResave) {
+  if (needsResave) *needsResave = false;
+  JsonDocument doc;
+  auto error = deserializeJson(doc, json);
+  if (error) {
+    LOG_ERR("CPS", "JSON parse error: %s", error.c_str());
+    return false;
+  }
+
+  auto clamp = [](uint8_t val, uint8_t maxVal, uint8_t def) -> uint8_t { return val < maxVal ? val : def; };
+  const bool migrateLegacyTiltMode = !doc["tiltPageTurn"].isNull() && doc["tiltPageTurnDirection"].isNull();
+  const uint8_t legacyTiltMode = doc["tiltPageTurn"] | static_cast<uint8_t>(InkMODSettings::TILT_OFF);
+
+  // Legacy migration: if statusBarChapterPageCount is absent this is a pre-refactor settings file.
+  // Populate s with migrated values now so the generic loop below picks them up as defaults and clamps them.
+  if (doc["statusBarChapterPageCount"].isNull()) {
+    applyLegacyStatusBarSettings(s);
+  }
+  for (const auto& info : getSettingsList()) {
+    if (!info.key) continue;
+    // Dynamic entries (KOReader etc.) are stored in their own files — skip.
+    if (!info.valuePtr && !info.stringOffset) continue;
+
+    if (info.stringOffset) {
+      const char* strPtr = (const char*)&s + info.stringOffset;
+      const std::string fieldDefault = strPtr;  // current buffer = struct-initializer default
+      std::string val;
+      if (info.obfuscated) {
+        obfuscation::DecodeStatus status = obfuscation::DecodeStatus::INVALID;
+        val = obfuscation::deobfuscateFromBase64(doc[std::string(info.key) + "_obf"] | "", &status);
+        if (status == obfuscation::DecodeStatus::LEGACY && !val.empty() && needsResave) {
+          *needsResave = true;
+        }
+        if (status == obfuscation::DecodeStatus::INVALID || status == obfuscation::DecodeStatus::EMPTY || val.empty()) {
+          val = doc[info.key] | fieldDefault;
+          if (val != fieldDefault && needsResave) *needsResave = true;
+        }
+      } else {
+        val = doc[info.key] | fieldDefault;
+      }
+      char* destPtr = (char*)&s + info.stringOffset;
+      if (info.stringMaxLen == 0) {
+        LOG_ERR("CPS", "Misconfigured SettingInfo: stringMaxLen is 0 for key '%s'", info.key);
+        destPtr[0] = '\0';
+        if (needsResave) *needsResave = true;
+        continue;
+      }
+      strncpy(destPtr, val.c_str(), info.stringMaxLen - 1);
+      destPtr[info.stringMaxLen - 1] = '\0';
+      if (std::strcmp(info.key, "deviceName") == 0 &&
+          std::strlen(destPtr) < InkMODSettings::MIN_DEVICE_NAME_LENGTH) {
+        destPtr[0] = '\0';
+        if (needsResave) *needsResave = true;
+      }
+    } else {
+      const uint8_t fieldDefault = s.*(info.valuePtr);  // struct-initializer default, read before we overwrite it
+      uint8_t v = doc[info.key] | fieldDefault;
+      if (isSleepScreenSetting(info)) {
+        const uint8_t storedDefault = InkMODSettings::sleepScreenModeToStorage(fieldDefault);
+        const uint8_t storedValue = doc[info.key] | storedDefault;
+        v = InkMODSettings::sleepScreenStorageToMode(storedValue);
+        if (InkMODSettings::sleepScreenModeToStorage(v) != storedValue && needsResave) *needsResave = true;
+        s.*(info.valuePtr) = v;
+        continue;
+      }
+      if (info.type == SettingType::ENUM) {
+        const bool isSdFontSize = info.key && strcmp(info.key, "fontSize") == 0 &&
+                                  doc["sdFontFamilyName"].is<const char*>() &&
+                                  doc["sdFontFamilyName"].as<const char*>()[0] != '\0';
+        if (isSdFontSize && v < InkMODSettings::SD_FONT_MAX_SIZE_STEPS) {
+          // Keep a saved SD-family size index even when this build's built-in
+          // font list has fewer choices; the registry-aware settings list will
+          // clamp it to the selected family once SD fonts are discovered.
+        } else if (!isEnumRawValueAllowed(info, v)) {
+          v = defaultEnumRawValue(info, fieldDefault);
+          if (needsResave) *needsResave = true;
+        }
+      } else if (info.type == SettingType::TOGGLE) {
+        v = clamp(v, (uint8_t)2, fieldDefault);
+      } else if (info.type == SettingType::VALUE) {
+        if (v < info.valueRange.min)
+          v = info.valueRange.min;
+        else if (v > info.valueRange.max)
+          v = info.valueRange.max;
+      }
+      s.*(info.valuePtr) = v;
+    }
+  }
+
+  // Migration: preserve Minimal users' old two-line file browser default when the new
+  // fileBrowserDisplay setting is not present yet.
+  if (doc["fileBrowserDisplay"].isNull()) {
+    if (!doc["fileBrowserPreview"].isNull()) {
+      s.fileBrowserDisplay =
+          clamp(doc["fileBrowserPreview"] | static_cast<uint8_t>(InkMODSettings::FILE_BROWSER_DISPLAY_1_LINE),
+                static_cast<uint8_t>(InkMODSettings::FILE_BROWSER_DISPLAY_COUNT),
+                static_cast<uint8_t>(InkMODSettings::FILE_BROWSER_DISPLAY_1_LINE));
+      if (needsResave) *needsResave = true;
+    } else if (s.uiTheme == InkMODSettings::MINIMAL) {
+      s.fileBrowserDisplay = InkMODSettings::FILE_BROWSER_DISPLAY_2_LINES;
+      if (needsResave) *needsResave = true;
+    }
+  }
+
+  if (migrateLegacyTiltMode) {
+    if (legacyTiltMode == 1 || legacyTiltMode == 2) {
+      s.tiltPageTurn = InkMODSettings::TILT_ON;
+      s.tiltPageTurnDirection =
+          legacyTiltMode == 2 ? InkMODSettings::TILT_LEFT_RIGHT_INVERTED : InkMODSettings::TILT_LEFT_RIGHT;
+      if (needsResave) *needsResave = true;
+    } else {
+      s.tiltPageTurn = InkMODSettings::TILT_OFF;
+    }
+  }
+
+  if (doc["hideClock"].isNull() && !doc["statusBarClock"].isNull()) {
+    constexpr uint8_t LEGACY_SHOW_CLOCK_NEVER = 0;
+    const uint8_t legacyShowClock =
+        clamp(doc["statusBarClock"] | LEGACY_SHOW_CLOCK_NEVER,
+              static_cast<uint8_t>(InkMODSettings::HIDE_CLOCK_MODE_COUNT), LEGACY_SHOW_CLOCK_NEVER);
+    s.hideClock = legacyShowClock == LEGACY_SHOW_CLOCK_NEVER ? InkMODSettings::HIDE_CLOCK_ALWAYS
+                                                             : InkMODSettings::HIDE_CLOCK_NEVER;
+    if (needsResave) *needsResave = true;
+  }
+
+  if (doc["sleepTimeoutMinutes"].isNull() && !doc["sleepTimeout"].isNull()) {
+    const uint8_t legacyValue =
+        clamp(doc["sleepTimeout"] | (uint8_t)InkMODSettings::SLEEP_10_MIN, InkMODSettings::SLEEP_TIMEOUT_COUNT,
+              (uint8_t)InkMODSettings::SLEEP_10_MIN);
+    s.sleepTimeoutMinutes = InkMODSettings::sleepTimeoutEnumToMinutes(legacyValue);
+    if (needsResave) *needsResave = true;
+  }
+  // Front button remap — managed by RemapFrontButtons sub-activity, not in SettingsList.
+  using S = InkMODSettings;
+  s.frontButtonBack =
+      clamp(doc["frontButtonBack"] | (uint8_t)S::FRONT_HW_BACK, S::FRONT_BUTTON_HARDWARE_COUNT, S::FRONT_HW_BACK);
+  s.frontButtonConfirm = clamp(doc["frontButtonConfirm"] | (uint8_t)S::FRONT_HW_CONFIRM, S::FRONT_BUTTON_HARDWARE_COUNT,
+                               S::FRONT_HW_CONFIRM);
+  s.frontButtonLeft =
+      clamp(doc["frontButtonLeft"] | (uint8_t)S::FRONT_HW_LEFT, S::FRONT_BUTTON_HARDWARE_COUNT, S::FRONT_HW_LEFT);
+  s.frontButtonRight =
+      clamp(doc["frontButtonRight"] | (uint8_t)S::FRONT_HW_RIGHT, S::FRONT_BUTTON_HARDWARE_COUNT, S::FRONT_HW_RIGHT);
+  InkMODSettings::validateFrontButtonMapping(s);
+  // Reader-specific front button remap.
+  s.readerFrontButtonsEnabled = clamp(doc["readerFrontButtonsEnabled"] | (uint8_t)0, (uint8_t)2, (uint8_t)0);
+  s.readerFrontButtonBack =
+      clamp(doc["readerFrontButtonBack"] | (uint8_t)S::FRONT_HW_BACK, S::FRONT_BUTTON_HARDWARE_COUNT, S::FRONT_HW_BACK);
+  s.readerFrontButtonConfirm = clamp(doc["readerFrontButtonConfirm"] | (uint8_t)S::FRONT_HW_CONFIRM,
+                                     S::FRONT_BUTTON_HARDWARE_COUNT, S::FRONT_HW_CONFIRM);
+  s.readerFrontButtonLeft =
+      clamp(doc["readerFrontButtonLeft"] | (uint8_t)S::FRONT_HW_LEFT, S::FRONT_BUTTON_HARDWARE_COUNT, S::FRONT_HW_LEFT);
+  s.readerFrontButtonRight = clamp(doc["readerFrontButtonRight"] | (uint8_t)S::FRONT_HW_RIGHT,
+                                   S::FRONT_BUTTON_HARDWARE_COUNT, S::FRONT_HW_RIGHT);
+  InkMODSettings::validateReaderFrontButtonMapping(s);
+
+  // Font family — uses dynamic getter/setter in SettingsList so the generic loop skips it.
+  const uint8_t storedFontFamily = doc["fontFamily"] | (uint8_t)0;
+  s.fontFamily = clamp(storedFontFamily, InkMODSettings::BUILTIN_FONT_COUNT, 0);
+  // SD card font family name — not in SettingsList, load manually
+  const char* sfn = doc["sdFontFamilyName"] | "";
+  strncpy(s.sdFontFamilyName, sfn, sizeof(s.sdFontFamilyName) - 1);
+  s.sdFontFamilyName[sizeof(s.sdFontFamilyName) - 1] = '\0';
+  if (storedFontFamily >= InkMODSettings::BUILTIN_FONT_COUNT) {
+    if (needsResave) *needsResave = true;
+  }
+
+  if (doc["lineHeightPercent"].isNull() && !doc["lineSpacing"].isNull()) {
+    const uint8_t legacyLineSpacing = clamp(doc["lineSpacing"] | static_cast<uint8_t>(InkMODSettings::NORMAL),
+                                            static_cast<uint8_t>(InkMODSettings::LINE_COMPRESSION_COUNT),
+                                            static_cast<uint8_t>(InkMODSettings::NORMAL));
+    s.lineHeightPercent =
+        InkMODSettings::legacyLineSpacingToPercent(legacyLineSpacing, s.fontFamily, s.sdFontFamilyName[0] != '\0');
+    if (needsResave) *needsResave = true;
+  }
+
+  // Language -- stored as code string for stability across enum reorders.
+  if (doc["language"].is<const char*>()) {
+    s.language = static_cast<uint8_t>(I18n::languageFromCode(doc["language"].as<const char*>()));
+  }
+  s.clockDateHasBeenSynced = clamp(doc["clockDateHasBeenSynced"] | (uint8_t)0, (uint8_t)2, (uint8_t)0);
+  s.clockLastSyncedEpoch = doc["clockLastSyncedEpoch"] | (uint32_t)0;
+
+  LOG_DBG("CPS", "Settings loaded from file");
+
+  return true;
+}
+
+// ---- WifiCredentialStore ----
+
+bool JsonSettingsIO::saveWifi(const WifiCredentialStore& store, const char* path) {
+  JsonDocument doc;
+  doc["lastConnectedSsid"] = store.getLastConnectedSsid();
+
+  JsonArray arr = doc["credentials"].to<JsonArray>();
+  for (const auto& cred : store.getCredentials()) {
+    JsonObject obj = arr.add<JsonObject>();
+    obj["ssid"] = cred.ssid;
+    obj["password_obf"] = obfuscation::obfuscateToBase64(cred.password);
+  }
+
+  String json;
+  serializeJson(doc, json);
+  return Storage.writeFile(path, json);
+}
+
+bool JsonSettingsIO::loadWifi(WifiCredentialStore& store, const char* json, bool* needsResave) {
+  if (needsResave) *needsResave = false;
+  JsonDocument doc;
+  auto error = deserializeJson(doc, json);
+  if (error) {
+    LOG_ERR("WCS", "JSON parse error: %s", error.c_str());
+    return false;
+  }
+
+  store.lastConnectedSsid = doc["lastConnectedSsid"] | std::string("");
+
+  store.credentials.clear();
+  JsonArray arr = doc["credentials"].as<JsonArray>();
+  for (JsonObject obj : arr) {
+    if (store.credentials.size() >= store.MAX_NETWORKS) break;
+    WifiCredential cred;
+    cred.ssid = obj["ssid"] | std::string("");
+    if (cred.ssid.empty()) {
+      LOG_ERR("WCS", "Skipping WiFi credential with empty SSID");
+      continue;
+    }
+
+    obfuscation::DecodeStatus status = obfuscation::DecodeStatus::INVALID;
+    cred.password = obfuscation::deobfuscateFromBase64(obj["password_obf"] | "", &status);
+    if (status == obfuscation::DecodeStatus::LEGACY && !cred.password.empty() && needsResave) {
+      *needsResave = true;
+    }
+    if (status == obfuscation::DecodeStatus::INVALID || status == obfuscation::DecodeStatus::EMPTY ||
+        cred.password.empty()) {
+      cred.password = obj["password"] | std::string("");
+      if (!cred.password.empty() && needsResave) *needsResave = true;
+    }
+    if (status == obfuscation::DecodeStatus::INVALID && cred.password.empty()) {
+      LOG_ERR("WCS", "Skipping WiFi credential with unreadable password: %s", cred.ssid.c_str());
+      continue;
+    }
+    store.credentials.push_back(cred);
+  }
+
+  LOG_DBG("WCS", "Loaded %zu WiFi credentials from file", store.credentials.size());
+  return true;
+}
+
+// ---- RecentBooksStore ----
+
+bool JsonSettingsIO::saveRecentBooks(const RecentBooksStore& store, const char* path) {
+  JsonDocument doc;
+  JsonArray arr = doc["books"].to<JsonArray>();
+  for (const auto& book : store.getBooks()) {
+    JsonObject obj = arr.add<JsonObject>();
+    obj["path"] = book.path;
+    obj["title"] = book.title;
+    obj["author"] = book.author;
+    obj["coverBmpPath"] = book.coverBmpPath;
+  }
+
+  String json;
+  serializeJson(doc, json);
+  return Storage.writeFile(path, json);
+}
+
+bool JsonSettingsIO::loadRecentBooks(RecentBooksStore& store, const char* json) {
+  JsonDocument doc;
+  auto error = deserializeJson(doc, json);
+  if (error) {
+    LOG_ERR("RBS", "JSON parse error: %s", error.c_str());
+    return false;
+  }
+
+  store.recentBooks.clear();
+  JsonArray arr = doc["books"].as<JsonArray>();
+  for (JsonObject obj : arr) {
+    if (store.getCount() >= 10) break;
+    RecentBook book;
+    book.path = obj["path"] | std::string("");
+    book.title = obj["title"] | std::string("");
+    book.author = obj["author"] | std::string("");
+    book.coverBmpPath = obj["coverBmpPath"] | std::string("");
+    store.recentBooks.push_back(book);
+  }
+
+  LOG_DBG("RBS", "Recent books loaded from file (%d entries)", store.getCount());
+  return true;
+}
+
+// ---- OpdsServerStore ----
+// Follows the same save/load pattern as WifiCredentialStore above.
+// Passwords are XOR-obfuscated with the device MAC and base64-encoded ("password_obf" key).
+
+bool JsonSettingsIO::saveOpds(const OpdsServerStore& store, const char* path) {
+  JsonDocument doc;
+
+  JsonArray arr = doc["servers"].to<JsonArray>();
+  for (const auto& server : store.getServers()) {
+    JsonObject obj = arr.add<JsonObject>();
+    obj["name"] = server.name;
+    obj["url"] = server.url;
+    obj["username"] = server.username;
+    obj["password_obf"] = obfuscation::obfuscateToBase64(server.password);
+    obj["filenameFormat"] = opdsFilenameFormatToJson(server.filenameFormat);
+  }
+
+  String json;
+  serializeJson(doc, json);
+  return Storage.writeFile(path, json);
+}
+
+bool JsonSettingsIO::loadOpds(OpdsServerStore& store, const char* json, bool* needsResave) {
+  if (needsResave) *needsResave = false;
+  JsonDocument doc;
+  auto error = deserializeJson(doc, json);
+  if (error) {
+    LOG_ERR("OPS", "JSON parse error: %s", error.c_str());
+    return false;
+  }
+
+  store.servers.clear();
+  JsonArray arr = doc["servers"].as<JsonArray>();
+  for (JsonObject obj : arr) {
+    if (store.servers.size() >= OpdsServerStore::MAX_SERVERS) break;
+    OpdsServer server;
+    server.name = obj["name"] | std::string("");
+    server.url = obj["url"] | std::string("");
+    server.username = obj["username"] | std::string("");
+    server.filenameFormat = opdsFilenameFormatFromJson(obj["filenameFormat"] | "");
+    // Try the obfuscated key first; fall back to plaintext "password" for
+    // files written before obfuscation was added (or hand-edited JSON).
+    obfuscation::DecodeStatus status = obfuscation::DecodeStatus::INVALID;
+    server.password = obfuscation::deobfuscateFromBase64(obj["password_obf"] | "", &status);
+    if (status == obfuscation::DecodeStatus::LEGACY && !server.password.empty() && needsResave) {
+      *needsResave = true;
+    }
+    if (status == obfuscation::DecodeStatus::INVALID || status == obfuscation::DecodeStatus::EMPTY ||
+        server.password.empty()) {
+      server.password = obj["password"] | std::string("");
+      if (!server.password.empty() && needsResave) *needsResave = true;
+    }
+    if (status == obfuscation::DecodeStatus::INVALID && server.password.empty()) {
+      LOG_ERR("OPS", "Ignoring unreadable password for OPDS server: %s", server.name.c_str());
+    }
+    store.servers.push_back(std::move(server));
+  }
+
+  LOG_DBG("OPS", "Loaded %zu OPDS servers from file", store.servers.size());
+  return true;
+}

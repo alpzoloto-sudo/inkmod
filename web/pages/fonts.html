@@ -1,0 +1,86 @@
+<div class="card">
+      <h2 data-i18n="fonts.installed_title">Installed Fonts</h2>
+      <div id="families"><p class="empty" data-i18n="fonts.loading">Loading...</p></div>
+    </div>
+
+    <div class="card">
+      <h2><span data-i18n="fonts.convert_title">Convert Font (TTF/OTF, in browser)</span> <span class="badge-experimental" data-i18n="fonts.badge_beta">Beta</span></h2>
+      <p class="hint" data-i18n="fonts.convert_intro">
+        Runs in this browser tab &mdash; on your phone or computer, not on the
+        reader &mdash; then uploads one finished file automatically. No
+        separate app, no PC-side script. Pick a folder containing the
+        font's style files (TTF/OTF) &mdash; Regular, and optionally real
+        Bold/Italic/Bold&nbsp;Italic files (not synthesized), get matched by
+        filename automatically and bundled into a single multi-style
+        .cpfont the reader picks the right style from on its own. No
+        kerning/ligatures still (needs GPOS/GSUB table parsing, out of
+        scope here).
+      </p>
+      <form class="convert-form" id="convertForm">
+        <input type="file" id="convertFiles" webkitdirectory directory multiple required />
+        <p class="hint" data-i18n="fonts.or_zip_hint" style="margin: 6px 0 0;">
+          &hellip;or pick a .zip archive instead (e.g. downloaded straight from
+          Google Fonts) &mdash; its TTF/OTF files are extracted automatically:
+        </p>
+        <input type="file" id="convertZipFile" accept=".zip,application/zip" />
+        <p id="convertPickedInfo" class="family-meta" style="margin: 4px 0 0;"></p>
+
+        <div class="convert-row">
+          <label class="field-inline">
+            <div class="field-label-text"><span data-i18n="fonts.additional_sizes_label">Additional sizes, pt</span> <em data-i18n="fonts.additional_sizes_note">(optional &mdash; 12, 14, 16, 18 always included)</em></div>
+            <input type="text" id="convertExtraSizes" placeholder="e.g. 20, 24" />
+          </label>
+          <label class="field-inline">
+            <div class="field-label-text"><span data-i18n="fonts.unicode_range_label">Unicode range</span></div>
+            <select id="convertIntervals">
+              <option value="ascii" data-i18n="fonts.range_ascii">ASCII (basic English)</option>
+              <option value="latin1" data-i18n="fonts.range_latin1">Latin-1 (Western European)</option>
+              <option value="latin-ext" data-i18n="fonts.range_latin_ext">Latin Extended</option>
+              <option value="cyrillic" data-i18n="fonts.range_cyrillic">Cyrillic</option>
+              <option value="greek" data-i18n="fonts.range_greek">Greek</option>
+              <option value="comprehensive" selected data-i18n="fonts.range_comprehensive">Comprehensive (Latin/Cyrillic/Greek/Armenian/
+                Hebrew/Arabic/Devanagari/Thai/Georgian/CJK/Hangul/Kana/symbols)</option>
+            </select>
+          </label>
+        </div>
+
+        <label class="field-inline" style="width: 100%;">
+          <span data-i18n="fonts.custom_ranges_label">Custom glyphs, Unicode ranges</span> <em data-i18n="fonts.custom_ranges_note">(optional, comma-separated &mdash; added on top of the range above)</em>
+          <input type="text" id="convertCustomRanges" placeholder="e.g. 0x2600-0x26FF, U+1F300-U+1F5FF, 0x20AC" />
+        </label>
+
+        <button type="submit" class="btn btn-primary" data-i18n="fonts.convert_upload_btn">Convert &amp; upload</button>
+      </form>
+      <p class="hint" data-i18n="fonts.convert_hint">
+        "Comprehensive" requests a large span of scripts and symbol blocks,
+        but only glyphs your font actually has get rasterized &mdash; a
+        Latin/Cyrillic font stays fast, since everything else is skipped
+        after a quick existence check. Fonts with real CJK/Hangul coverage
+        can take a while (thousands of glyphs per style) &mdash; stay on
+        this page until you see a result. Needs a reasonably current
+        browser (uses the <code>FontFace</code> and Canvas APIs). No
+        practical size limit here, unlike an on-device conversion &mdash;
+        real "designer" fonts (Bookerly, Amazon Ember, Literata, and
+        similar) work fine. Converts and uploads one .cpfont per size
+        (12/14/16/18pt plus anything you add above) &mdash; each upload
+        happens in turn, so this can take a while with several sizes.
+        Custom range entries can be a single codepoint or a
+        <code>first-last</code> span, with or without <code>0x</code>/
+        <code>U+</code> prefixes.
+      </p>
+      <div id="convertStatus"></div>
+    </div>
+
+    <div class="card">
+      <h2 data-i18n="fonts.upload_title">Upload Font</h2>
+      <form class="upload-form" id="uploadForm">
+        <input type="file" id="fontFiles" webkitdirectory directory multiple required />
+        <p class="hint" data-i18n="fonts.or_zip_hint_cpfont" style="margin: 6px 0 0; width: 100%;">
+          &hellip;or pick a .zip archive of .cpfont files instead:
+        </p>
+        <input type="file" id="fontZipFile" accept=".zip,application/zip" />
+        <button type="submit" class="btn btn-primary" data-i18n="fonts.upload_btn">Upload</button>
+      </form>
+      <p id="pickedInfo" class="family-meta" style="margin: 8px 0 0;"></p>
+      <div id="status"></div>
+    </div>

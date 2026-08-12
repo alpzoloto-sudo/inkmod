@@ -1,0 +1,97 @@
+name: Build and publish release firmware
+
+# Triggers on tags like v1.2.7 (exactly what scripts/release.sh creates),
+# or manually via the Actions tab (workflow_dispatch) with a version typed
+# in - useful when a tag needs re-publishing under the same version number
+# (re-pushing an identical tag name doesn't reliably re-trigger a tag-push
+# event on GitHub's side) without bumping to a new one.
+# Builds the tiny env and publishes the resulting firmware-tiny-v<version>.bin
+# as a GitHub Release asset. That naming is required for OtaUpdater on-device
+# to recognize it (see isMatchingFirmwareAssetName() in src/network/OtaUpdater.cpp).
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build/publish (e.g. 1.1.1, no leading "v")'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO and build dependencies
+        run: |
+          pip install -U platformio
+          pip install -r requirements.txt
+
+      - name: Derive version
+        id: version
+        run: |
+          # Manual run: use the typed input as-is. Tag push: v1.2.7 -> 1.2.7.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          # The same semantic version is embedded in the firmware and used in
+          # its filename. Restrict it before interpolating it below.
+          if ! [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]]; then
+            echo "::error::Version must be numeric, for example 1.1.2"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Embed release version in firmware
+        run: |
+          # A manual re-publish must not produce a new asset that still
+          # reports the version from the checked-out platformio.ini.
+          sed -i -E 's/^inkmod_version = .*/inkmod_version = ${{ steps.version.outputs.version }}/' platformio.ini
+
+      - name: Build firmware (tiny)
+        env:
+          INKMOD_RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: pio run -e tiny
+
+      - name: Locate built firmware asset
+        id: artifact
+        run: |
+          FILE=".pio/build/tiny/firmware-tiny-v${{ steps.version.outputs.version }}.bin"
+          if [ ! -f "$FILE" ]; then
+            echo "::error::Expected artifact not found: $FILE"
+            echo "Build directory contents:"
+            ls -la .pio/build/tiny/
+            exit 1
+          fi
+          echo "path=$FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release and upload firmware
+        uses: softprops/action-gh-release@v2
+        with:
+          # Explicit, not github.ref_name - that's the branch name ("main")
+          # on a manual run, not a version. Works the same for a real tag
+          # push too, and makes both trigger paths update the same release
+          # (re-running this manually against an already-published version
+          # replaces that release's asset rather than erroring on a
+          # duplicate tag).
+          tag_name: "v${{ steps.version.outputs.version }}"
+          name: "inkMOD v${{ steps.version.outputs.version }}"
+          generate_release_notes: true
+          files: ${{ steps.artifact.outputs.path }}

@@ -1,0 +1,298 @@
+<div class="page-header">
+  <div class="page-header-left">
+    <h2 data-i18n="files.title">File Manager</h2>
+    <div class="breadcrumb-inline" id="directory-breadcrumbs"></div>
+  </div>
+
+  <div class="action-buttons">
+    <button class="action-btn upload-action-btn" onclick="openUploadModal()" data-i18n="files.upload_btn">📤 Upload</button>
+    <button class="action-btn upload-action-btn" onclick="document.getElementById('folderPickerInput').click()" data-i18n="files.upload_folder_btn">📁 Upload Folder</button>
+    <button class="action-btn dictionary-action-btn" onclick="openDictionaryModal()" data-i18n="files.dictionary_btn">📖 Dictionaries</button>
+    <button class="action-btn folder-action-btn" onclick="openFolderModal()" data-i18n="files.new_folder_btn">📁 New Folder</button>
+    <button class="action-btn delete-action-btn" onclick="openDeleteSelectedModal()" data-i18n="files.delete_selected_btn">🗑️ Delete Selected</button>
+  </div>
+  <input type="file" id="folderPickerInput" webkitdirectory directory multiple style="display:none" onchange="handleFolderPicked()">
+</div>
+
+<!-- Failed Uploads Banner -->
+<div class="failed-uploads-banner" id="failedUploadsBanner">
+  <div class="failed-uploads-header">
+    <h3 class="failed-uploads-title" data-i18n="files.failed_banner_title">⚠️ Some files failed to upload</h3>
+    <button class="dismiss-btn" onclick="dismissFailedUploads()" title="Dismiss">&times;</button>
+  </div>
+  <div id="failedFilesList"></div>
+  <button class="retry-all-btn" onclick="retryAllFailedUploads()" data-i18n="files.retry_all">Retry All Failed Uploads</button>
+</div>
+
+<div class="card">
+  <div class="contents-header">
+    <h2 class="contents-title" data-i18n="files.contents">Contents</h2>
+    <span class="summary-inline" id="folder-summary"></span>
+  </div>
+
+  <div id="file-table">
+    <div class="loader-container">
+      <span class="loader"></span>
+    </div>
+  </div>
+</div>
+<!-- Upload Modal -->
+<div class="modal-overlay" id="uploadModal">
+  <div class="modal">
+    <button class="modal-close" id="uploadModalClose" onclick="closeUploadModal()">&times;</button>
+    <h3 data-i18n="files.upload_modal_title">📤 Upload file</h3>
+    <div class="upload-form">
+      <p class="file-info"><span data-i18n="files.select_file_intro">Select a file to upload to</span> <strong id="uploadPathDisplay"></strong></p>
+      <p class="file-info" id="folderModeInfo" style="display:none;"></p>
+      <input type="file" id="fileInput" onchange="validateFile()" multiple>
+      <div class="picker-columns" id="pickerColumns">
+        <div class="convert-options" id="convertOptions" style="display:none;">
+          <div class="convert-row">
+            <label class="convert-checkbox">
+              <input type="checkbox" id="convertBeforeUpload" onchange="toggleConvertOptions()">
+              <span data-i18n="files.optimize_checkbox">Optimize EPUB/FB2/Images</span>
+            </label>
+            <label class="convert-checkbox" id="fb2ToEpubRow" style="display:none;">
+              <input type="checkbox" id="fb2ToEpubCheckbox" onchange="updateUploadBtnLabel()">
+              <span data-i18n="files.fb2_to_epub">📗 Convert FB2 → EPUB</span>
+            </label>
+            <span class="convert-separator">—</span>
+            <span class="advanced-options-toggle" id="advancedOptionsToggle" onclick="toggleAdvancedOptions()">
+              <span class="advanced-options-arrow" id="advancedOptionsArrow">▶</span>
+              <span class="advanced-options-text" data-i18n="files.advanced_mode">Advanced Mode</span>
+            </span>
+          </div>
+
+          <div id="convertInfo" style="display:none; margin-bottom: 10px; font-size: 0.9em;">
+          </div>
+
+          <div class="convert-settings" id="convertSettings" style="display:block;">
+            <span>⚫ True-Grayscale</span>
+          <span id="convertSizeSummary">📏 Max 480×800px</span>
+          <span>📦 85% JPEG</span>
+          <span>🔧 Fix SVG</span>
+        </div>
+        <!-- Advanced Settings Content -->
+        <div class="advanced-settings-content" id="advancedSettingsContent">
+          <!-- JPEG Quality -->
+          <div class="advanced-setting-row quality-row">
+            <div class="setting-title" data-i18n="files.jpeg_quality">📦 JPEG Quality</div>
+            <div class="quality-presets">
+              <button class="quality-preset" data-value="30" onclick="setQualityPreset(30)" title="Minimum quality">30%</button>
+              <button class="quality-preset" data-value="45" onclick="setQualityPreset(45)" title="Low quality">45%</button>
+              <button class="quality-preset" data-value="60" onclick="setQualityPreset(60)" title="Medium-low quality">60%</button>
+              <button class="quality-preset" data-value="75" onclick="setQualityPreset(75)" title="Medium quality">75%</button>
+              <button class="quality-preset active" data-value="85" onclick="setQualityPreset(85)" title="High quality">85%</button>
+              <button class="quality-preset" data-value="95" onclick="setQualityPreset(95)" title="Maximum quality">95%</button>
+            </div>
+            <!-- Hidden inputs to maintain compatibility -->
+            <input type="hidden" id="qualitySlider" value="85">
+            <input type="hidden" id="qualityInput" value="85">
+          </div>
+          <!-- Grayscale Toggle (commented for e-ink optimization, kept for compatibility with other devices/web apps)
+          <div class="advanced-setting-row" style="display:none;">
+            <div class="setting-toggle">
+              <div>
+                <div class="setting-title">⚫ True-Grayscale</div>
+                <div class="setting-desc">BT.601 luminance formula (recommended for e-ink)</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="grayscaleToggle" checked onchange="updateQualitySettings()">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+          -->
+          <!-- Target Device -->
+          <div class="advanced-setting-row" id="deviceSettingRow">
+            <div class="setting-title" data-i18n="files.target_device">📱 Target Device</div>
+            <div class="setting-controls">
+              <div class="rotation-buttons">
+                <button class="rotation-btn device-btn active" data-value="auto" onclick="setDeviceTarget('auto')">
+                  <span id="deviceAutoLabel" data-i18n="files.auto">Auto</span>
+                </button>
+                <button class="rotation-btn device-btn" data-value="X4" onclick="setDeviceTarget('X4')">X4</button>
+                <button class="rotation-btn device-btn" data-value="X3" onclick="setDeviceTarget('X3')">X3</button>
+              </div>
+            </div>
+          </div>
+          <!-- Rotation Direction -->
+          <div class="advanced-setting-row" id="rotationSettingRow">
+            <div class="setting-title" data-i18n="files.rotation_direction">↻ Rotation Direction</div>
+            <div class="setting-controls">
+              <div class="rotation-buttons">
+                <button class="rotation-btn" id="rotationCCW" onclick="setHandedness('left')">
+                  <span class="rot-icon">↺</span> CCW
+                </button>
+                <button class="rotation-btn active" id="rotationCW" onclick="setHandedness('right')">
+                  <span class="rot-icon">↻</span> CW
+                </button>
+              </div>
+            </div>
+          </div>
+          <!-- Overlap Settings -->
+          <div class="advanced-setting-row" id="overlapSettingRow">
+            <div class="setting-title" data-i18n="files.min_overlap">📐 Min Overlap</div>
+            <div class="setting-controls">
+              <div class="overlap-selector">
+                <button class="overlap-btn active" data-value="5" onclick="setOverlap(5)">5%</button>
+                <button class="overlap-btn" data-value="10" onclick="setOverlap(10)">10%</button>
+                <button class="overlap-btn" data-value="15" onclick="setOverlap(15)">15%</button>
+              </div>
+            </div>
+          </div>
+          <!-- Conversion Log Export -->
+          <div class="advanced-setting-row">
+            <div class="setting-label">
+              <div class="setting-title" data-i18n="files.autodownload_log">📥 Auto-download Log</div>
+              <div class="setting-desc" data-i18n="files.autodownload_log_desc">Export detailed log with statistics</div>
+            </div>
+            <div class="setting-controls">
+              <label class="toggle-switch">
+                <input type="checkbox" id="export-log-checkbox">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+          </div><!-- advanced-settings-content -->
+      </div><!-- end convert-options -->
+      <!-- Image Picker Section - in picker-columns for two-column layout -->
+      <div class="image-picker-section" id="imagePickerSection" style="display:none;">
+        <div class="image-picker-header">
+          <span class="image-picker-title" data-i18n="files.image_processing_title">🖼️ Image Processing Options</span>
+          <span class="image-picker-count" id="imagePickerCount">0 images</span>
+        </div>
+        <div class="state-legend">
+          <div class="legend-item locked">
+            <span>🔒</span>
+            <span data-i18n="files.legend_cover">Cover</span>
+          </div>
+          <div class="legend-item locked">
+            <span style="color:#1abc9c">✦</span>
+            <span data-i18n="files.legend_separator">Separator</span>
+          </div>
+          <button class="legend-btn" style="--btn-color:var(--label-color)" onclick="applyStateToAll(0)">
+            <div class="legend-color"></div>
+            <span data-i18n="files.legend_normal">Normal</span>
+          </button>
+          <button class="legend-btn" style="--btn-color:#3498db" onclick="applyStateToAll(1)">
+            <div class="legend-color"></div>
+            <span data-i18n="files.legend_hsplit">H-Split</span>
+          </button>
+          <button class="legend-btn" style="--btn-color:#e74c3c" onclick="applyStateToAll(2)">
+            <div class="legend-color"></div>
+            <span data-i18n="files.legend_vsplit">V-Split</span>
+          </button>
+          <button class="legend-btn" style="--btn-color:#9b59b6" onclick="applyStateToAll(3)">
+            <div class="legend-color"></div>
+            <span data-i18n="files.legend_rotate">Rotate</span>
+          </button>
+        </div>
+        <div class="image-grid" id="imageGrid"></div>
+      </div>
+      </div><!-- end picker-columns -->
+      <!-- Sync compatibility warning - outside picker-columns -->
+      <div class="convert-warning" id="convertWarning" style="display:none;" role="alert" aria-live="polite">
+        <span data-i18n="files.convert_warning">⚠️ Converting will modify files and can break hash-based sync. ⚠️</span><br>
+        <span data-i18n="files.convert_warning_sub">Please back up or disable sync before proceeding.</span>
+      </div>
+      <!-- Optimize & Upload button - shown when picker is visible, replaces Upload -->
+      <button id="startConversionBtn" class="upload-btn optimize" style="display:none;" onclick="startConversionWithImageStates()" data-i18n="files.optimize_upload_btn">Optimize & Upload</button>
+      <button id="uploadBtn" class="upload-btn" onclick="uploadFile()" disabled data-i18n="files.upload_btn_plain">Upload</button>
+      <button class="delete-btn-cancel" onclick="handleCancelUploadModal()" data-i18n="files.cancel">Cancel</button>
+      <div id="progress-container">
+        <div id="progress-bar"><div id="progress-fill"></div></div>
+        <div id="progress-text"></div>
+      </div>
+      <div class="log-section" id="log-section">
+        <div class="log-header">
+          <div class="log-title" data-i18n="files.log_title">📋 Conversion Log</div>
+        </div>
+        <div class="log-container" id="log-container"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Dictionary preparation modal -->
+<div class="modal-overlay" id="dictionaryModal">
+  <div class="modal dictionary-modal">
+    <button class="modal-close" id="dictionaryModalClose" onclick="closeDictionaryModal()">&times;</button>
+    <h3 data-i18n="files.dictionary_modal_title">📖 Prepare dictionaries</h3>
+    <p class="file-info" data-i18n="files.dictionary_intro">Choose a ZIP or dictionary files. The browser converts and indexes them before upload, so the reader can open them immediately.</p>
+    <div class="dictionary-format-note" data-i18n="files.dictionary_formats">Supported: StarDict (.ifo/.idx/.dict/.syn, including .dict.dz), DSL, TSV, CSV and TXT.</div>
+    <div class="dictionary-picker-grid">
+      <button class="dictionary-picker-btn" onclick="document.getElementById('dictionaryFilesInput').click()" data-i18n="files.dictionary_choose_files">Choose files or ZIP</button>
+      <button class="dictionary-picker-btn secondary" onclick="document.getElementById('dictionaryFolderInput').click()" data-i18n="files.dictionary_choose_folder">Choose folder</button>
+    </div>
+    <input type="file" id="dictionaryFilesInput" multiple accept=".zip,.ifo,.idx,.dict,.dz,.syn,.dsl,.tsv,.csv,.txt,.gz" style="display:none" onchange="handleDictionaryFilesPicked(false)">
+    <input type="file" id="dictionaryFolderInput" webkitdirectory directory multiple style="display:none" onchange="handleDictionaryFilesPicked(true)">
+    <div class="dictionary-selection" id="dictionarySelection" data-i18n="files.dictionary_none_selected">No dictionary files selected.</div>
+    <button class="upload-btn" id="prepareDictionaryBtn" onclick="prepareAndUploadDictionaries()" disabled data-i18n="files.dictionary_prepare_upload">Prepare &amp; upload</button>
+    <button class="delete-btn-cancel" id="cancelDictionaryBtn" onclick="closeDictionaryModal()" data-i18n="files.cancel">Cancel</button>
+    <div class="dictionary-progress" id="dictionaryProgress" aria-live="polite">
+      <div class="dictionary-progress-bar"><div id="dictionaryProgressFill"></div></div>
+      <div id="dictionaryProgressText"></div>
+    </div>
+  </div>
+</div>
+
+<!-- New Folder Modal -->
+<div class="modal-overlay" id="folderModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeFolderModal()">&times;</button>
+    <h3 data-i18n="files.new_folder_title">📁 New Folder</h3>
+    <div class="folder-form">
+      <p class="file-info"><span data-i18n="files.create_folder_intro">Create a new folder in</span> <strong id="folderPathDisplay"></strong></p>
+      <input type="text" id="folderName" class="folder-input" data-i18n-placeholder="files.folder_name_ph" placeholder="Folder name..." oninput="document.getElementById('createFolderBtn').disabled = !this.value.trim();">
+      <button class="folder-btn" id="createFolderBtn" onclick="createFolder()" disabled data-i18n="files.create_folder_btn">Create Folder</button>
+      <button class="delete-btn-cancel" onclick="closeFolderModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div class="modal-overlay" id="deleteModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeDeleteModal()">&times;</button>
+    <h3 data-i18n="files.delete_title">🗑️ Delete Item(s)</h3>
+    <div class="folder-form">
+      <p class="delete-warning" data-i18n="files.delete_warning">⚠️ This action cannot be undone!</p>
+      <p class="file-info" data-i18n="files.delete_confirm_intro">Are you sure you want to delete the following item(s)?</p>
+      <div id="deleteItemList" style="max-height:240px; overflow:auto; margin-bottom:10px;"></div>
+      <button class="delete-btn-confirm" onclick="confirmDelete()" data-i18n="files.delete_btn">Delete</button>
+      <button class="delete-btn-cancel" onclick="closeDeleteModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Rename Modal -->
+<div class="modal-overlay" id="renameModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeRenameModal()">&times;</button>
+    <h3 data-i18n="files.rename_title">✏️ Rename File</h3>
+    <div class="folder-form">
+      <p class="file-info"><span data-i18n="files.renaming">Renaming</span> <strong id="renameItemName"></strong></p>
+      <input type="text" id="renameNewName" class="folder-input" data-i18n-placeholder="files.rename_new_name_ph" placeholder="New file name...">
+      <input type="hidden" id="renameItemPath">
+      <button class="rename-btn-confirm" onclick="confirmRename()" data-i18n="files.rename_btn">Rename</button>
+      <button class="delete-btn-cancel" onclick="closeRenameModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Move Modal -->
+<div class="modal-overlay" id="moveModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeMoveModal()">&times;</button>
+    <h3 data-i18n="files.move_title">📂 Move File</h3>
+    <div class="folder-form">
+      <p class="file-info"><span data-i18n="files.moving">Moving</span> <strong id="moveItemName"></strong></p>
+      <input type="text" id="moveDestPath" class="folder-input" list="moveFolderOptions" data-i18n-placeholder="files.move_dest_ph" placeholder="/Destination/Folder">
+      <datalist id="moveFolderOptions"></datalist>
+      <input type="hidden" id="moveItemPath">
+      <button class="move-btn-confirm" onclick="confirmMove()" data-i18n="files.move_btn">Move</button>
+      <button class="delete-btn-cancel" onclick="closeMoveModal()">Cancel</button>
+    </div>
+  </div>
+</div>

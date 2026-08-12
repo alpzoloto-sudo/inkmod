@@ -1,0 +1,84 @@
+<section class="epubkit-hero">
+  <div class="epubkit-title"><span aria-hidden="true">📖</span><h2>EPUB Kit</h2></div>
+  <p data-i18n="epubkit.subtitle">Optimize EPUB books for Xteink readers directly in this browser.</p>
+</section>
+
+<section class="epubkit-about">
+  <p class="epubkit-lead" data-i18n="epubkit.lead">Drop in an EPUB and get a clean device-ready copy. The browser runs the original EPUBKit-style pipeline and can upload the result straight to the reader.</p>
+  <div class="epubkit-about-grid">
+    <div><span>🖼️</span><p><strong data-i18n="epubkit.images_title">Images</strong><small data-i18n="epubkit.images_desc">4-level grayscale, Floyd–Steinberg dithering and baseline JPEG</small></p></div>
+    <div><span>📝</span><p><strong data-i18n="epubkit.text_title">Text</strong><small data-i18n="epubkit.text_desc">Spacing, OCR ligatures, quotes, punctuation and encoding cleanup</small></p></div>
+    <div><span>🧹</span><p><strong data-i18n="epubkit.cleanup_title">Cleanup</strong><small data-i18n="epubkit.cleanup_desc">Embedded fonts, unused CSS, store metadata and OS artifacts</small></p></div>
+    <div><span>📑</span><p><strong data-i18n="epubkit.structure_title">Structure</strong><small data-i18n="epubkit.structure_desc">XHTML repair, image references, SVG covers and table of contents</small></p></div>
+  </div>
+  <a class="epubkit-source" href="https://github.com/b1rdmania/epubkit" target="_blank" rel="noopener">EPUBKit original · MIT</a>
+</section>
+
+<section id="epubkitDropZone" class="epubkit-drop" tabindex="0" role="button">
+  <input id="epubkitFileInput" type="file" accept=".epub,application/epub+zip" multiple hidden>
+  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+  <strong data-i18n="epubkit.drop_title">Drop EPUB files here</strong>
+  <span data-i18n="epubkit.drop_hint">or tap to choose · processed locally in the browser</span>
+</section>
+
+<section id="epubkitFileList" class="epubkit-file-list" hidden></section>
+
+<section id="epubkitOptions" class="epubkit-panel" hidden>
+  <div class="epubkit-section-title"><h3 data-i18n="epubkit.options">Options</h3><span id="epubkitMemoryMode" data-i18n="epubkit.memory_mode">Memory-safe ZIP mode</span></div>
+
+  <div class="epubkit-device-row">
+    <strong data-i18n="epubkit.device">Device</strong>
+    <div class="epubkit-segmented" id="epubkitDevice">
+      <button class="active" type="button" data-device="x4"><b>X4</b><small>480×800 · 4.3″</small></button>
+      <button type="button" data-device="x3"><b>X3</b><small>528×792 · 3.7″</small></button>
+    </div>
+  </div>
+
+  <div class="epubkit-presets" id="epubkitPresets">
+    <button type="button" data-preset="quick"><span>⚡</span><b data-i18n="epubkit.quick">Quick</b><small data-i18n="epubkit.quick_desc">Images + text</small></button>
+    <button type="button" class="active" data-preset="full"><span>✨</span><b data-i18n="epubkit.full">Full</b><small data-i18n="epubkit.full_desc">Device optimized</small></button>
+    <button type="button" data-preset="custom"><span>🔧</span><b data-i18n="epubkit.custom">Custom</b><small data-i18n="epubkit.custom_desc">Pick and choose</small></button>
+  </div>
+
+  <div class="epubkit-options-grid">
+    <label><input id="epubkitGrayscale" type="checkbox" checked><span><b data-i18n="epubkit.grayscale">Grayscale</b><small data-i18n="epubkit.grayscale_desc">Convert images for the e-ink panel</small></span></label>
+    <label><input id="epubkitContrast" type="checkbox" checked><span><b data-i18n="epubkit.contrast">Contrast boost</b><small data-i18n="epubkit.contrast_desc">1% autocontrast and 1.5× contrast</small></span></label>
+    <label><input id="epubkitFonts" type="checkbox" checked><span><b data-i18n="epubkit.fonts">Remove fonts</b><small data-i18n="epubkit.fonts_desc">Strip embedded font files and @font-face</small></span></label>
+    <label><input id="epubkitCss" type="checkbox" checked><span><b data-i18n="epubkit.css">Clean CSS</b><small data-i18n="epubkit.css_desc">Remove rules that cannot match book content</small></span></label>
+    <label><input id="epubkitCover" type="checkbox" checked><span><b data-i18n="epubkit.cover">Generate cover</b><small data-i18n="epubkit.cover_desc">Create a simple cover when missing</small></span></label>
+    <label><input id="epubkitMetadata" type="checkbox" checked><span><b data-i18n="epubkit.metadata">Clean metadata</b><small data-i18n="epubkit.metadata_desc">Remove store and Calibre-only tags</small></span></label>
+    <label><input id="epubkitText" type="checkbox" checked><span><b data-i18n="epubkit.text_cleanup">Text cleanup</b><small data-i18n="epubkit.text_cleanup_desc">Repair common OCR and encoding artifacts</small></span></label>
+    <label><input id="epubkitLightNovel" type="checkbox"><span><b data-i18n="epubkit.light_novel">Light Novel mode</b><small data-i18n="epubkit.light_novel_desc">Rotate or split landscape illustrations</small></span></label>
+  </div>
+
+  <div class="epubkit-quality">
+    <div><strong data-i18n="epubkit.jpeg_quality">JPEG quality</strong><output id="epubkitQualityValue">70%</output></div>
+    <div class="epubkit-quality-buttons">
+      <button type="button" data-quality="40" data-i18n="epubkit.quality_low">Low</button>
+      <button type="button" data-quality="60" data-i18n="epubkit.quality_medium">Medium</button>
+      <button type="button" class="active" data-quality="70" data-i18n="epubkit.quality_high">High</button>
+      <button type="button" data-quality="85" data-i18n="epubkit.quality_max">Max</button>
+    </div>
+    <input id="epubkitQuality" type="range" min="20" max="95" value="70">
+  </div>
+
+  <div class="epubkit-destination">
+    <label class="epubkit-upload-toggle"><input id="epubkitUpload" type="checkbox" checked><span><b data-i18n="epubkit.upload_direct">Upload directly to the reader</b><small data-i18n="epubkit.upload_direct_desc">The optimized EPUB is sent after processing</small></span></label>
+    <label class="epubkit-path"><span data-i18n="epubkit.destination">Destination folder</span><input id="epubkitPath" type="text" value="/Books" spellcheck="false"></label>
+  </div>
+
+  <div class="epubkit-actions">
+    <button id="epubkitProcess" class="epubkit-primary" type="button" data-i18n="epubkit.process">Optimize EPUBs</button>
+    <button id="epubkitCancel" type="button" hidden data-i18n="epubkit.cancel">Cancel</button>
+  </div>
+</section>
+
+<section id="epubkitProgress" class="epubkit-panel" hidden>
+  <div class="epubkit-section-title"><h3 data-i18n="epubkit.processing">Processing</h3><span id="epubkitStageCounter"></span></div>
+  <div id="epubkitProgressItems"></div>
+</section>
+
+<section id="epubkitResults" class="epubkit-panel" hidden>
+  <div class="epubkit-section-title"><h3 data-i18n="epubkit.results">Results</h3></div>
+  <div id="epubkitResultItems"></div>
+</section>

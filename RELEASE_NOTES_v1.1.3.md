@@ -1,42 +1,80 @@
 # inkMOD v1.1.3
 
-## Re-uploaded stable build
+This is the refreshed **v1.1.3** release with the post-release stability fixes included.
 
-This revision replaces the earlier v1.1.3 release asset and includes post-release stability fixes discovered during real-world testing on Xteink X4/X3.
+The main focus is memory stability on Xteink X3/X4, large FB2/FB2.ZIP books, dictionary/clippings usability, XTC stability and the expanded InkMOD web tools.
 
-### Stability and memory
+## Main changes
 
-- Reworked the FB2 structural index for very large books to reduce long-lived heap usage.
-- Tested direct opening of `Колесо Времени.fb2` (~46.2 MB) without preliminary conversion.
-- Large FB2.ZIP archives use a safer sequential preparation path when the fused decompression/XML path would create unnecessary memory pressure.
-- Kept the safe idle CPU downclock while removing experimental light-sleep that could freeze X4 after USB disconnect.
-- Continued low-memory fallback behavior for image-heavy books so text reading is preferred over an OOM reboot.
+### FB2 / FB2.ZIP stability
 
-### Reader
+- Reworked large-book indexing to reduce heap pressure on ESP32-C3.
+- Avoids large contiguous allocations during FB2 scan.
+- Uses a compact pooled index for section IDs/titles instead of hundreds of independent strings.
+- Larger FB2.ZIP files use a safer sequential extract-to-SD → scan path.
+- Large chapters can still be internally split to protect RAM while remaining one logical chapter to the reader.
+- Cached FB2/FB2.ZIP books can rebuild required chapters after font/layout changes without wiping progress, bookmarks or statistics.
+- Verified on a real **~46 MB FB2 book** opened directly on Xteink without preliminary conversion.
 
-- Fixed dictionary quick-action button carry-over: Back/Confirm/front buttons no longer execute an accidental first action after opening the dictionary.
-- Fixed the first Menu press after leaving the dictionary.
-- Improved clipping creation/removal and clipping-list rendering.
-- Preserved logical chapter numbering for internally split large EPUB/FB2 chapters.
-- Improved XTC/XTCH low-memory streaming and refresh behavior.
+### XTC / XTCH
 
-### UI
+- Low-memory streaming path avoids allocating oversized page buffers.
+- Reduced aggressive refresh behavior and excessive flashing.
+- Improved stability during rapid page turning.
 
-- Fixed seven-icon centering in Lyra Carousel.
-- Fixed duplicate TXT reader clock placement.
-- Improved two-line file names in the file manager.
-- Added customizable reader-menu ordering and visibility.
-- Added the Support InkMOD screen and Telegram project link.
+### Dictionary
 
-### Web portal
+- Dictionary lookup directly from the reader.
+- Multiple installed dictionaries.
+- Long article paging.
+- Cleaner word selection: punctuation is removed from queries.
+- Hyphenated line-break words are reconstructed before lookup.
+- StarDict synonym tables are supported.
+- Browser-side dictionary preparation/upload added.
+- Fixed quick-action input handling so the button used to open Dictionary no longer immediately triggers an extra action.
 
-- EPUBKIT browser-side EPUB optimizer.
-- Dictionary preparation/upload workflow.
-- Sleep-screen PNG generator with background removal and direct upload.
-- File rename support.
+### Clippings
 
-### Support
+- Added text clippings for EPUB and FB2.
+- Saved highlights can be viewed and managed.
+- Selecting the exact same clipping range again can remove it.
+- Fixed clipping-related UI labels and UTF-8 handling.
 
-InkMOD stays free. Optional project support is available through the Telegram channel:
+### Web interface
 
-https://t.me/inkmodx4
+- Added **EPUBKIT** browser-side EPUB optimizer for X3/X4.
+- Added dictionary preparation/upload.
+- Added sleep-screen generator with:
+  - X3/X4 presets
+  - Fit / Fill / Stretch
+  - grayscale / contrast / brightness
+  - edge-connected background removal
+  - real PNG alpha transparency
+  - direct upload and apply to the device
+- Added file rename support.
+- Added project-support link to `@inkmodx4`.
+
+### UI / themes
+
+- Book menu entries can be reordered and hidden.
+- Long filenames can actually wrap to a second line in File Browser.
+- Fixed Lyra Carousel alignment when seven icons are enabled.
+- Improved small cover handling on sleep screens so tiny embedded covers are not blindly stretched to full-screen size.
+- Added InkMOD-style humorous fallback messages for some non-critical edge cases.
+
+### Power / device stability
+
+- X4 Sunlight Fading Fix performs proper display power-down without an extra redraw.
+- Removed experimental `esp_light_sleep_start()` idle path that could freeze X4 after USB disconnect.
+- Safe low-frequency idle mode remains enabled.
+- Release build keeps production logging disabled while USB flashing remains available.
+
+## Support
+
+InkMOD remains completely free.
+
+If you want to support development and testing, visit:
+
+**Telegram: [@inkmodx4](https://t.me/inkmodx4)**
+
+Support is optional and does not unlock or restrict any firmware functionality.

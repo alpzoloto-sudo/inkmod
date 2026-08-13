@@ -74,8 +74,6 @@ void LegacyRenderPromptActivity::render(RenderLock&&) {
     y += renderer.getLineHeight(UI_12_FONT_ID) + 3;
   }
 
-  renderer.drawCenteredText(UI_10_FONT_ID, cardY + cardHeight - 58, "Back — НЕТ      OK — ДА",
-                            true, EpdFontFamily::BOLD);
 
   const auto labels = mappedInput.mapLabels("Нет", "Да", "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, true);

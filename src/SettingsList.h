@@ -285,9 +285,10 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     add(SettingInfo::Enum(StrId::STR_SLEEP_COVER_FILTER, &InkMODSettings::sleepScreenCoverFilter,
                           {StrId::STR_NONE_OPT, StrId::STR_FILTER_CONTRAST, StrId::STR_INVERTED},
                           "sleepScreenCoverFilter", StrId::STR_CAT_DISPLAY));
-    add(SettingInfo::Enum(StrId::STR_QUICK_RESUME_TIMEOUT, &InkMODSettings::quickResumeSleepScreen,
-                          {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, "quickResumeSleepScreen",
-                          StrId::STR_CAT_DISPLAY));
+    add(SettingInfo::Enum(StrId::STR_TIMEOUT_SLEEP_SCREEN, &InkMODSettings::quickResumeSleepScreen,
+                          {StrId::STR_TIMEOUT_SAME_AS_MAIN, StrId::STR_TIMEOUT_QUICK_RESUME,
+                           StrId::STR_TIMEOUT_OVERLAY, StrId::STR_TIMEOUT_CUSTOM},
+                          "quickResumeSleepScreen", StrId::STR_CAT_DISPLAY));
     add(SettingInfo::Enum(StrId::STR_HIDE_BATTERY, &InkMODSettings::hideBatteryPercentage,
                           {StrId::STR_NEVER, StrId::STR_IN_READER, StrId::STR_ALWAYS}, "hideBatteryPercentage",
                           StrId::STR_CAT_DISPLAY));

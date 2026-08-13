@@ -330,8 +330,7 @@ bool openPreferredSleepDirectory(FsFile& dir, std::string& sleepDir) {
   return tryOpenSleepDirectory(dir, sleepDir, "/sleep");
 }
 
-bool selectPinnedSleepImage(SleepImageMode mode, SleepImageSelection& selection) {
-  const std::string& favorite = APP_STATE.favoriteSleepImagePath;
+bool selectPinnedSleepImage(SleepImageMode mode, const std::string& favorite, SleepImageSelection& selection) {
   if (favorite.empty()) {
     return false;
   }
@@ -430,20 +429,42 @@ bool selectRandomSleepImage(SleepImageMode mode, SleepImageSelection& selection)
 
 }  // namespace
 
+uint8_t SleepActivity::effectiveSleepScreenMode() const {
+  if (!fromTimeout) return SETTINGS.sleepScreen;
+
+  switch (SETTINGS.quickResumeSleepScreen) {
+    case InkMODSettings::QUICK_RESUME_AFTER_TIMEOUT:
+      return InkMODSettings::SLEEP_SCREEN_MODE::QUICK_RESUME;
+    case InkMODSettings::TIMEOUT_SLEEP_OVERLAY:
+      return InkMODSettings::SLEEP_SCREEN_MODE::OVERLAY;
+    case InkMODSettings::TIMEOUT_SLEEP_CUSTOM:
+      return InkMODSettings::SLEEP_SCREEN_MODE::CUSTOM;
+    default:
+      return SETTINGS.sleepScreen;
+  }
+}
+
+const std::string& SleepActivity::effectivePinnedSleepImagePath() const {
+  if (fromTimeout &&
+      (SETTINGS.quickResumeSleepScreen == InkMODSettings::TIMEOUT_SLEEP_OVERLAY ||
+       SETTINGS.quickResumeSleepScreen == InkMODSettings::TIMEOUT_SLEEP_CUSTOM) &&
+      !APP_STATE.timeoutSleepImagePath.empty()) {
+    return APP_STATE.timeoutSleepImagePath;
+  }
+  return APP_STATE.favoriteSleepImagePath;
+}
+
 void SleepActivity::onEnter() {
   Activity::onEnter();
 
-  const bool renderQuickResume =
-      SETTINGS.sleepScreen == InkMODSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
-      (fromTimeout &&
-       SETTINGS.quickResumeSleepScreen == InkMODSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT);
+  const uint8_t sleepMode = effectiveSleepScreenMode();
 
-  if (renderQuickResume) {
+  if (sleepMode == InkMODSettings::SLEEP_SCREEN_MODE::QUICK_RESUME) {
     return renderLastScreenSleepScreen();
   }
 
   overlayBackgroundBufferStored =
-      SETTINGS.sleepScreen == InkMODSettings::SLEEP_SCREEN_MODE::OVERLAY && renderer.storeBwBuffer();
+      sleepMode == InkMODSettings::SLEEP_SCREEN_MODE::OVERLAY && renderer.storeBwBuffer();
 
   // Show the popup in the reader's orientation when sleep starts from an open book.
   // Reset to portrait afterwards so the sleep screen renderer keeps its existing layout.
@@ -455,7 +476,7 @@ void SleepActivity::onEnter() {
     GUI.drawPopup(renderer, tr(STR_ENTERING_SLEEP));
   }
 
-  switch (SETTINGS.sleepScreen) {
+  switch (sleepMode) {
     case (InkMODSettings::SLEEP_SCREEN_MODE::BLANK):
       return renderBlankSleepScreen();
     case (InkMODSettings::SLEEP_SCREEN_MODE::CUSTOM):
@@ -491,7 +512,7 @@ void SleepActivity::onEnter() {
 
 void SleepActivity::renderCustomSleepScreen() const {
   SleepImageSelection selection;
-  if (selectPinnedSleepImage(SleepImageMode::Custom, selection) ||
+  if (selectPinnedSleepImage(SleepImageMode::Custom, effectivePinnedSleepImagePath(), selection) ||
       selectRandomSleepImage(SleepImageMode::Custom, selection)) {
     FsFile file;
     if (Storage.openFileForRead("SLP", selection.path, file)) {
@@ -1511,7 +1532,7 @@ void SleepActivity::renderOverlaySleepScreen() const {
     overlayCandidateFailed = overlayCandidateFailed || result == OverlayDrawResult::Failed;
   };
 
-  if (selectPinnedSleepImage(SleepImageMode::Overlay, selection)) {
+  if (selectPinnedSleepImage(SleepImageMode::Overlay, effectivePinnedSleepImagePath(), selection)) {
     trySelectedOverlay(selection);
   }
   if (!overlayDrawn && selectRandomSleepImage(SleepImageMode::Overlay, selection)) {

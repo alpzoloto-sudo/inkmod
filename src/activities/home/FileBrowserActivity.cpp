@@ -421,10 +421,16 @@ void FileBrowserActivity::promptRenamePath(const std::string& fullPath, const st
                              return;
                            }
 
+                           bool sleepImageStateChanged = false;
                            if (APP_STATE.favoriteSleepImagePath == fullPath) {
                              APP_STATE.favoriteSleepImagePath = newPath;
-                             APP_STATE.saveToFile();
+                             sleepImageStateChanged = true;
                            }
+                           if (APP_STATE.timeoutSleepImagePath == fullPath) {
+                             APP_STATE.timeoutSleepImagePath = newPath;
+                             sleepImageStateChanged = true;
+                           }
+                           if (sleepImageStateChanged) APP_STATE.saveToFile();
                            if (isDirectory && APP_STATE.preferredSleepFolderPath == normalizeDirectoryPath(fullPath)) {
                              APP_STATE.preferredSleepFolderPath = normalizeDirectoryPath(newPath);
                              APP_STATE.saveToFile();
@@ -494,6 +500,7 @@ void FileBrowserActivity::showDirectoryActionMenu(const std::string& entry, bool
                              case FileBrowserAction::PinFavorite:
                              case FileBrowserAction::UnpinFavorite:
                              case FileBrowserAction::SetSleepOverlay:
+                             case FileBrowserAction::SetTimeoutSleepOverlay:
                                return;
                            }
                          });
@@ -577,6 +584,7 @@ void FileBrowserActivity::showFileActionMenu(const std::string& entry, bool igno
 
   if (isSleepImageFile(entry)) {
     items.push_back({FileBrowserAction::SetSleepOverlay, StrId::STR_SET_AS_SLEEP_OVERLAY});
+    items.push_back({FileBrowserAction::SetTimeoutSleepOverlay, StrId::STR_SET_AS_TIMEOUT_SLEEP_OVERLAY});
   }
 
   const bool canPinFavorite = isSleepFavoriteFolder(basepath) && isSleepImageFile(entry);
@@ -600,6 +608,13 @@ void FileBrowserActivity::showFileActionMenu(const std::string& entry, bool igno
           case FileBrowserAction::SetSleepOverlay:
             APP_STATE.favoriteSleepImagePath = fullPath;
             SETTINGS.sleepScreen = InkMODSettings::OVERLAY;
+            APP_STATE.saveToFile();
+            SETTINGS.saveToFile();
+            requestUpdate();
+            return;
+          case FileBrowserAction::SetTimeoutSleepOverlay:
+            APP_STATE.timeoutSleepImagePath = fullPath;
+            SETTINGS.quickResumeSleepScreen = InkMODSettings::TIMEOUT_SLEEP_OVERLAY;
             APP_STATE.saveToFile();
             SETTINGS.saveToFile();
             requestUpdate();

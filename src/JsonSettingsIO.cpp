@@ -94,6 +94,7 @@ bool JsonSettingsIO::saveState(const InkMODState& s, const char* path) {
   JsonDocument doc;
   doc["openEpubPath"] = s.openEpubPath;
   doc["favoriteSleepImagePath"] = s.favoriteSleepImagePath;
+  doc["timeoutSleepImagePath"] = s.timeoutSleepImagePath;
   doc["preferredSleepFolderPath"] = s.preferredSleepFolderPath;
   JsonArray recentArr = doc["recentSleepImages"].to<JsonArray>();
   for (int i = 0; i < InkMODState::SLEEP_RECENT_COUNT; i++) recentArr.add(s.recentSleepImages[i]);
@@ -122,6 +123,7 @@ bool JsonSettingsIO::loadState(InkMODState& s, const char* json) {
 
   s.openEpubPath = doc["openEpubPath"] | std::string("");
   s.favoriteSleepImagePath = doc["favoriteSleepImagePath"] | std::string("");
+  s.timeoutSleepImagePath = doc["timeoutSleepImagePath"] | std::string("");
   s.preferredSleepFolderPath = doc["preferredSleepFolderPath"] | std::string("");
   memset(s.recentSleepImages, 0, sizeof(s.recentSleepImages));
   JsonArrayConst recentArr = doc["recentSleepImages"];

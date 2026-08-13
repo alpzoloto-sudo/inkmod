@@ -12,6 +12,7 @@ class InkMODState {
 
   std::string openEpubPath;
   std::string favoriteSleepImagePath;
+  std::string timeoutSleepImagePath;
   std::string preferredSleepFolderPath;
   uint16_t recentSleepImages[SLEEP_RECENT_COUNT] = {};  // circular buffer of recent wallpaper indices
   uint8_t recentSleepPos = 0;                           // next write slot

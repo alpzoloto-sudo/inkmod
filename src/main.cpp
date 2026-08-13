@@ -513,7 +513,8 @@ void enterDeepSleep(bool fromTimeout) {
   const bool isQuickResumeSleep =
       SETTINGS.sleepScreen == InkMODSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
       (fromTimeout &&
-       SETTINGS.quickResumeSleepScreen == InkMODSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT);
+       (SETTINGS.quickResumeSleepScreen == InkMODSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT ||
+        SETTINGS.quickResumeSleepScreen == InkMODSettings::QUICK_RESUME_SLEEP_SCREEN::TIMEOUT_SLEEP_OVERLAY));
   APP_STATE.showBootScreen = !isQuickResumeSleep;
 
   APP_STATE.saveToFile();

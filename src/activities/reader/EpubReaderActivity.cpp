@@ -3027,13 +3027,16 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       return;
     }
 
-    // A memory-safe FB2/EPUB split is an implementation detail, not a visible
-    // chapter boundary. Paginate every fragment of the current logical chapter
-    // before showing it, one fragment at a time, so the status bar immediately
-    // has an exact stable total (1/100 ... 100/100). This is synchronous by
-    // design: there is no background task competing with page turns, and only
-    // one temporary Section exists at a time.
-    {
+    // FB2 virtual chunks are intentionally pre-paginated so the user sees one
+    // stable logical chapter page count immediately. Do NOT do this for the
+    // oversized real-EPUB splitter: its whole purpose is to make a giant XHTML
+    // chapter open quickly by laying out only the current ~200 KiB fragment.
+    // Pre-paginating every *_splitN sibling here made the splitter pointless and
+    // caused books with one 1+ MiB XHTML file to sit on "Loading" until most of
+    // the book had already been laid out. For split EPUBs the status bar already
+    // knows how to accumulate page counts from caches that actually exist, and
+    // unopened fragments are prepared lazily as the reader reaches them.
+    if (epub->isFb2Package()) {
       int logicalStart = currentSpineIndex;
       int logicalEnd = currentSpineIndex;
       if (epub->getLogicalChapterBounds(currentSpineIndex, logicalStart, logicalEnd) && logicalStart != logicalEnd) {

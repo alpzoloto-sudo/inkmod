@@ -486,18 +486,17 @@ void LyraCarouselTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int but
   const int maxTileW = 200;
   adaptiveTileW = std::clamp(adaptiveTileW, minTileW, maxTileW);
   
-  // If total width exceeds screen, fall back to equal distribution
-  int screenW = renderer.getScreenWidth();
-  int totalWidth = adaptiveTileW * buttonCount;
-  int tileW = (totalWidth > screenW) ? (screenW / buttonCount) : adaptiveTileW;
-  
-  // Ensure minimum width
-  tileW = std::max(tileW, 70);
-  
-  // Center the menu items
-  int totalMenuWidth = tileW * buttonCount;
-  int startX = (screenW - totalMenuWidth) / 2;
-  if (startX < 0) startX = 0;
+  // Keep the whole row (including the selection highlight) inside a
+  // symmetric safe area. On X4 with 7 items, forcing tileW >= 70 made
+  // the row wider than the 480 px screen and clipped the right edge.
+  const int screenW = renderer.getScreenWidth();
+  const int safeMargin = kHighlightPad + 2;
+  const int availableW = std::max(buttonCount, screenW - safeMargin * 2);
+  const int maxTileWThatFits = std::max(1, availableW / buttonCount);
+  const int tileW = std::min(adaptiveTileW, maxTileWThatFits);
+
+  const int totalMenuWidth = tileW * buttonCount;
+  const int startX = (screenW - totalMenuWidth) / 2;
 
   const MenuLayoutMetrics metrics = computeMenuLayout(renderer, buttonCount);
 
@@ -561,14 +560,16 @@ void LyraCarouselTheme::drawButtonMenuSelectionOverlay(const GfxRenderer& render
   
   int adaptiveTileW = kMenuIconSize + 20 + maxLabelWidth + 20;
   adaptiveTileW = std::clamp(adaptiveTileW, 80, 200);
-  int screenW = renderer.getScreenWidth();
-  int totalWidth = adaptiveTileW * buttonCount;
-  int tileW = (totalWidth > screenW) ? (screenW / buttonCount) : adaptiveTileW;
-  tileW = std::max(tileW, 70);
-  
-  int totalMenuWidth = tileW * buttonCount;
-  int startX = (screenW - totalMenuWidth) / 2;
-  if (startX < 0) startX = 0;
+  // Must match drawButtonMenu() exactly, otherwise the fast selection
+  // overlay shifts at the left/right edges.
+  const int screenW = renderer.getScreenWidth();
+  const int safeMargin = kHighlightPad + 2;
+  const int availableW = std::max(buttonCount, screenW - safeMargin * 2);
+  const int maxTileWThatFits = std::max(1, availableW / buttonCount);
+  const int tileW = std::min(adaptiveTileW, maxTileWThatFits);
+
+  const int totalMenuWidth = tileW * buttonCount;
+  const int startX = (screenW - totalMenuWidth) / 2;
 
   const MenuLayoutMetrics metrics = computeMenuLayout(renderer, buttonCount);
 

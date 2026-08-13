@@ -20,6 +20,7 @@ enum class FileBrowserAction : int {
   DeleteStats = 8,
   SetSleepOverlay = 9,
   Rename = 10,
+  SetTimeoutSleepOverlay = 11,
 };
 
 class FileBrowserActionActivity final : public Activity {

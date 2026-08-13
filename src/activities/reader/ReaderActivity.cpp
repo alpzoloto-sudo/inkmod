@@ -8,7 +8,6 @@
 
 #include "InkMODSettings.h"
 #include "Epub.h"
-#include "Epub/split/EpubChapterSplitter.h"
 #include "EpubReaderActivity.h"
 #include "SdCardFontSystem.h"
 #include "Txt.h"
@@ -48,12 +47,18 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path, const st
     return nullptr;
   }
 
-  // A no-op for the overwhelming majority of books (one cheap content.opf
-  // read plus a batched zip size check) - only for the rare book with a
-  // single spine item too large for this device to lay out in one pass
-  // does this redirect to a cached, pre-split unpacked copy instead of
-  // opening `path` directly. See EpubChapterSplitter's own header for why.
-  const std::string readPath = EpubChapterSplitter::resolveReadPath(path, "/.inkmod");
+  // Stability path for X3/X4:
+  // open the original EPUB directly with the proven Epub/ERS cache pipeline.
+  //
+  // The optional pre-splitter (epubsplit_*) is deliberately bypassed here.
+  // In release builds, some large EPUBs could reboot the ESP32-C3 during
+  // EpubChapterSplitter::resolveReadPath() before the normal EPUB reader was
+  // even created. Developer logs confirmed that opening the same original
+  // EPUB directly proceeds through BMC/ERS and builds sections successfully.
+  //
+  // Keep EpubChapterSplitter sources in the project for future work/tests;
+  // this change only removes it from the runtime open path.
+  const std::string& readPath = path;
 
   auto epub = makeUniqueNoThrow<Epub>(readPath, "/.inkmod");
   if (!epub) {

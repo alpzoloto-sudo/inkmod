@@ -1,22 +1,28 @@
-InkMOD Telegram support patch
+InkMOD release/runtime parity fix
 
-Adds:
-- System -> "Поддержать InkMOD ❤️"
-- bounded QR screen to https://t.me/inkmodx4
-- @inkmodx4 label
-- EN/RU/UK translations
-- web-home support card/button to the Telegram channel
+Problem:
+developer works, while release can behave differently (for example on EPUB).
 
-No nags, ads, paid locks or disabled features.
+Cause:
+developer defines ENABLE_SERIAL_LOG, release did not.
+That define is used not only by LOG_* macros but also by real hardware/runtime
+code under #ifdef ENABLE_SERIAL_LOG (USB CDC setup/teardown and other paths).
 
-QR layout is bounded for X3/X4:
-- intro max 3 lines
-- QR size derived from remaining content area
-- footer only drawn if it fits
-- bottom button-hint area reserved
+Fix:
+release now also defines:
+  -DENABLE_SERIAL_LOG
+  -DLOG_LEVEL=-1
 
-Does NOT touch XTC, FB2/EPUB, dictionary, clippings, sleep, battery,
-power-saving, wallpaper generator or display code.
+LOG_LEVEL=-1 means LOG_ERR/LOG_INF/LOG_DBG still compile to nothing.
+So:
+- release stays silent
+- no serial log spam
+- USB flashing remains available
+- developer/release execute the same ENABLE_SERIAL_LOG-gated runtime paths
 
 Build:
-  pio run -e developer -t upload
+  pio run -e release -t upload
+
+Diagnostic:
+If the problematic EPUB now behaves like developer, the bug was confirmed as
+a build-configuration divergence rather than EPUB parsing or -Os optimization.

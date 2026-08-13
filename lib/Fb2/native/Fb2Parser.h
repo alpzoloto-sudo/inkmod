@@ -31,6 +31,10 @@
 #include "IByteReader.h"
 #include "Fb2Types.h"
 
+namespace reader {
+class ReaderCancellationToken;
+}
+
 class Fb2Parser {
 public:
     // Returns false only on a hard read error / clearly-not-FB2 input.
@@ -42,10 +46,12 @@ public:
     // sectionIndex must be an index into the vector scan() filled in.
     bool renderSection(IByteReader& reader,
                         const Fb2SectionIndexEntry& section,
-                        Fb2ContentSink& sink);
+                        Fb2ContentSink& sink,
+                        const reader::ReaderCancellationToken* cancellationToken = nullptr);
 
     using BinaryOutputFn = std::function<void(const uint8_t* data, size_t len)>;
     bool decodeBinary(IByteReader& reader,
                        const Fb2BinaryIndexEntry& binary,
-                       const BinaryOutputFn& out);
+                       const BinaryOutputFn& out,
+                       const reader::ReaderCancellationToken* cancellationToken = nullptr);
 };

@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Added a single reader-work controller for EPUB, FB2 and FB2.ZIP chapter preparation. Navigation invalidates obsolete work at bounded ZIP/XML/image checkpoints without starting a second parser, SD reader, or background worker.
+- Added adaptive `normal`, `safe`, and `survival` layout modes. Under memory pressure the reader progressively releases the SD font and omits optional CSS, images, hyphenation, and reading effects before reporting an out-of-memory error.
+
+### Changed
+- Rapid page and chapter input is now coalesced while an uncached section is being prepared. Only the final requested position is rendered, and accumulated page turns carry across internal chapter fragments.
+- Large section page indexes are spooled as linked fixed records inside the temporary section cache instead of growing a RAM vector with every generated page or opening another SD file.
+- The reader prepares only the requested virtual fragment. It no longer pre-paginates every sibling fragment of the same logical chapter while holding the render lock.
+- Sleep-screen preparation is now cache-only. It never starts an invisible chapter rebuild while the device is trying to sleep.
+- Lazy FB2 image decoding now uses a fixed 4 KiB write buffer and removes truncated output after cancellation, read failure, or SD write failure.
+
+### Fixed
+- Cancelled section builds are written to temporary files and discarded before promotion, so rapid navigation cannot replace a valid cache with a partial one.
+- Section cache promotion preserves the previous file as a short-lived backup and restores it after an interrupted replacement.
+- Safe and survival layouts use separate cache names and are reused by the reader, logical chapter counter, and sleep-page renderer without overwriting full-quality caches.
+
 ## [v1.1.3] - 2026-08-10
 
 ### Added
@@ -44,6 +62,7 @@
 - Large StarDict dictionaries are now decompressed, indexed, and sorted in bounded chunks backed by browser storage. ZIP entries are streamed directly as well, keeping preparation usable on phones instead of retaining the complete archive, article data, and synonym index in RAM.
 
 ### Fixed
+- Removed four embedded NUL bytes from the home-screen carousel cache-key source. The separators and cache-key behaviour are unchanged, but the C++ compiler no longer reports `null character(s) preserved in literal`.
 - Idle operation no longer starts a battery ADC conversion on every main-loop pass or polls the X3 fuel gauge over I2C dozens of times per second. Release builds also stop emitting unchanged heap telemetry every ten seconds, while error and out-of-memory diagnostics remain available.
 - `Loading chapter` is shown over the last visible reader page again. Parser callbacks no longer redisplay the framebuffer while it is being reused for illustration conversion, preventing both the white-background regression and temporary decoder pixels behind the popup.
 - EPUB spine items above the safe pagination size are now split into bounded logical fragments from about 300 KB instead of only after 1 MB. Discovery metadata is released before extraction, ZIP entry names are staged on SD instead of retained as an unbounded RAM list, existing v48 EPUB page caches remain reusable, and generated fragments retain the original `<body>` styling while still appearing as one chapter.

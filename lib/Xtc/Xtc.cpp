@@ -12,6 +12,7 @@
 #include <Logging.h>
 
 #include <algorithm>
+#include <cstring>
 
 namespace {
 bool thumbnailHasDimensions(const std::string& path, const uint16_t width, const uint16_t height) {
@@ -25,6 +26,205 @@ bool thumbnailHasDimensions(const std::string& path, const uint16_t width, const
       bitmap.parseHeaders() == BmpReaderError::Ok && bitmap.getWidth() == width && bitmap.getHeight() == height;
   file.close();
   return matches;
+}
+
+// Convert the first XTC/XTCH page directly into a 1-bit BMP without ever
+// allocating the complete 48/96-KB source bitmap. For XTCH, plane 1 is staged
+// to a temporary SD file while plane 2 is streamed; matching 2-KB chunks are
+// then combined into the small destination bitmap.
+bool generatePageBmpStreaming(xtc::XtcParser& parser, const xtc::PageInfo& pageInfo, const uint8_t bitDepth,
+                              const std::string& outputPath, const uint16_t outputWidth,
+                              const uint16_t outputHeight, const bool ditherGrayscale) {
+  if (pageInfo.width == 0 || pageInfo.height == 0 || outputWidth == 0 || outputHeight == 0) return false;
+
+  const size_t outputRowSize = ((static_cast<size_t>(outputWidth) + 31) / 32) * 4;
+  const size_t outputBytes = outputRowSize * outputHeight;
+  uint8_t* output = static_cast<uint8_t*>(malloc(outputBytes));
+  int16_t* sourceToOutputX = static_cast<int16_t*>(malloc(static_cast<size_t>(pageInfo.width) * sizeof(int16_t)));
+  int16_t* sourceToOutputY = static_cast<int16_t*>(malloc(static_cast<size_t>(pageInfo.height) * sizeof(int16_t)));
+  if (!output || !sourceToOutputX || !sourceToOutputY) {
+    free(output);
+    free(sourceToOutputX);
+    free(sourceToOutputY);
+    LOG_ERR("XTC", "Failed to allocate streaming BMP buffers (%lu bytes)",
+            static_cast<unsigned long>(outputBytes +
+                                       (static_cast<size_t>(pageInfo.width) + pageInfo.height) * sizeof(int16_t)));
+    return false;
+  }
+
+  memset(output, 0xFF, outputBytes);
+  std::fill_n(sourceToOutputX, pageInfo.width, static_cast<int16_t>(-1));
+  std::fill_n(sourceToOutputY, pageInfo.height, static_cast<int16_t>(-1));
+
+  const float scaleX = static_cast<float>(outputWidth) / pageInfo.width;
+  const float scaleY = static_cast<float>(outputHeight) / pageInfo.height;
+  const float scale = std::max(scaleX, scaleY);
+  const uint32_t scaleInvFp = static_cast<uint32_t>(65536.0f / scale);
+  const uint64_t sourceWidthFp = static_cast<uint64_t>(pageInfo.width) << 16;
+  const uint64_t sourceHeightFp = static_cast<uint64_t>(pageInfo.height) << 16;
+  const uint64_t visibleWidthFp = static_cast<uint64_t>(outputWidth) * scaleInvFp;
+  const uint64_t visibleHeightFp = static_cast<uint64_t>(outputHeight) * scaleInvFp;
+  const uint32_t cropXFp =
+      static_cast<uint32_t>(sourceWidthFp > visibleWidthFp ? (sourceWidthFp - visibleWidthFp) / 2 : 0);
+  const uint32_t cropYFp =
+      static_cast<uint32_t>(sourceHeightFp > visibleHeightFp ? (sourceHeightFp - visibleHeightFp) / 2 : 0);
+
+  // Destination pixels sample the centre of their source footprint. UI cover
+  // slots never upscale an XTC page, so each selected source coordinate maps
+  // to at most one destination coordinate.
+  for (uint16_t x = 0; x < outputWidth; ++x) {
+    uint32_t sourceX =
+        (cropXFp + static_cast<uint32_t>(x) * scaleInvFp + scaleInvFp / 2) >> 16;
+    if (sourceX >= pageInfo.width) sourceX = pageInfo.width - 1;
+    sourceToOutputX[sourceX] = static_cast<int16_t>(x);
+  }
+  for (uint16_t y = 0; y < outputHeight; ++y) {
+    uint32_t sourceY =
+        (cropYFp + static_cast<uint32_t>(y) * scaleInvFp + scaleInvFp / 2) >> 16;
+    if (sourceY >= pageInfo.height) sourceY = pageInfo.height - 1;
+    sourceToOutputY[sourceY] = static_cast<int16_t>(y);
+  }
+
+  auto writePixel = [&](const uint16_t sourceX, const uint16_t sourceY, const uint8_t gray) {
+    if (sourceX >= pageInfo.width || sourceY >= pageInfo.height) return;
+    const int16_t outputX = sourceToOutputX[sourceX];
+    const int16_t outputY = sourceToOutputY[sourceY];
+    if (outputX < 0 || outputY < 0) return;
+
+    // Full-size sleep cover keeps the reader's historical threshold: only
+    // native white stays white, every visible gray/black pixel becomes black.
+    // Small UI thumbnails use deterministic dithering to preserve gray detail.
+    bool white = ditherGrayscale ? gray >= 128 : gray == 255;
+    if (ditherGrayscale && gray != 0 && gray != 255) {
+      uint32_t hash = static_cast<uint32_t>(outputX) * 374761393u +
+                      static_cast<uint32_t>(outputY) * 668265263u;
+      hash = (hash ^ (hash >> 13)) * 1274126177u;
+      const int threshold = static_cast<int>(hash >> 24);
+      const int adjustedThreshold = 128 + ((threshold - 128) / 2);
+      white = gray >= adjustedThreshold;
+    }
+    if (!white) {
+      output[static_cast<size_t>(outputY) * outputRowSize + static_cast<size_t>(outputX) / 8] &=
+          static_cast<uint8_t>(~(1u << (7 - (outputX % 8))));
+    }
+  };
+
+  bool streamOk = true;
+  const size_t sourceRowBytes = (pageInfo.width + 7) / 8;
+  const size_t planeSize = (static_cast<size_t>(pageInfo.width) * pageInfo.height + 7) / 8;
+  const size_t columnBytes = (pageInfo.height + 7) / 8;
+  constexpr size_t STREAM_CHUNK_SIZE = 2048;
+  const std::string planePath = outputPath + ".plane.tmp";
+  FsFile planeFile;
+  uint8_t* planeChunk = nullptr;
+  bool readingPlane2 = false;
+
+  if (bitDepth == 2) {
+    Storage.remove(planePath.c_str());
+    planeChunk = static_cast<uint8_t*>(malloc(STREAM_CHUNK_SIZE));
+    streamOk = planeChunk && Storage.openFileForWrite("XTC", planePath, planeFile);
+  }
+
+  const auto error = streamOk
+                         ? parser.loadPageStreaming(
+                               0,
+                               [&](const uint8_t* data, const size_t size, const size_t offset) {
+                                 if (!streamOk) return;
+                                 size_t position = 0;
+                                 while (position < size) {
+                                   const size_t absolute = offset + position;
+                                   if (bitDepth == 1) {
+                                     const size_t byteOffset = absolute;
+                                     const uint16_t sourceY = static_cast<uint16_t>(byteOffset / sourceRowBytes);
+                                     const uint16_t byteInRow = static_cast<uint16_t>(byteOffset % sourceRowBytes);
+                                     const uint8_t value = data[position++];
+                                     for (uint8_t bit = 0; bit < 8; ++bit) {
+                                       const uint16_t sourceX = static_cast<uint16_t>(byteInRow * 8 + bit);
+                                       if (sourceX >= pageInfo.width || sourceY >= pageInfo.height) break;
+                                       writePixel(sourceX, sourceY, (value & (1u << (7 - bit))) ? 255 : 0);
+                                     }
+                                     continue;
+                                   }
+
+                                   if (absolute < planeSize) {
+                                     const size_t count = std::min(size - position, planeSize - absolute);
+                                     if (planeFile.write(data + position, count) != count) {
+                                       streamOk = false;
+                                       return;
+                                     }
+                                     position += count;
+                                     continue;
+                                   }
+                                   if (absolute >= planeSize * 2) break;
+
+                                   if (!readingPlane2) {
+                                     planeFile.flush();
+                                     planeFile.close();
+                                     readingPlane2 = Storage.openFileForRead("XTC", planePath, planeFile);
+                                     if (!readingPlane2) {
+                                       streamOk = false;
+                                       return;
+                                     }
+                                   }
+
+                                   const size_t plane2Offset = absolute - planeSize;
+                                   const size_t count = std::min({size - position, planeSize - plane2Offset,
+                                                                  STREAM_CHUNK_SIZE});
+                                   if (!planeFile.seek(plane2Offset) || planeFile.read(planeChunk, count) != count) {
+                                     streamOk = false;
+                                     return;
+                                   }
+
+                                   for (size_t i = 0; i < count; ++i) {
+                                     const size_t byteOffset = plane2Offset + i;
+                                     const size_t columnIndex = byteOffset / columnBytes;
+                                     const size_t byteInColumn = byteOffset % columnBytes;
+                                     if (columnIndex >= pageInfo.width) continue;
+                                     const uint16_t sourceX =
+                                         static_cast<uint16_t>(pageInfo.width - 1 - columnIndex);
+                                     const uint8_t first = planeChunk[i];
+                                     const uint8_t second = data[position + i];
+                                     for (uint8_t bit = 0; bit < 8; ++bit) {
+                                       const uint16_t sourceY = static_cast<uint16_t>(byteInColumn * 8 + bit);
+                                       if (sourceY >= pageInfo.height) break;
+                                       const uint8_t shift = static_cast<uint8_t>(7 - bit);
+                                       const uint8_t pixel = static_cast<uint8_t>(
+                                           ((((first >> shift) & 1u) << 1) | ((second >> shift) & 1u)));
+                                       writePixel(sourceX, sourceY, static_cast<uint8_t>((3 - pixel) * 85));
+                                     }
+                                   }
+                                   position += count;
+                                 }
+                               },
+                               STREAM_CHUNK_SIZE)
+                         : xtc::XtcError::MEMORY_ERROR;
+
+  if (planeFile) planeFile.close();
+  if (bitDepth == 2) Storage.remove(planePath.c_str());
+  free(planeChunk);
+  free(sourceToOutputX);
+  free(sourceToOutputY);
+
+  if (error != xtc::XtcError::OK || !streamOk) {
+    free(output);
+    Storage.remove(outputPath.c_str());
+    LOG_ERR("XTC", "Streaming BMP source read failed: %s", xtc::errorToString(error));
+    return false;
+  }
+
+  FsFile bmp;
+  if (!Storage.openFileForWrite("XTC", outputPath, bmp)) {
+    free(output);
+    return false;
+  }
+  BmpHeader header;
+  createBmpHeader(&header, outputWidth, outputHeight, BmpRowOrder::TopDown);
+  const bool written = bmp.write(reinterpret_cast<const uint8_t*>(&header), sizeof(header)) == sizeof(header) &&
+                       bmp.write(output, outputBytes) == outputBytes;
+  bmp.close();
+  free(output);
+  if (!written) Storage.remove(outputPath.c_str());
+  return written;
 }
 }  // namespace
 
@@ -155,125 +355,13 @@ bool Xtc::generateCoverBmp() const {
     return false;
   }
 
-  // Get bit depth
-  const uint8_t bitDepth = parser->getBitDepth();
-
-  // Allocate buffer for page data
-  // XTG (1-bit): Row-major, ((width+7)/8) * height bytes
-  // XTH (2-bit): Two bit planes, column-major, ((width * height + 7) / 8) * 2 bytes
-  size_t bitmapSize;
-  if (bitDepth == 2) {
-    bitmapSize = ((static_cast<size_t>(pageInfo.width) * pageInfo.height + 7) / 8) * 2;
-  } else {
-    bitmapSize = ((pageInfo.width + 7) / 8) * pageInfo.height;
+  const bool generated = generatePageBmpStreaming(*const_cast<xtc::XtcParser*>(parser.get()), pageInfo,
+                                                  parser->getBitDepth(), getCoverBmpPath(), pageInfo.width,
+                                                  pageInfo.height, false);
+  if (generated) {
+    LOG_DBG("XTC", "Generated streaming cover BMP: %s", getCoverBmpPath().c_str());
   }
-  uint8_t* pageBuffer = static_cast<uint8_t*>(malloc(bitmapSize));
-  if (!pageBuffer) {
-    LOG_ERR("XTC", "Failed to allocate page buffer (%lu bytes)", bitmapSize);
-    return false;
-  }
-
-  // Load first page (cover)
-  size_t bytesRead = const_cast<xtc::XtcParser*>(parser.get())->loadPage(0, pageBuffer, bitmapSize);
-  if (bytesRead == 0) {
-    LOG_ERR("XTC", "Failed to load cover page");
-    free(pageBuffer);
-    return false;
-  }
-
-  // Create BMP file
-  FsFile coverBmp;
-  if (!Storage.openFileForWrite("XTC", getCoverBmpPath(), coverBmp)) {
-    LOG_DBG("XTC", "Failed to create cover BMP file");
-    free(pageBuffer);
-    return false;
-  }
-
-  // Write 1-bit BMP header (top-down row order)
-  BmpHeader bmpHeader;
-  createBmpHeader(&bmpHeader, pageInfo.width, pageInfo.height, BmpRowOrder::TopDown);
-  coverBmp.write(reinterpret_cast<const uint8_t*>(&bmpHeader), sizeof(bmpHeader));
-
-  const uint32_t rowSize = ((pageInfo.width + 31) / 32) * 4;
-
-  // Write bitmap data
-  // BMP requires 4-byte row alignment
-  const size_t dstRowSize = (pageInfo.width + 7) / 8;  // 1-bit destination row size
-
-  if (bitDepth == 2) {
-    // XTH 2-bit mode: Two bit planes, column-major order
-    // - Columns scanned right to left (x = width-1 down to 0)
-    // - 8 vertical pixels per byte (MSB = topmost pixel in group)
-    // - First plane: Bit1, Second plane: Bit2
-    // - Pixel value = (bit1 << 1) | bit2
-    const size_t planeSize = (static_cast<size_t>(pageInfo.width) * pageInfo.height + 7) / 8;
-    const uint8_t* plane1 = pageBuffer;                 // Bit1 plane
-    const uint8_t* plane2 = pageBuffer + planeSize;     // Bit2 plane
-    const size_t colBytes = (pageInfo.height + 7) / 8;  // Bytes per column
-
-    // Allocate a row buffer for 1-bit output
-    uint8_t* rowBuffer = static_cast<uint8_t*>(malloc(dstRowSize));
-    if (!rowBuffer) {
-      free(pageBuffer);
-      return false;
-    }
-
-    for (uint16_t y = 0; y < pageInfo.height; y++) {
-      memset(rowBuffer, 0xFF, dstRowSize);  // Start with all white
-
-      for (uint16_t x = 0; x < pageInfo.width; x++) {
-        // Column-major, right to left: column index = (width - 1 - x)
-        const size_t colIndex = pageInfo.width - 1 - x;
-        const size_t byteInCol = y / 8;
-        const size_t bitInByte = 7 - (y % 8);  // MSB = topmost pixel
-
-        const size_t byteOffset = colIndex * colBytes + byteInCol;
-        const uint8_t bit1 = (plane1[byteOffset] >> bitInByte) & 1;
-        const uint8_t bit2 = (plane2[byteOffset] >> bitInByte) & 1;
-        const uint8_t pixelValue = (bit1 << 1) | bit2;
-
-        // Threshold: 0=white (1); 1,2,3=black (0)
-        if (pixelValue >= 1) {
-          // Set bit to 0 (black) in BMP format
-          const size_t dstByte = x / 8;
-          const size_t dstBit = 7 - (x % 8);
-          rowBuffer[dstByte] &= ~(1 << dstBit);
-        }
-      }
-
-      // Write converted row
-      coverBmp.write(rowBuffer, dstRowSize);
-
-      // Pad to 4-byte boundary
-      uint8_t padding[4] = {0, 0, 0, 0};
-      size_t paddingSize = rowSize - dstRowSize;
-      if (paddingSize > 0) {
-        coverBmp.write(padding, paddingSize);
-      }
-    }
-
-    free(rowBuffer);
-  } else {
-    // 1-bit source: write directly with proper padding
-    const size_t srcRowSize = (pageInfo.width + 7) / 8;
-
-    for (uint16_t y = 0; y < pageInfo.height; y++) {
-      // Write source row
-      coverBmp.write(pageBuffer + y * srcRowSize, srcRowSize);
-
-      // Pad to 4-byte boundary
-      uint8_t padding[4] = {0, 0, 0, 0};
-      size_t paddingSize = rowSize - srcRowSize;
-      if (paddingSize > 0) {
-        coverBmp.write(padding, paddingSize);
-      }
-    }
-  }
-
-  free(pageBuffer);
-
-  LOG_DBG("XTC", "Generated cover BMP: %s", getCoverBmpPath().c_str());
-  return true;
+  return generated;
 }
 
 std::string Xtc::getThumbBmpPath() const { return cachePath + "/thumb_[HEIGHT].bmp"; }
@@ -341,136 +429,12 @@ bool Xtc::generateThumbBmp(uint16_t width, uint16_t height) const {
     Storage.remove(thumbPath.c_str());
   }
 
-  const uint8_t bitDepth = parser->getBitDepth();
-  const uint16_t THUMB_TARGET_WIDTH = width;
-  const uint16_t THUMB_TARGET_HEIGHT = height;
-
-  const float scaleX = static_cast<float>(THUMB_TARGET_WIDTH) / pageInfo.width;
-  const float scaleY = static_cast<float>(THUMB_TARGET_HEIGHT) / pageInfo.height;
-  const float scale = std::max(scaleX, scaleY);
-  const uint16_t thumbWidth = THUMB_TARGET_WIDTH;
-  const uint16_t thumbHeight = THUMB_TARGET_HEIGHT;
-
-  size_t bitmapSize;
-  if (bitDepth == 2) {
-    bitmapSize = ((static_cast<size_t>(pageInfo.width) * pageInfo.height + 7) / 8) * 2;
-  } else {
-    bitmapSize = ((pageInfo.width + 7) / 8) * pageInfo.height;
+  const bool generated = generatePageBmpStreaming(*const_cast<xtc::XtcParser*>(parser.get()), pageInfo,
+                                                  parser->getBitDepth(), thumbPath, width, height, true);
+  if (generated) {
+    LOG_DBG("XTC", "Generated streaming thumb BMP (%dx%d): %s", width, height, thumbPath.c_str());
   }
-  uint8_t* pageBuffer = static_cast<uint8_t*>(malloc(bitmapSize));
-  if (!pageBuffer) {
-    LOG_ERR("XTC", "Failed to allocate page buffer (%lu bytes)", bitmapSize);
-    return false;
-  }
-
-  size_t bytesRead = const_cast<xtc::XtcParser*>(parser.get())->loadPage(0, pageBuffer, bitmapSize);
-  if (bytesRead == 0) {
-    LOG_ERR("XTC", "Failed to load cover page for thumb");
-    free(pageBuffer);
-    return false;
-  }
-
-  FsFile thumbBmp;
-  if (!Storage.openFileForWrite("XTC", thumbPath, thumbBmp)) {
-    free(pageBuffer);
-    return false;
-  }
-
-  const uint32_t rowSize = (thumbWidth + 31) / 32 * 4;
-  BmpHeader bmpHeader;
-  createBmpHeader(&bmpHeader, thumbWidth, thumbHeight, BmpRowOrder::TopDown);
-  thumbBmp.write(reinterpret_cast<const uint8_t*>(&bmpHeader), sizeof(BmpHeader));
-
-  uint8_t* rowBuffer = static_cast<uint8_t*>(malloc(rowSize));
-  if (!rowBuffer) {
-    free(pageBuffer);
-    thumbBmp.close();
-    Storage.remove(thumbPath.c_str());
-    return false;
-  }
-
-  const uint32_t scaleInv_fp = static_cast<uint32_t>(65536.0f / scale);
-  const uint64_t srcWidth_fp = static_cast<uint64_t>(pageInfo.width) << 16;
-  const uint64_t srcHeight_fp = static_cast<uint64_t>(pageInfo.height) << 16;
-  const uint64_t visibleWidth_fp = static_cast<uint64_t>(thumbWidth) * scaleInv_fp;
-  const uint64_t visibleHeight_fp = static_cast<uint64_t>(thumbHeight) * scaleInv_fp;
-  const uint32_t cropX_fp =
-      static_cast<uint32_t>(srcWidth_fp > visibleWidth_fp ? (srcWidth_fp - visibleWidth_fp) / 2 : 0);
-  const uint32_t cropY_fp =
-      static_cast<uint32_t>(srcHeight_fp > visibleHeight_fp ? (srcHeight_fp - visibleHeight_fp) / 2 : 0);
-  const size_t planeSize = (bitDepth == 2) ? ((static_cast<size_t>(pageInfo.width) * pageInfo.height + 7) / 8) : 0;
-  const uint8_t* plane1 = (bitDepth == 2) ? pageBuffer : nullptr;
-  const uint8_t* plane2 = (bitDepth == 2) ? pageBuffer + planeSize : nullptr;
-  const size_t colBytes = (bitDepth == 2) ? ((pageInfo.height + 7) / 8) : 0;
-  const size_t srcRowBytes = (bitDepth == 1) ? ((pageInfo.width + 7) / 8) : 0;
-
-  for (uint16_t dstY = 0; dstY < thumbHeight; dstY++) {
-    memset(rowBuffer, 0xFF, rowSize);
-    uint32_t srcYStart = (cropY_fp + static_cast<uint32_t>(dstY) * scaleInv_fp) >> 16;
-    uint32_t srcYEnd = (cropY_fp + static_cast<uint32_t>(dstY + 1) * scaleInv_fp) >> 16;
-    if (srcYStart >= pageInfo.height) srcYStart = pageInfo.height - 1;
-    if (srcYEnd > pageInfo.height) srcYEnd = pageInfo.height;
-    if (srcYEnd <= srcYStart) srcYEnd = srcYStart + 1;
-    if (srcYEnd > pageInfo.height) srcYEnd = pageInfo.height;
-
-    for (uint16_t dstX = 0; dstX < thumbWidth; dstX++) {
-      uint32_t srcXStart = (cropX_fp + static_cast<uint32_t>(dstX) * scaleInv_fp) >> 16;
-      uint32_t srcXEnd = (cropX_fp + static_cast<uint32_t>(dstX + 1) * scaleInv_fp) >> 16;
-      if (srcXStart >= pageInfo.width) srcXStart = pageInfo.width - 1;
-      if (srcXEnd > pageInfo.width) srcXEnd = pageInfo.width;
-      if (srcXEnd <= srcXStart) srcXEnd = srcXStart + 1;
-      if (srcXEnd > pageInfo.width) srcXEnd = pageInfo.width;
-
-      uint32_t graySum = 0, totalCount = 0;
-      for (uint32_t srcY = srcYStart; srcY < srcYEnd && srcY < pageInfo.height; srcY++) {
-        for (uint32_t srcX = srcXStart; srcX < srcXEnd && srcX < pageInfo.width; srcX++) {
-          uint8_t grayValue = 255;
-          if (bitDepth == 2) {
-            if (srcX < pageInfo.width) {
-              const size_t colIndex = pageInfo.width - 1 - srcX;
-              const size_t byteInCol = srcY / 8;
-              const size_t bitInByte = 7 - (srcY % 8);
-              const size_t byteOffset = colIndex * colBytes + byteInCol;
-              if (byteOffset < planeSize) {
-                const uint8_t bit1 = (plane1[byteOffset] >> bitInByte) & 1;
-                const uint8_t bit2 = (plane2[byteOffset] >> bitInByte) & 1;
-                grayValue = (3 - ((bit1 << 1) | bit2)) * 85;
-              }
-            }
-          } else {
-            const size_t byteIdx = srcY * srcRowBytes + srcX / 8;
-            const size_t bitIdx = 7 - (srcX % 8);
-            if (byteIdx < bitmapSize) {
-              grayValue = ((pageBuffer[byteIdx] >> bitIdx) & 1) ? 255 : 0;
-            }
-          }
-          graySum += grayValue;
-          totalCount++;
-        }
-      }
-
-      uint8_t avgGray = (totalCount > 0) ? static_cast<uint8_t>(graySum / totalCount) : 255;
-      uint32_t hash = static_cast<uint32_t>(dstX) * 374761393u + static_cast<uint32_t>(dstY) * 668265263u;
-      hash = (hash ^ (hash >> 13)) * 1274126177u;
-      const int threshold = static_cast<int>(hash >> 24);
-      const int adjustedThreshold = 128 + ((threshold - 128) / 2);
-      uint8_t oneBit = (avgGray >= adjustedThreshold) ? 1 : 0;
-      const size_t byteIndex = dstX / 8;
-      const size_t bitOffset = 7 - (dstX % 8);
-      if (byteIndex < rowSize) {
-        if (!oneBit) {
-          rowBuffer[byteIndex] &= ~(1 << bitOffset);
-        }
-      }
-    }
-    thumbBmp.write(rowBuffer, rowSize);
-  }
-
-  free(rowBuffer);
-  thumbBmp.close();
-  free(pageBuffer);
-  LOG_DBG("XTC", "Generated thumb BMP (%dx%d): %s", thumbWidth, thumbHeight, getThumbBmpPath(width, height).c_str());
-  return true;
+  return generated;
 }
 
 uint32_t Xtc::getPageCount() const {

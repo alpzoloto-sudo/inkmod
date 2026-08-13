@@ -129,3 +129,12 @@ pio run -e tiny
 
 # Build and flash via USB connection
 pio run -e tiny -t upload
+---
+
+## Support InkMOD
+
+InkMOD is free and community-driven. If you find it useful and want to support further development and testing, visit the project Telegram channel:
+
+**[@inkmodx4](https://t.me/inkmodx4)**
+
+GitHub's **Sponsor** button for this repository links to the same project channel. Support is entirely optional and does not unlock or restrict any firmware features.

@@ -8,6 +8,7 @@
 #include <cstdio>
 
 #include "MappedInputManager.h"
+#include "InkMODHumor.h"
 #include "activities/home/FileBrowserActionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -159,6 +160,11 @@ void EpubReaderBookmarkListActivity::render(RenderLock&&) {
 
   if (bookmarks.empty()) {
     renderer.drawCenteredText(UI_10_FONT_ID, LIST_START_Y + contentY + 20, tr(STR_NO_BOOKMARKS));
+    const auto& metrics = UITheme::getInstance().getMetrics();
+    const int jokeTop = LIST_START_Y + contentY + 58;
+    const int jokeBottom = renderer.getScreenHeight() - metrics.buttonHintsHeight - 8;
+    InkMODHumor::drawBounded(renderer, InkMODHumor::Moment::NoBookmarks, contentX, jokeTop, contentWidth,
+                             std::max(0, jokeBottom - jokeTop), SMALL_FONT_ID, true);
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, true);
     renderer.displayBuffer();

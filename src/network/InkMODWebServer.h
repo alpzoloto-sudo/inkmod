@@ -98,6 +98,7 @@ class InkMODWebServer {
   void handleStatus() const;
   void handleFileList() const;
   void handleEpubKitPage() const;
+  void handleWallpapersPage() const;
   void handleFileListData() const;
   void handleDownload() const;
   void handleUpload(UploadState& state) const;
@@ -111,6 +112,7 @@ class InkMODWebServer {
   void handleSettingsPage() const;
   void handleGetSettings() const;
   void handlePostSettings();
+  void handleApplyWallpaper();
 
   // Font management handlers
   void handleFontsPage() const;

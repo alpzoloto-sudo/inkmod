@@ -4,6 +4,7 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <MemoryBudget.h>
+#include <ReaderWork.h>
 #include <Serialization.h>
 
 #include "Epub/css/CssParser.h"
@@ -15,7 +16,6 @@ namespace {
 constexpr uint32_t SECTION_CACHE_MAGIC = 0x535843FF;  // bytes: 0xFF, "CXS"
 constexpr uint8_t SECTION_FILE_VERSION = 49;
 constexpr uint8_t LEGACY_EPUB_SECTION_FILE_VERSION = 48;
-constexpr uint8_t INITIAL_PAGE_LUT_RESERVE = 32;
 constexpr uint32_t HEADER_SIZE = sizeof(SECTION_CACHE_MAGIC) + sizeof(uint8_t) + sizeof(int) + sizeof(float) +
                                  sizeof(bool) + sizeof(bool) + sizeof(uint8_t) + sizeof(uint16_t) + sizeof(uint16_t) +
                                  sizeof(uint16_t) + sizeof(bool) + sizeof(bool) + sizeof(uint8_t) + sizeof(bool) +
@@ -26,7 +26,10 @@ struct PageLutEntry {
   uint32_t fileOffset;
   uint16_t paragraphIndex;
   uint16_t listItemIndex;
+  uint32_t nextRecordOffset;
 };
+static_assert(sizeof(PageLutEntry) == 12, "Unexpected page spool record padding");
+constexpr uint32_t PAGE_SPOOL_NEXT_OFFSET = sizeof(uint32_t) + sizeof(uint16_t) + sizeof(uint16_t);
 }  // namespace
 
 uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
@@ -36,6 +39,10 @@ uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
   }
 
   const uint32_t position = file.position();
+  if (pageCount == UINT16_MAX) {
+    LOG_ERR("SCT", "Section exceeds the 65535-page cache limit");
+    return 0;
+  }
   if (!page->serialize(file)) {
     LOG_ERR("SCT", "Failed to serialize page %d", pageCount);
     return 0;
@@ -90,6 +97,20 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
                               const uint16_t viewportWidth, const uint16_t viewportHeight,
                               const bool hyphenationEnabled, const bool embeddedStyle, const uint8_t imageRendering,
                               const bool bionicReadingEnabled, const bool guideReadingEnabled) {
+  const std::string backupPath = filePath + ".bak";
+  const std::string tmpPath = filePath + ".tmp";
+  const std::string lutTmpPath = filePath + ".lut.tmp";
+  if (!Storage.exists(filePath.c_str()) && Storage.exists(backupPath.c_str())) {
+    if (!Storage.rename(backupPath.c_str(), filePath.c_str())) {
+      LOG_ERR("SCT", "Failed to restore interrupted cache promotion");
+      return false;
+    }
+    LOG_INF("SCT", "Restored previous cache after interrupted promotion");
+  } else if (Storage.exists(filePath.c_str()) && Storage.exists(backupPath.c_str())) {
+    Storage.remove(backupPath.c_str());
+  }
+  if (Storage.exists(tmpPath.c_str())) Storage.remove(tmpPath.c_str());
+  if (Storage.exists(lutTmpPath.c_str())) Storage.remove(lutTmpPath.c_str());
   if (!Storage.openFileForRead("SCT", filePath, file)) {
     return false;
   }
@@ -184,12 +205,22 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
 
 // Your updated class method (assuming you are using the 'SD' object, which is a wrapper for a specific filesystem)
 bool Section::clearCache() const {
-  if (!Storage.exists(filePath.c_str())) {
+  const std::string backupPath = filePath + ".bak";
+  const std::string tmpPath = filePath + ".tmp";
+  const std::string lutTmpPath = filePath + ".lut.tmp";
+  const bool hasAnyCache = Storage.exists(filePath.c_str()) || Storage.exists(backupPath.c_str()) ||
+                           Storage.exists(tmpPath.c_str()) || Storage.exists(lutTmpPath.c_str());
+  if (!hasAnyCache) {
     LOG_DBG("SCT", "Cache does not exist, no action needed");
     return true;
   }
 
-  if (!Storage.remove(filePath.c_str())) {
+  bool removed = true;
+  if (Storage.exists(filePath.c_str())) removed = Storage.remove(filePath.c_str()) && removed;
+  if (Storage.exists(backupPath.c_str())) removed = Storage.remove(backupPath.c_str()) && removed;
+  if (Storage.exists(tmpPath.c_str())) removed = Storage.remove(tmpPath.c_str()) && removed;
+  if (Storage.exists(lutTmpPath.c_str())) removed = Storage.remove(lutTmpPath.c_str()) && removed;
+  if (!removed) {
     LOG_ERR("SCT", "Failed to clear cache");
     return false;
   }
@@ -204,12 +235,15 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
                                 const bool hyphenationEnabled, const bool embeddedStyle, const uint8_t imageRendering,
                                 const bool bionicReadingEnabled, const bool guideReadingEnabled,
                                 const std::function<void()>& popupFn, bool* imagesWereSuppressed,
-                                bool* layoutAbortedForLowMemory) {
+                                bool* layoutAbortedForLowMemory,
+                                const reader::ReaderCancellationToken* cancellationToken, bool* cancelled) {
   const auto localPath = epub->getSpineItem(spineIndex).href;
   const auto tmpHtmlPath = epub->getCachePath() + "/.tmp_" + std::to_string(spineIndex) + ".html";
   const auto tmpSectionPath = filePath + ".tmp";
+  const auto tmpLutPath = filePath + ".lut.tmp";
   pageCount = 0;
   if (layoutAbortedForLowMemory) *layoutAbortedForLowMemory = false;
+  if (cancelled) *cancelled = false;
   LOG_DBG("SCT", "Create section start: spine=%d viewport=%ux%u image=%u bionic=%u guide=%u free=%u maxAlloc=%u",
           spineIndex, viewportWidth, viewportHeight, imageRendering, bionicReadingEnabled, guideReadingEnabled,
           ESP.getFreeHeap(), ESP.getMaxAllocHeap());
@@ -224,6 +258,10 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   bool success = false;
   uint32_t fileSize = 0;
   for (int attempt = 0; attempt < 3 && !success; attempt++) {
+    if (cancellationToken && cancellationToken->isCancellationRequested()) {
+      if (cancelled) *cancelled = true;
+      break;
+    }
     if (attempt > 0) {
       LOG_DBG("SCT", "Retrying stream (attempt %d)...", attempt + 1);
       delay(50);  // Brief delay before retry
@@ -238,7 +276,7 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     if (!Storage.openFileForWrite("SCT", tmpHtmlPath, tmpHtml)) {
       continue;
     }
-    success = epub->readItemContentsToStream(localPath, tmpHtml, 1024);
+    success = epub->readItemContentsToStream(localPath, tmpHtml, 1024, cancellationToken);
     fileSize = tmpHtml.size();
     // Explicitly close() file before calling Storage.remove()
     tmpHtml.close();
@@ -251,6 +289,11 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   }
 
   if (!success) {
+    if (cancellationToken && cancellationToken->isCancellationRequested()) {
+      if (cancelled) *cancelled = true;
+      LOG_INF("SCT", "Section stream cancelled: spine=%d", spineIndex);
+      return false;
+    }
     LOG_ERR("SCT", "Failed to stream item contents to temp file after retries");
     return false;
   }
@@ -263,6 +306,7 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   }
 
   if (!Storage.openFileForWrite("SCT", tmpSectionPath, file)) {
+    Storage.remove(tmpHtmlPath.c_str());
     return false;
   }
   if (!writeSectionFileHeader(fontId, lineCompression, extraParagraphSpacing, forceParagraphIndents, paragraphAlignment,
@@ -271,10 +315,16 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     LOG_ERR("SCT", "Failed to write section header");
     file.close();
     Storage.remove(tmpSectionPath.c_str());
+    Storage.remove(tmpHtmlPath.c_str());
     return false;
   }
-  std::vector<PageLutEntry> lut = {};
-  lut.reserve(INITIAL_PAGE_LUT_RESERVE);
+  if (Storage.exists(tmpLutPath.c_str())) {
+    Storage.remove(tmpLutPath.c_str());
+  }
+  bool lutWriteFailed = false;
+  uint16_t lutEntryCount = 0;
+  uint32_t firstLutRecordOffset = 0;
+  uint32_t lastLutRecordOffset = 0;
 
   // Derive the content base directory and image cache path prefix for the parser
   size_t lastSlash = localPath.find_last_of('/');
@@ -316,10 +366,33 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   ChapterHtmlSlimParser visitor(
       epub, tmpHtmlPath, renderer, fontId, lineCompression, extraParagraphSpacing, forceParagraphIndents,
       paragraphAlignment, viewportWidth, viewportHeight, hyphenationEnabled, bionicReadingEnabled, guideReadingEnabled,
-      [this, &lut](std::unique_ptr<Page> page, const uint16_t paragraphIndex, const uint16_t listItemIndex) {
-        lut.push_back({this->onPageComplete(std::move(page)), paragraphIndex, listItemIndex});
+      [this, &lutWriteFailed, &lutEntryCount, &firstLutRecordOffset,
+       &lastLutRecordOffset](std::unique_ptr<Page> page, const uint16_t paragraphIndex,
+                            const uint16_t listItemIndex) {
+        if (lutWriteFailed) return;
+        const uint32_t pageOffset = this->onPageComplete(std::move(page));
+        const uint32_t recordOffset = file.position();
+        const PageLutEntry entry{pageOffset, paragraphIndex, listItemIndex, 0};
+        if (pageOffset == 0 || !serialization::tryWritePod(file, entry.fileOffset) ||
+            !serialization::tryWritePod(file, entry.paragraphIndex) ||
+            !serialization::tryWritePod(file, entry.listItemIndex) ||
+            !serialization::tryWritePod(file, entry.nextRecordOffset)) {
+          lutWriteFailed = true;
+          return;
+        }
+        const uint32_t endOffset = file.position();
+        if (lastLutRecordOffset != 0 &&
+            (!file.seek(lastLutRecordOffset + PAGE_SPOOL_NEXT_OFFSET) ||
+             !serialization::tryWritePod(file, recordOffset) || !file.seek(endOffset))) {
+          lutWriteFailed = true;
+          return;
+        }
+        if (firstLutRecordOffset == 0) firstLutRecordOffset = recordOffset;
+        lastLutRecordOffset = recordOffset;
+        ++lutEntryCount;
       },
-      embeddedStyle, contentBase, imageBasePath, imageRendering, std::move(tocAnchors), popupFn, cssParser);
+      embeddedStyle, contentBase, imageBasePath, imageRendering, std::move(tocAnchors), popupFn, cssParser,
+      cancellationToken);
   Hyphenator::setPreferredLanguage(epub->getLanguage());
   LOG_DBG("SCT", "Parser start: spine=%d free=%u maxAlloc=%u", spineIndex, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
   success = visitor.parseAndBuildPages();
@@ -328,79 +401,125 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
 
   if (imagesWereSuppressed) *imagesWereSuppressed = visitor.wasLowMemoryFallbackTriggered();
   if (layoutAbortedForLowMemory) *layoutAbortedForLowMemory = visitor.wasLowMemoryAbortTriggered();
+  if (cancelled) *cancelled = visitor.wasCancellationTriggered();
 
   Storage.remove(tmpHtmlPath.c_str());
-  if (!success) {
-    LOG_ERR("SCT", "Failed to parse XML and build pages");
+  if (!success || lutWriteFailed || lutEntryCount != pageCount) {
+    if (visitor.wasCancellationTriggered()) {
+      LOG_INF("SCT", "Section parse cancelled: spine=%d", spineIndex);
+    } else if (lutWriteFailed || lutEntryCount != pageCount) {
+      LOG_ERR("SCT", "Failed to spool page index (entries=%u pages=%u)", lutEntryCount, pageCount);
+    } else {
+      LOG_ERR("SCT", "Failed to parse XML and build pages");
+    }
     // Explicitly close() file before calling Storage.remove()
     file.close();
     Storage.remove(tmpSectionPath.c_str());
+    Storage.remove(tmpLutPath.c_str());
     if (cssParser) {
       cssParser->clear();
     }
     return false;
   }
 
-  const uint32_t lutOffset = file.position();
-  bool hasFailedLutRecords = false;
-  // Write LUT
-  for (const auto& entry : lut) {
-    if (entry.fileOffset == 0) {
-      hasFailedLutRecords = true;
-      break;
-    }
-    if (!serialization::tryWritePod(file, entry.fileOffset)) {
-      hasFailedLutRecords = true;
-      break;
-    }
-  }
-
-  if (hasFailedLutRecords) {
-    LOG_ERR("SCT", "Failed to write LUT due to invalid page positions");
-    // Explicitly close() file before calling Storage.remove()
+  if (cancellationToken && cancellationToken->isCancellationRequested()) {
+    if (cancelled) *cancelled = true;
     file.close();
     Storage.remove(tmpSectionPath.c_str());
+    Storage.remove(tmpLutPath.c_str());
+    if (cssParser) cssParser->clear();
+    LOG_INF("SCT", "Section finalization cancelled: spine=%d", spineIndex);
     return false;
+  }
+
+  if (!file.sync()) {
+    file.close();
+    Storage.remove(tmpSectionPath.c_str());
+    if (cssParser) cssParser->clear();
+    return false;
+  }
+
+  auto readSpoolRecord = [&](const uint32_t recordOffset, PageLutEntry& entry) {
+    return recordOffset != 0 && file.seek(recordOffset) && serialization::tryReadPod(file, entry.fileOffset) &&
+           serialization::tryReadPod(file, entry.paragraphIndex) &&
+           serialization::tryReadPod(file, entry.listItemIndex) &&
+           serialization::tryReadPod(file, entry.nextRecordOffset);
+  };
+  auto cancelledDuringFinalization = [&]() {
+    if (!cancellationToken || !cancellationToken->isCancellationRequested()) return false;
+    if (cancelled) *cancelled = true;
+    return true;
+  };
+  auto failFinalization = [&]() {
+    file.close();
+    Storage.remove(tmpSectionPath.c_str());
+    if (cssParser) cssParser->clear();
+    return false;
+  };
+
+  const uint32_t lutOffset = file.size();
+  uint32_t recordOffset = firstLutRecordOffset;
+  uint32_t outputOffset = lutOffset;
+  // Copy page offsets from the linked fixed-record spool embedded in the
+  // same temporary section file. Page count no longer determines heap use,
+  // and no second SD file handle is needed on X4 hardware.
+  for (uint16_t i = 0; i < lutEntryCount; ++i) {
+    if (cancelledDuringFinalization()) return failFinalization();
+    PageLutEntry entry{};
+    if (!readSpoolRecord(recordOffset, entry) || entry.fileOffset == 0 || !file.seek(outputOffset) ||
+        !serialization::tryWritePod(file, entry.fileOffset)) {
+      LOG_ERR("SCT", "Failed to write LUT due to invalid page positions");
+      return failFinalization();
+    }
+    outputOffset = file.position();
+    recordOffset = entry.nextRecordOffset;
+  }
+  if (recordOffset != 0) {
+    LOG_ERR("SCT", "Page spool contains more records than expected");
+    return failFinalization();
   }
 
   // Write anchor-to-page map for fragment navigation (e.g. footnote targets)
-  const uint32_t anchorMapOffset = file.position();
+  const uint32_t anchorMapOffset = outputOffset;
+  if (!file.seek(anchorMapOffset)) return failFinalization();
   const auto& anchors = visitor.getAnchors();
   if (!serialization::tryWritePod(file, static_cast<uint16_t>(anchors.size()))) {
-    file.close();
-    Storage.remove(tmpSectionPath.c_str());
-    return false;
+    return failFinalization();
   }
   for (const auto& [anchor, page] : anchors) {
+    if (cancelledDuringFinalization()) return failFinalization();
     if (!serialization::tryWriteString(file, anchor) || !serialization::tryWritePod(file, page)) {
-      file.close();
-      Storage.remove(tmpSectionPath.c_str());
-      return false;
+      return failFinalization();
     }
   }
 
   const uint32_t paragraphLutOffset = file.position();
-  if (!serialization::tryWritePod(file, static_cast<uint16_t>(lut.size()))) {
-    file.close();
-    Storage.remove(tmpSectionPath.c_str());
-    return false;
+  if (!serialization::tryWritePod(file, lutEntryCount)) return failFinalization();
+  recordOffset = firstLutRecordOffset;
+  outputOffset = file.position();
+  for (uint16_t i = 0; i < lutEntryCount; ++i) {
+    if (cancelledDuringFinalization()) return failFinalization();
+    PageLutEntry entry{};
+    if (!readSpoolRecord(recordOffset, entry) || !file.seek(outputOffset) ||
+        !serialization::tryWritePod(file, entry.paragraphIndex))
+      return failFinalization();
+    outputOffset = file.position();
+    recordOffset = entry.nextRecordOffset;
   }
-  for (const auto& entry : lut) {
-    if (!serialization::tryWritePod(file, entry.paragraphIndex)) {
-      file.close();
-      Storage.remove(tmpSectionPath.c_str());
-      return false;
-    }
-  }
+  if (recordOffset != 0) return failFinalization();
 
-  const uint32_t liLutFileOffset = static_cast<uint32_t>(file.position());
-  for (const auto& entry : lut) {
-    if (!serialization::tryWritePod(file, entry.listItemIndex)) {
-      file.close();
-      Storage.remove(tmpSectionPath.c_str());
-      return false;
-    }
+  const uint32_t liLutFileOffset = outputOffset;
+  recordOffset = firstLutRecordOffset;
+  for (uint16_t i = 0; i < lutEntryCount; ++i) {
+    if (cancelledDuringFinalization()) return failFinalization();
+    PageLutEntry entry{};
+    if (!readSpoolRecord(recordOffset, entry) || !file.seek(outputOffset) ||
+        !serialization::tryWritePod(file, entry.listItemIndex))
+      return failFinalization();
+    outputOffset = file.position();
+    recordOffset = entry.nextRecordOffset;
   }
+  if (recordOffset != 0) return failFinalization();
 
   // Patch header with final pageCount, lutOffset, anchorMapOffset, paragraphLutOffset, and liLutOffset.
   if (!file.seek(HEADER_SIZE - sizeof(uint32_t) * 4 - sizeof(pageCount)) ||
@@ -410,6 +529,7 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     LOG_ERR("SCT", "Failed to finalize section cache");
     file.close();
     Storage.remove(tmpSectionPath.c_str());
+    Storage.remove(tmpLutPath.c_str());
     if (cssParser) {
       cssParser->clear();
     }
@@ -417,17 +537,37 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   }
   // Explicit close() required: member variable persists beyond function scope
   file.close();
-  if (Storage.exists(filePath.c_str())) {
-    Storage.remove(filePath.c_str());
+  if (cancellationToken && cancellationToken->isCancellationRequested()) {
+    if (cancelled) *cancelled = true;
+    Storage.remove(tmpSectionPath.c_str());
+    Storage.remove(tmpLutPath.c_str());
+    if (cssParser) cssParser->clear();
+    LOG_INF("SCT", "Section promotion cancelled: spine=%d", spineIndex);
+    return false;
+  }
+  const std::string backupPath = filePath + ".bak";
+  if (Storage.exists(backupPath.c_str())) {
+    Storage.remove(backupPath.c_str());
+  }
+  const bool hadExistingCache = Storage.exists(filePath.c_str());
+  if (hadExistingCache && !Storage.rename(filePath.c_str(), backupPath.c_str())) {
+    LOG_ERR("SCT", "Failed to preserve previous section cache");
+    Storage.remove(tmpSectionPath.c_str());
+    if (cssParser) cssParser->clear();
+    return false;
   }
   if (!Storage.rename(tmpSectionPath.c_str(), filePath.c_str())) {
     LOG_ERR("SCT", "Failed to promote temp section cache into place");
     Storage.remove(tmpSectionPath.c_str());
+    if (hadExistingCache && !Storage.rename(backupPath.c_str(), filePath.c_str())) {
+      LOG_ERR("SCT", "Failed to roll back previous section cache");
+    }
     if (cssParser) {
       cssParser->clear();
     }
     return false;
   }
+  if (hadExistingCache) Storage.remove(backupPath.c_str());
   if (cssParser) {
     cssParser->clear();
   }

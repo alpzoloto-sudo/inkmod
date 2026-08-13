@@ -97,6 +97,17 @@ void GfxRenderer::ensureSdCardFontReady(int fontId, const std::vector<std::strin
   }
 }
 
+bool GfxRenderer::trimSdCardFontForLowMemory(int fontId) const {
+  auto it = sdCardFonts_.find(fontId);
+  if (it == sdCardFonts_.end()) return false;
+
+  // Drop only page-local glyph bitmaps. Keep the persistent advance table,
+  // kern classes and ligature metadata so a huge chapter does not effectively
+  // "unload" the selected SD font and force expensive re-reads/fallback.
+  it->second->clearCache();
+  return true;
+}
+
 bool GfxRenderer::releaseSdCardFontForLowMemory(int fontId) const {
   auto it = sdCardFonts_.find(fontId);
   if (it == sdCardFonts_.end()) return false;

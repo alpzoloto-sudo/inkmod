@@ -746,7 +746,8 @@ void EInkDisplay::displayBuffer(RefreshMode mode, const bool turnOffScreen) {
 
   // If currently in grayscale mode, revert first to black/white
   if (inGrayscaleMode) {
-    inGrayscaleMode = false;
+    // grayscaleRevert() owns the state transition. Clearing the flag here
+    // would make it return without applying the physical revert waveform.
     grayscaleRevert();
   }
 
@@ -958,7 +959,8 @@ void EInkDisplay::displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, 
 
   // displayWindow is not supported while the rest of the screen has grayscale content, revert it
   if (inGrayscaleMode) {
-    inGrayscaleMode = false;
+    // Keep the flag set until grayscaleRevert() has driven the panel back to
+    // a coherent BW baseline.
     grayscaleRevert();
   }
 

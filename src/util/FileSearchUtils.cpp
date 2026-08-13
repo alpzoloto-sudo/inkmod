@@ -74,6 +74,9 @@ std::string buildFullPath(std::string basepath, const std::string& entry) {
 // Same "is this a book we'd show" rules FileBrowserActivity's own
 // loadFiles() applies while listing one directory.
 bool isSearchableBookFile(std::string_view filename) {
+  // /My Clippings.txt is an exported notes file, not a book result.
+  if (equalsIgnoreCase(filename, "My Clippings.txt")) return false;
+
   bool isFb2 = FsHelpers::checkFileExtension(filename, ".fb2");
   bool isZip = FsHelpers::checkFileExtension(filename, ".zip");
   return FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename) ||

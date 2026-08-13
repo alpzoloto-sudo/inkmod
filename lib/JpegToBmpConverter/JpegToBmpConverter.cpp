@@ -251,7 +251,7 @@ static uint32_t fpPerOutputPixel(const uint64_t srcSpan_fp, const int outPixels)
 }
 
 static OutputGeometry calculateOutputGeometry(const int srcWidth, const int srcHeight, const int targetWidth,
-                                              const int targetHeight, const bool crop) {
+                                              const int targetHeight, const bool crop, const bool allowUpscale = true) {
   OutputGeometry geometry{srcWidth, srcHeight, 65536, 65536, 0, 0, false};
   if (targetWidth <= 0 || targetHeight <= 0 || srcWidth <= 0 || srcHeight <= 0) {
     return geometry;
@@ -288,7 +288,8 @@ static OutputGeometry calculateOutputGeometry(const int srcWidth, const int srcH
   if (srcWidth != targetWidth || srcHeight != targetHeight) {
     const float scaleToFitWidth = static_cast<float>(targetWidth) / srcWidth;
     const float scaleToFitHeight = static_cast<float>(targetHeight) / srcHeight;
-    const float scale = (scaleToFitWidth < scaleToFitHeight) ? scaleToFitWidth : scaleToFitHeight;
+    float scale = (scaleToFitWidth < scaleToFitHeight) ? scaleToFitWidth : scaleToFitHeight;
+    if (!allowUpscale) scale = std::min(1.0f, scale);
 
     geometry.outWidth = static_cast<int>(srcWidth * scale);
     geometry.outHeight = static_cast<int>(srcHeight * scale);
@@ -562,9 +563,17 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(FsFile& jpegFile, Print& bm
   // scale to fill the requested box, then sample a centered source crop before dithering.
   const bool containInsteadOfCrop =
       crop && adaptiveContain && shouldContainAdaptive(effectiveSrcW, effectiveSrcH, targetWidth, targetHeight);
-  const bool cropOutput = crop && !containInsteadOfCrop;
+  // A genuinely small embedded cover should not be blown up to 480x800/528x792
+  // with nearest-sample-looking blocks. If either original source dimension is
+  // below the requested display dimension, keep it at native size (or only
+  // downscale the other dimension) and center it later on the sleep screen.
+  // Progressive JPEG decode uses an internal 1/8 source, but `sourceIsSmall`
+  // is intentionally based on the ORIGINAL JPEG dimensions.
+  const bool sourceIsSmall = srcWidth < targetWidth || srcHeight < targetHeight;
+  const bool allowUpscale = !sourceIsSmall;
+  const bool cropOutput = crop && !containInsteadOfCrop && allowUpscale;
   const OutputGeometry geometry =
-      calculateOutputGeometry(effectiveSrcW, effectiveSrcH, targetWidth, targetHeight, cropOutput);
+      calculateOutputGeometry(effectiveSrcW, effectiveSrcH, targetWidth, targetHeight, cropOutput, allowUpscale);
   const int outWidth = geometry.outWidth;
   const int outHeight = geometry.outHeight;
   const bool needsScaling = geometry.needsScaling;

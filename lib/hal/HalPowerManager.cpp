@@ -6,6 +6,7 @@
 #include <esp_timer.h>
 
 #include <cassert>
+#include <cstdlib>
 #include <ctime>
 
 #include "HalGPIO.h"
@@ -193,13 +194,35 @@ uint16_t HalPowerManager::getBatteryPercentage() const {
   }
   static const BatteryMonitor battery = BatteryMonitor(BAT_GPIO0);
 
-  // smooth the battery %.
-  if (_batteryCachedPercent == 0) {
-    _batteryCachedPercent = 10 * battery.readPercentage();
-  } else {
-    _batteryCachedPercent = (_batteryCachedPercent * 9 + battery.readPercentage() * 10) / 10;
+  // X4 has no fuel gauge: estimate SOC from the ADC, then smooth display jitter.
+  // Read voltage only once so percentage and the full-charge decision use the same sample.
+  const uint16_t millivolts = battery.readMillivolts();
+  const uint16_t rawPercent = BatteryMonitor::percentageFromMillivolts(millivolts);
+  LOG_DBG("PWR", "X4 battery: %umV raw=%u%% cached=%d.%d%% usb=%d", millivolts, rawPercent,
+          _batteryCachedPercent / 10, std::abs(_batteryCachedPercent % 10), gpio.isUsbConnectedCached() ? 1 : 0);
+
+  // X4 has no MCU-readable "charge complete" signal: the green charger LED is
+  // driven by the charging circuit itself, while firmware only sees USB presence
+  // plus the battery ADC. On some X4 units ADC calibration reads a physically-full
+  // cell as only ~95% on the generic LiPo curve. Treat the top end as full while
+  // USB is present; merely plugging in at a lower charge still does not force 100%.
+  //
+  // Keep both gates: raw SOC handles unit-to-unit ADC offset, while the voltage
+  // threshold catches curves that round slightly below 95%.
+  constexpr uint16_t X4_USB_FULL_PERCENT = 95;
+  constexpr uint16_t X4_USB_FULL_MV = 4080;
+  if (gpio.isUsbConnectedCached() && (rawPercent >= X4_USB_FULL_PERCENT || millivolts >= X4_USB_FULL_MV)) {
+    _batteryCachedPercent = 1000;
+    _batteryLastPollMs = millis();
+    return 100;
   }
-  return _batteryCachedPercent / 10;
+
+  if (_batteryCachedPercent == 0) {
+    _batteryCachedPercent = 10 * rawPercent;
+  } else {
+    _batteryCachedPercent = (_batteryCachedPercent * 9 + rawPercent * 10) / 10;
+  }
+  return static_cast<uint16_t>(_batteryCachedPercent / 10);
 }
 
 HalPowerManager::Lock::Lock() {

@@ -6,6 +6,7 @@
 #include <algorithm>
 
 #include "MappedInputManager.h"
+#include "InkMODHumor.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -74,6 +75,11 @@ void EpubReaderFootnotesActivity::render(RenderLock&&) {
 
   if (footnotes.empty()) {
     renderer.drawCenteredText(UI_10_FONT_ID, 90 + contentY, tr(STR_NO_FOOTNOTES));
+    const auto& metrics = UITheme::getInstance().getMetrics();
+    const int jokeTop = 128 + contentY;
+    const int jokeBottom = renderer.getScreenHeight() - metrics.buttonHintsHeight - 8;
+    InkMODHumor::drawBounded(renderer, InkMODHumor::Moment::NoFootnotes, contentX, jokeTop, contentWidth,
+                             std::max(0, jokeBottom - jokeTop), SMALL_FONT_ID, true);
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, true);
     renderer.displayBuffer();

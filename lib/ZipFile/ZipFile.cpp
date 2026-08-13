@@ -4,6 +4,7 @@
 #include <HalStorage.h>
 #include <InflateReader.h>
 #include <Logging.h>
+#include <ReaderWork.h>
 
 #include <algorithm>
 
@@ -442,7 +443,8 @@ uint8_t* ZipFile::readFileToMemory(const char* filename, size_t* size, const boo
   return data;
 }
 
-bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t chunkSize) {
+bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t chunkSize,
+                               const reader::ReaderCancellationToken* cancellationToken) {
   const ScopedOpenClose zip{*this};
   if (!zip) return false;
 
@@ -466,6 +468,11 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
 
     size_t remaining = inflatedDataSize;
     while (remaining > 0) {
+      if (cancellationToken && cancellationToken->isCancellationRequested()) {
+        LOG_INF("ZIP", "Stream extraction cancelled");
+        free(buffer);
+        return false;
+      }
       const size_t dataRead = file.read(buffer, remaining < chunkSize ? remaining : chunkSize);
       if (dataRead == 0) {
         LOG_ERR("ZIP", "Could not read more bytes");
@@ -519,6 +526,10 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
     size_t totalProduced = 0;
 
     while (true) {
+      if (cancellationToken && cancellationToken->isCancellationRequested()) {
+        LOG_INF("ZIP", "Stream inflation cancelled after %zu bytes", totalProduced);
+        break;
+      }
       size_t produced;
       const InflateStatus status = ctx.reader.readAtMost(outputBuffer, chunkSize, &produced);
 

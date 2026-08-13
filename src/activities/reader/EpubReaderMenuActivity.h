@@ -33,12 +33,14 @@ class EpubReaderMenuActivity final : public Activity {
     CONTROLS_OPTIONS,
     BOOKMARK_TOGGLE,
     VIEW_BOOKMARKS,
-    DELETE_BOOKMARKS
+    DELETE_BOOKMARKS,
+    CREATE_CLIPPING,
+    VIEW_CLIPPINGS
   };
 
   explicit EpubReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title,
                                   const int currentPage, const int totalPages, const int bookProgressPercent,
-                                  const uint8_t currentOrientation, const bool hasFootnotes, const bool hasBookmarks,
+                                  const uint8_t currentOrientation, const bool hasFootnotes, const bool hasBookmarks, const bool hasClippings,
                                   const bool isCurrentPageBookmarked, const bool isBookCompleted,
                                   const bool autoPageTurnActive = false, const uint16_t autoPageTurnIntervalSeconds = 0,
                                   const bool showReadingPaceReset = false);
@@ -56,7 +58,7 @@ class EpubReaderMenuActivity final : public Activity {
     StrId labelId;
   };
 
-  static std::vector<MenuItem> buildMenuItems(bool hasFootnotes, bool hasBookmarks, bool isCurrentPageBookmarked,
+  static std::vector<MenuItem> buildMenuItems(bool hasFootnotes, bool hasBookmarks, bool hasClippings, bool isCurrentPageBookmarked,
                                               bool isBookCompleted, bool showReadingPaceReset);
 
   // Fixed menu layout

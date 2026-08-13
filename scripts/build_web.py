@@ -29,6 +29,7 @@ PAGES = {
     "home":     ("HomePageHtml",     "inkMOD",                   "home",     ""),
     "files":    ("FilesPageHtml",    "Files - inkMOD",           "files",    '  <script src="/js/jszip.min.js"></script>'),
     "epubkit":  ("EpubKitPageHtml",  "EPUB Kit - inkMOD",        "epubkit",  '  <script src="/js/jszip.min.js"></script>'),
+    "wallpapers":("WallpapersPageHtml","Sleep Screens - inkMOD",    "wallpapers",""),
     "settings": ("SettingsPageHtml", "Settings - inkMOD Reader", "settings", ""),
     "fonts":    ("FontsPageHtml",    "Fonts - inkMOD",           "fonts",    '  <script src="/js/jszip.min.js"></script>'),
 }
@@ -98,7 +99,7 @@ for slug, (ident, title, active, head_extra) in PAGES.items():
     values = {
         "title": title, "v": v, "head_extra": head_extra,
         "styles": page_css, "body": page_html, "script": script,
-        "cls_home": "", "cls_files": "", "cls_epubkit": "", "cls_settings": "", "cls_fonts": "",
+        "cls_home": "", "cls_files": "", "cls_epubkit": "", "cls_wallpapers": "", "cls_settings": "", "cls_fonts": "",
     }
     values[f"cls_{active}"] = ' class="active"'
     html = minify_html(render(base, values))

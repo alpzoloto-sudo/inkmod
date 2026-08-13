@@ -8,6 +8,7 @@
 #include <WiFi.h>
 
 #include "MappedInputManager.h"
+#include "InkMODHumor.h"
 #include "SdCardFontSystem.h"
 #include "SilentRestart.h"
 #include "activities/network/WifiSelectionActivity.h"
@@ -204,7 +205,9 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   if (entryCount == 0) {
-    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, tr(STR_NO_ENTRIES));
+    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 - 24, tr(STR_NO_ENTRIES));
+    InkMODHumor::drawBounded(renderer, InkMODHumor::Moment::EmptyCatalog, 0, pageHeight / 2 + 12, pageWidth,
+                             std::max(0, pageHeight / 2 - 88), SMALL_FONT_ID, true);
   } else {
     const auto pageStartIndex = selectorIndex / PAGE_ITEMS * PAGE_ITEMS;
     renderer.fillRect(0, 60 + (selectorIndex % PAGE_ITEMS) * 30 - 2, pageWidth - 1, 30);

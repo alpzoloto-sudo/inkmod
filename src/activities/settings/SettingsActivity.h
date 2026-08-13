@@ -41,6 +41,8 @@ enum class SettingAction {
   DownloadFonts,
   ClockSync,
   CalculateStorageUsage,
+  BookMenuSettings,
+  SupportInkMOD,
 };
 
 struct SettingInfo {

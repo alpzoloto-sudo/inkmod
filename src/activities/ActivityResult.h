@@ -79,6 +79,20 @@ struct FilePathResult {
   std::string path;
 };
 
+
+struct ClippingSelectionResult {
+  uint16_t startPageNumber = 0;
+  uint16_t endPageNumber = 0;
+  uint16_t startWordIndex = 0;
+  uint16_t endWordIndex = 0;
+  std::string text;
+};
+
+struct ClippingJumpResult {
+  uint16_t spineIndex = 0;
+  uint16_t pageNumber = 0;
+};
+
 struct ReadingStatsResult {
   bool changed = false;
 };
@@ -86,7 +100,7 @@ struct ReadingStatsResult {
 using ResultVariant =
     std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult, IntervalResult,
                  OptionSelectionResult, PageResult, ProgressChangeResult, SyncResult, NetworkModeResult, FootnoteResult,
-                 BookmarkResult, FileBrowserActionResult, FilePathResult, ReadingStatsResult>;
+                 BookmarkResult, FileBrowserActionResult, FilePathResult, ClippingSelectionResult, ClippingJumpResult, ReadingStatsResult>;
 
 struct ActivityResult {
   bool isCancelled = false;

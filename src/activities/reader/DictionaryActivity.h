@@ -78,6 +78,12 @@ class DictionaryActivity final : public Activity {
   uint8_t articlePageCount_ = 1;
   uint8_t currentArticlePage_ = 0;
 
+  // A dictionary quick action can open this Activity while the triggering
+  // physical button is still held. Do not interpret that button's eventual
+  // release as a dictionary command (Back/Confirm/Left/Right/etc.).
+  bool inputArmed_ = false;
+  uint8_t quietInputFrames_ = 0;
+
   bool selectFirstWord();
   bool isSelectableWord(int elementIndex, size_t wordIndex) const;
   bool getSelectionFragment(const WordLocation& location, SelectionFragment& fragment) const;

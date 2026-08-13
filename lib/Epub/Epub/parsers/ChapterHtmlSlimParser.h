@@ -18,6 +18,9 @@
 class Page;
 class GfxRenderer;
 class Epub;
+namespace reader {
+class ReaderCancellationToken;
+}
 
 #define MAX_WORD_SIZE 200
 
@@ -66,6 +69,8 @@ class ChapterHtmlSlimParser {
   bool lowMemoryImageFallback = false;
   bool lowMemoryAbort = false;
   bool attemptedTextLayoutFontCacheRelease = false;
+  const reader::ReaderCancellationToken* cancellationToken = nullptr;
+  bool cancelled = false;
 
   // One active float is enough for the printed-book XHTML used in EPUBs.
   // It is scalar state only; page records still own the image and text lines.
@@ -198,7 +203,8 @@ class ChapterHtmlSlimParser {
                                  const bool embeddedStyle, const std::string& contentBase,
                                  const std::string& imageBasePath, const uint8_t imageRendering = 0,
                                  std::vector<std::string> tocAnchors = {},
-                                 const std::function<void()>& popupFn = nullptr, const CssParser* cssParser = nullptr)
+                                 const std::function<void()>& popupFn = nullptr, const CssParser* cssParser = nullptr,
+                                 const reader::ReaderCancellationToken* cancellationToken = nullptr)
 
       : epub(epub),
         filepath(filepath),
@@ -220,7 +226,8 @@ class ChapterHtmlSlimParser {
         imageRendering(imageRendering),
         contentBase(contentBase),
         imageBasePath(imageBasePath),
-        tocAnchors(std::move(tocAnchors)) {}
+        tocAnchors(std::move(tocAnchors)),
+        cancellationToken(cancellationToken) {}
 
   ~ChapterHtmlSlimParser() = default;
   bool parseAndBuildPages();
@@ -228,4 +235,5 @@ class ChapterHtmlSlimParser {
   const std::vector<std::pair<std::string, uint16_t>>& getAnchors() const { return anchorData; }
   bool wasLowMemoryFallbackTriggered() const { return lowMemoryImageFallback; }
   bool wasLowMemoryAbortTriggered() const { return lowMemoryAbort; }
+  bool wasCancellationTriggered() const { return cancelled; }
 };

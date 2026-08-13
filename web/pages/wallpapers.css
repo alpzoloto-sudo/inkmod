@@ -1,0 +1,79 @@
+
+.wallpaper-page{max-width:1180px;margin:0 auto;padding:0 14px 26px}.page-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin:6px 0 18px}.page-heading h2{margin:0 0 6px}.page-heading p{margin:0;opacity:.76;max-width:760px}.browser-badge{white-space:nowrap;border:1px solid var(--border-color,#d8d8d8);border-radius:999px;padding:6px 10px;font-size:.82rem;opacity:.8}.drop-zone{border:2px dashed var(--border-color,#ccc);border-radius:14px;min-height:170px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;cursor:pointer;padding:24px;text-align:center;transition:.15s background,.15s border-color}.drop-zone:hover,.drop-zone.dragover{background:rgba(127,127,127,.08);border-color:currentColor}.drop-icon{font-size:2.2rem}.drop-zone span{font-size:.88rem;opacity:.65}.editor{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(310px,.65fr);gap:18px;margin-top:18px;align-items:start}.hidden{display:none!important}.preview-column{min-width:0;position:sticky;top:8px}.preview-toolbar{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:.9rem;margin-bottom:8px}.canvas-shell{border:1px solid var(--border-color,#bbb);border-radius:12px;padding:10px;display:flex;align-items:center;justify-content:center;min-height:360px;overflow:auto}.checkerboard{background-color:#eee;background-image:linear-gradient(45deg,#d0d0d0 25%,transparent 25%),linear-gradient(-45deg,#d0d0d0 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#d0d0d0 75%),linear-gradient(-45deg,transparent 75%,#d0d0d0 75%);background-size:24px 24px;background-position:0 0,0 12px,12px -12px,-12px 0}.canvas-shell canvas{display:block;max-width:100%;max-height:72vh;box-shadow:0 2px 14px rgba(0,0,0,.12);image-rendering:auto}.preview-note{margin:8px 4px 0;font-size:.82rem;opacity:.7}.controls-column{display:flex;flex-direction:column;gap:12px}.control-card{border:1px solid var(--border-color,#ddd);border-radius:12px;padding:14px;background:var(--card-background,#fff)}.control-card h3{font-size:1rem;margin:0 0 12px}.segmented{display:flex;gap:6px;margin-bottom:10px}.segmented button,.align-grid button,.secondary-btn,.primary-btn{font:inherit;border:1px solid var(--border-color,#bbb);border-radius:8px;background:transparent;color:inherit;cursor:pointer;padding:8px 10px}.segmented button{flex:1}.segmented button.active,.align-grid button.active{background:var(--accent-color,#222);color:var(--accent-contrast,#fff);border-color:var(--accent-color,#222)}.size-line{display:grid;grid-template-columns:1fr auto 1fr;align-items:end;gap:9px}.size-line label,.two-col label,.export-card label{display:flex;flex-direction:column;gap:5px;font-size:.85rem}.size-line input,.export-card input{width:100%;box-sizing:border-box;padding:8px;border:1px solid var(--border-color,#bbb);border-radius:7px;background:transparent;color:inherit}.range-row{display:flex;flex-direction:column;gap:7px;margin-top:11px;font-size:.88rem}.range-row>span{display:flex;justify-content:space-between}.range-row input[type=range]{width:100%}.align-grid{display:grid;grid-template-columns:repeat(3,42px);gap:5px;justify-content:center;margin-top:12px}.align-grid button{padding:7px 0}.switch-line{display:flex;justify-content:space-between;align-items:center;gap:14px}.switch-line span{display:flex;flex-direction:column;gap:3px}.switch-line small{font-weight:normal;opacity:.65}.switch-line.compact span{display:block}.switch-line input[type=checkbox]{width:20px;height:20px;flex:none}.two-col{display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;margin-top:12px}.two-col input[type=color]{width:100%;height:38px;border:1px solid var(--border-color,#bbb);border-radius:7px;background:transparent;padding:3px}.pick-btn{height:38px}.pick-hint{font-size:.82rem;margin:8px 0 0;opacity:.8}.export-card{display:flex;flex-direction:column;gap:10px}.primary-btn{background:var(--accent-color,#222);color:var(--accent-contrast,#fff);border-color:var(--accent-color,#222);font-weight:600}.primary-btn:disabled{opacity:.45;cursor:not-allowed}@media(max-width:860px){.editor{grid-template-columns:1fr}.preview-column{position:static}.canvas-shell{min-height:280px}.page-heading{flex-direction:column}.browser-badge{align-self:flex-start}}@media(max-width:520px){.two-col{grid-template-columns:1fr}.canvas-shell{padding:6px}.control-card{padding:12px}}
+
+
+/* InkMOD wallpaper generator contrast fix:
+   the portal body can be dark, while these cards are intentionally light. */
+.wallpaper-page .control-card{
+  background:#ffffff;
+  color:#20242a;
+  border-color:#c8cdd2;
+}
+.wallpaper-page .control-card h3,
+.wallpaper-page .control-card label,
+.wallpaper-page .control-card span,
+.wallpaper-page .control-card small,
+.wallpaper-page .control-card output{
+  color:#20242a;
+}
+.wallpaper-page .control-card small{color:#5f6872;}
+.wallpaper-page .control-card input[type=number],
+.wallpaper-page .control-card input[type=text]{
+  background:#ffffff;
+  color:#20242a;
+  border-color:#9ca5ae;
+}
+.wallpaper-page .control-card input::placeholder{color:#7b858f;}
+.wallpaper-page .segmented button,
+.wallpaper-page .align-grid button,
+.wallpaper-page .control-card .secondary-btn{
+  background:#ffffff;
+  color:#20242a;
+  border-color:#7f8994;
+  opacity:1;
+}
+.wallpaper-page .segmented button.active,
+.wallpaper-page .align-grid button.active,
+.wallpaper-page .primary-btn{
+  background:#6fa188;
+  color:#ffffff;
+  border-color:#6fa188;
+}
+.wallpaper-page button:disabled{
+  opacity:.48;
+  cursor:not-allowed;
+}
+.wallpaper-page input[type=range]{accent-color:#6fa188;}
+.wallpaper-page .export-secondary{
+  display:flex;
+  gap:8px;
+}
+.wallpaper-page .export-secondary .secondary-btn{
+  width:100%;
+}
+.wallpaper-page .apply-btn{
+  min-height:46px;
+  font-size:1rem;
+}
+.wallpaper-status{
+  border-radius:8px;
+  padding:9px 10px;
+  font-size:.88rem;
+  line-height:1.35;
+  background:#eef3f0;
+  color:#20242a;
+  border:1px solid #bdcec5;
+}
+.wallpaper-status.error{
+  background:#fff0f0;
+  border-color:#d9a1a1;
+  color:#7d2525;
+}
+.wallpaper-status.success{
+  background:#edf7f1;
+  border-color:#9fc4ae;
+  color:#235d3d;
+}
+@media(max-width:520px){
+  .wallpaper-page .control-card{color:#20242a;}
+}

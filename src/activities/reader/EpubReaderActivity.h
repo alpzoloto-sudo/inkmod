@@ -4,12 +4,15 @@
 #include <Epub/Section.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <ReaderWork.h>
 
+#include <atomic>
 #include <optional>
 #include <string>
 
 #include "BookReadingStats.h"
 #include "BookmarkStore.h"
+#include "ClippingStore.h"
 #include "EpubReaderMenuActivity.h"
 #include "GlobalReadingStats.h"
 #include "activities/Activity.h"
@@ -37,6 +40,12 @@ class EpubReaderActivity final : public Activity {
   mutable int logicalStatusCacheLocalPageCount = -1;
   mutable int logicalStatusPagesBefore = 0;
   mutable int logicalStatusKnownPageCount = 0;
+  // Exact lightweight carry for a sequential transition between internal
+  // fragments of one logical chapter. Cache-header recovery remains useful
+  // after reopening a book, but must not be the only source of the offset:
+  // a previous fragment may have been laid out in another memory mode.
+  int logicalPageCarryNextSpine = -1;
+  int logicalPageCarryPagesBefore = 0;
   unsigned long lastPageTurnTime = 0UL;
   unsigned long pageTurnDuration = 0UL;
   unsigned long pageShownAtMs = 0UL;
@@ -47,6 +56,7 @@ class EpubReaderActivity final : public Activity {
   uint16_t lastAutoPageTurnIntervalSeconds = 0;
   BookReadingStats stats;
   GlobalReadingStats globalStats;
+  ClippingStore clippings;
   ReadingStatsDateTime sessionStartLocalDateTime;
   bool hasSessionStartLocalDateTime = false;
   // Signals that the next render should reposition within the newly loaded section
@@ -65,6 +75,12 @@ class EpubReaderActivity final : public Activity {
   bool sideButtonLongPressHandled = false;
   bool frontButtonLongPressHandled = false;
   int pageLoadRetryCount = 0;
+  // One synchronous reader operation at a time. Navigation only invalidates
+  // its generation; no background parser or second SD reader is created.
+  reader::ReaderWorkController readerWork;
+  std::atomic<int32_t> coalescedPageDelta{0};
+  std::atomic<int32_t> coalescedSpineDelta{0};
+  std::atomic<uint32_t> navigationSettleUntilMs{0};
   enum class BookmarkFeedbackType : uint8_t {
     Added,
     Removed,
@@ -107,6 +123,8 @@ class EpubReaderActivity final : public Activity {
   void renderContents(std::unique_ptr<Page> page, int fontId, int orientedMarginTop, int orientedMarginRight,
                       int orientedMarginBottom, int orientedMarginLeft);
   void renderStatusBar() const;
+  void rememberLogicalForwardCarry();
+  void clearLogicalPageCarry();
   bool saveProgress(int spineIndex, int currentPage, int pageCount);
   void pauseReadingPaceTimer(const char* reason = "unknown");
   void resumeReadingPaceTimer(const char* reason = "unknown");
@@ -140,6 +158,8 @@ class EpubReaderActivity final : public Activity {
   void applyOrientation(uint8_t orientation);
   void executeLongPressMenuAction();
   void pageTurn(bool isForwardTurn, const char* source = "unknown");
+  bool coalesceNavigationWhileLoading();
+  void applyCoalescedNavigationIfReady();
   float getCurrentBookProgressPercent() const;
   void initializeCompletionPromptTrigger();
   bool isAtOrPastCompletionTrigger() const;

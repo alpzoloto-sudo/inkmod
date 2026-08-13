@@ -1,0 +1,141 @@
+
+<div class="wallpaper-page">
+  <div class="page-heading">
+    <div>
+      <h2 data-i18n="wallpaper.title">Sleep Screen Generator</h2>
+      <p data-i18n="wallpaper.subtitle">Prepare a transparent PNG for the InkMOD sleep overlay. Processing happens entirely in this browser.</p>
+    </div>
+    <span class="browser-badge" data-i18n="wallpaper.browser_badge">Runs in browser</span>
+  </div>
+
+  <div id="wallpaperDropZone" class="drop-zone" tabindex="0">
+    <div class="drop-icon">🖼️</div>
+    <strong data-i18n="wallpaper.drop_title">Drop an image here or click to choose</strong>
+    <span data-i18n="wallpaper.drop_formats">PNG, JPG, WebP, GIF, BMP, AVIF</span>
+    <input id="wallpaperFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/avif,image/*" hidden />
+  </div>
+
+  <div id="wallpaperEditor" class="editor hidden">
+    <div class="preview-column">
+      <div class="preview-toolbar">
+        <span id="wallpaperSourceInfo">—</span>
+        <button id="wallpaperResetView" class="secondary-btn" type="button" data-i18n="wallpaper.reset">Reset</button>
+      </div>
+      <div class="canvas-shell checkerboard">
+        <canvas id="wallpaperCanvas"></canvas>
+      </div>
+      <p class="preview-note" data-i18n="wallpaper.checker_note">Checkerboard means transparency. White details inside the subject stay opaque.</p>
+    </div>
+
+    <div class="controls-column">
+      <section class="control-card">
+        <h3 data-i18n="wallpaper.device_title">Device & size</h3>
+        <div class="segmented" id="deviceButtons">
+          <button type="button" data-device="x4" class="active">X4</button>
+          <button type="button" data-device="x3">X3</button>
+        </div>
+        <div class="segmented" id="orientationButtons">
+          <button type="button" data-orientation="portrait" class="active" data-i18n="wallpaper.portrait">Portrait</button>
+          <button type="button" data-orientation="landscape" data-i18n="wallpaper.landscape">Landscape</button>
+        </div>
+        <div class="size-line">
+          <label><span data-i18n="wallpaper.width">Width</span><input id="wallpaperWidth" type="number" min="64" max="1600" value="480" /></label>
+          <span>×</span>
+          <label><span data-i18n="wallpaper.height">Height</span><input id="wallpaperHeight" type="number" min="64" max="1600" value="800" /></label>
+        </div>
+      </section>
+
+      <section class="control-card">
+        <h3 data-i18n="wallpaper.layout_title">Layout</h3>
+        <div class="segmented" id="fitButtons">
+          <button type="button" data-fit="contain" class="active" data-i18n="wallpaper.fit">Fit</button>
+          <button type="button" data-fit="cover" data-i18n="wallpaper.fill">Fill</button>
+          <button type="button" data-fit="stretch" data-i18n="wallpaper.stretch">Stretch</button>
+        </div>
+
+        <label class="range-row">
+          <span><span data-i18n="wallpaper.zoom">Zoom</span> <output id="zoomValue">100%</output></span>
+          <input id="wallpaperZoom" type="range" min="25" max="250" value="100" />
+        </label>
+
+        <div class="align-grid" id="alignGrid" aria-label="Alignment">
+          <button type="button" data-align="0,0">↖</button>
+          <button type="button" data-align="0.5,0">↑</button>
+          <button type="button" data-align="1,0">↗</button>
+          <button type="button" data-align="0,0.5">←</button>
+          <button type="button" data-align="0.5,0.5" class="active">•</button>
+          <button type="button" data-align="1,0.5">→</button>
+          <button type="button" data-align="0,1">↙</button>
+          <button type="button" data-align="0.5,1">↓</button>
+          <button type="button" data-align="1,1">↘</button>
+        </div>
+      </section>
+
+      <section class="control-card">
+        <h3 data-i18n="wallpaper.background_title">Background removal</h3>
+
+        <label class="switch-line">
+          <span>
+            <strong data-i18n="wallpaper.remove_background">Remove background</strong>
+            <small data-i18n="wallpaper.edge_only_note">Only background connected to image edges is removed.</small>
+          </span>
+          <input id="removeBackground" type="checkbox" checked />
+        </label>
+
+        <div class="two-col">
+          <label>
+            <span data-i18n="wallpaper.bg_color">Background color</span>
+            <input id="backgroundColor" type="color" value="#ffffff" />
+          </label>
+          <button id="pickBackground" class="secondary-btn pick-btn" type="button" data-i18n="wallpaper.pick_bg">Pick from image</button>
+        </div>
+
+        <label class="range-row">
+          <span><span data-i18n="wallpaper.tolerance">Tolerance</span> <output id="toleranceValue">38</output></span>
+          <input id="backgroundTolerance" type="range" min="0" max="120" value="38" />
+        </label>
+
+        <label class="range-row">
+          <span><span data-i18n="wallpaper.softness">Edge softness</span> <output id="softnessValue">12</output></span>
+          <input id="backgroundSoftness" type="range" min="0" max="40" value="12" />
+        </label>
+
+        <p id="pickHint" class="pick-hint hidden" data-i18n="wallpaper.pick_hint">Tap the preview on the background color you want to remove.</p>
+      </section>
+
+      <section class="control-card">
+        <h3 data-i18n="wallpaper.effects_title">E-ink effects</h3>
+        <label class="switch-line compact">
+          <span data-i18n="wallpaper.grayscale">Grayscale</span>
+          <input id="wallpaperGrayscale" type="checkbox" checked />
+        </label>
+        <label class="range-row">
+          <span><span data-i18n="wallpaper.contrast">Contrast</span> <output id="contrastValue">100%</output></span>
+          <input id="wallpaperContrast" type="range" min="50" max="220" value="115" />
+        </label>
+        <label class="range-row">
+          <span><span data-i18n="wallpaper.brightness">Brightness</span> <output id="brightnessValue">100%</output></span>
+          <input id="wallpaperBrightness" type="range" min="50" max="160" value="100" />
+        </label>
+      </section>
+
+      <section class="control-card export-card">
+        <label>
+          <span data-i18n="wallpaper.filename">PNG file name</span>
+          <input id="wallpaperFilename" type="text" value="sleep-overlay.png" maxlength="96" />
+        </label>
+
+        <button id="applyWallpaper" class="primary-btn apply-btn" type="button" disabled
+                data-i18n="wallpaper.apply">Установить заставкой</button>
+
+        <div class="export-secondary">
+          <button id="downloadWallpaper" class="secondary-btn" type="button" disabled
+                  data-i18n="wallpaper.download">Скачать PNG</button>
+        </div>
+
+        <div id="wallpaperStatus" class="wallpaper-status hidden" role="status"></div>
+        <p data-i18n="wallpaper.apply_note">Готовый PNG будет загружен в /sleep и сразу назначен текущей overlay-заставкой.</p>
+      </section>
+    </div>
+  </div>
+</div>

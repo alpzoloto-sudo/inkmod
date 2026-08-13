@@ -549,6 +549,119 @@ void MinimalTheme::drawTabBar(const GfxRenderer& renderer, Rect rect, const std:
   }
 }
 
+
+namespace {
+
+// Smart two-line filename wrapper used by File Browser "2 lines" mode.
+//
+// GfxRenderer::wrappedText() intentionally refuses to split one very long
+// word. That is nice for prose, but file names often contain long tokens,
+// underscores, dashes, hashes, etc. In the two-line file-browser mode we
+// really want the extra row height to be useful, so this helper can split at
+// a UTF-8-safe byte boundary when normal word wrapping cannot.
+//
+// Priority for line 1:
+//   1) normal word wrap;
+//   2) nearest separator before the width limit (space/_/-/./()/[]);
+//   3) hard UTF-8-safe split at the last glyph that fits.
+//
+// Line 2 is always truncated with an ellipsis if the complete remainder still
+// does not fit.
+std::vector<std::string> wrapFileNameTwoLines(const GfxRenderer& renderer, const std::string& title,
+                                              const int maxWidth) {
+  std::vector<std::string> result;
+  if (title.empty() || maxWidth <= 0) return result;
+
+  if (renderer.getTextWidth(UI_10_FONT_ID, title.c_str()) <= maxWidth) {
+    result.push_back(title);
+    return result;
+  }
+
+  // First let the ordinary word wrapper handle human-readable file names.
+  const auto normal = renderer.wrappedText(UI_10_FONT_ID, title.c_str(), maxWidth, 2);
+  if (normal.size() >= 2) {
+    return normal;
+  }
+
+  // One over-wide token: find the longest UTF-8-safe prefix that fits.
+  size_t bytePos = 0;
+  size_t lastFit = 0;
+  size_t preferredBreak = std::string::npos;
+
+  while (bytePos < title.size()) {
+    const size_t cpStart = bytePos;
+    const unsigned char lead = static_cast<unsigned char>(title[bytePos]);
+
+    size_t cpLen = 1;
+    if ((lead & 0xE0) == 0xC0) cpLen = 2;
+    else if ((lead & 0xF0) == 0xE0) cpLen = 3;
+    else if ((lead & 0xF8) == 0xF0) cpLen = 4;
+    cpLen = std::min(cpLen, title.size() - bytePos);
+    bytePos += cpLen;
+
+    const std::string prefix = title.substr(0, bytePos);
+    if (renderer.getTextWidth(UI_10_FONT_ID, prefix.c_str()) > maxWidth) {
+      break;
+    }
+
+    lastFit = bytePos;
+
+    // Prefer a visually natural filename separator if one exists reasonably
+    // close to the edge of line 1.
+    if (cpLen == 1) {
+      const char ch = title[cpStart];
+      if (ch == ' ' || ch == '_' || ch == '-' || ch == '.' ||
+          ch == ')' || ch == ']' || ch == '(' || ch == '[') {
+        preferredBreak = bytePos;
+      }
+    }
+  }
+
+  if (lastFit == 0) {
+    // Extremely narrow column: fall back to the standard safe truncation.
+    result.push_back(renderer.truncatedText(UI_10_FONT_ID, title.c_str(), maxWidth));
+    return result;
+  }
+
+  size_t split = lastFit;
+  if (preferredBreak != std::string::npos && preferredBreak >= lastFit / 2) {
+    split = preferredBreak;
+  }
+
+  std::string first = title.substr(0, split);
+  std::string second = title.substr(split);
+
+  auto trimLeft = [](std::string& value) {
+    while (!value.empty() &&
+           (value.front() == ' ' || value.front() == '_' || value.front() == '-')) {
+      value.erase(value.begin());
+    }
+  };
+  auto trimRight = [](std::string& value) {
+    while (!value.empty() &&
+           (value.back() == ' ' || value.back() == '_' || value.back() == '-')) {
+      value.pop_back();
+    }
+  };
+
+  trimRight(first);
+  trimLeft(second);
+
+  if (first.empty()) {
+    first = renderer.truncatedText(UI_10_FONT_ID, title.c_str(), maxWidth);
+    result.push_back(first);
+    return result;
+  }
+
+  result.push_back(first);
+  if (!second.empty()) {
+    result.push_back(renderer.truncatedText(UI_10_FONT_ID, second.c_str(), maxWidth));
+  }
+  return result;
+}
+
+}  // namespace
+
 int MinimalTheme::compactFileBrowserRowHeightFor(const GfxRenderer& renderer) {
   const int textHeight = renderer.getLineHeight(UI_10_FONT_ID) * 2 + kFileBrowserRowVerticalPadding;
   return std::max(kFileBrowserIconSize + kFileBrowserRowVerticalPadding, textHeight);
@@ -670,8 +783,16 @@ void MinimalTheme::drawCompactFileBrowserList(const GfxRenderer& renderer, Rect 
       renderer.drawIcon(iconBitmap, iconX, iconY, kFileBrowserIconSize, kFileBrowserIconSize);
     }
 
-    const int maxTitleLines = folderRow ? 1 : 2;
-    auto lines = renderer.wrappedText(UI_10_FONT_ID, rowTitle(i).c_str(), textWidth, maxTitleLines);
+    const std::string title = rowTitle(i);
+    std::vector<std::string> lines;
+    if (folderRow) {
+      lines.push_back(renderer.truncatedText(UI_10_FONT_ID, title.c_str(), textWidth));
+    } else {
+      // In File Browser's 2-line mode, actually USE the second line.
+      // This also handles long filenames without spaces instead of merely
+      // making the row taller and showing the same single-line ellipsis.
+      lines = wrapFileNameTwoLines(renderer, title, textWidth);
+    }
     const int textBlockHeight = static_cast<int>(lines.size()) * lineHeight;
     int textY = centeredRowY(itemY, rowHeight, textBlockHeight);
     for (const auto& line : lines) {

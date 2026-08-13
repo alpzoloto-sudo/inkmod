@@ -11,6 +11,7 @@
 #include <algorithm>
 
 #include "InkMODSettings.h"
+#include "InkMODHumor.h"
 #include "InkMODState.h"
 #include "GlobalActions.h"
 #include "MappedInputManager.h"
@@ -505,6 +506,12 @@ void TxtReaderActivity::render(RenderLock&&) {
     renderer.clearScreen(ReaderUtils::readerBackgroundColor());
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_EMPTY_FILE), ReaderUtils::readerForegroundBlack(),
                               EpdFontFamily::BOLD);
+    const auto& metrics = UITheme::getInstance().getMetrics();
+    const int jokeTop = 345;
+    const int jokeBottom = renderer.getScreenHeight() - metrics.buttonHintsHeight - 10;
+    InkMODHumor::drawBounded(renderer, InkMODHumor::Moment::EmptyTextFile, 0, jokeTop,
+                             renderer.getScreenWidth(), std::max(0, jokeBottom - jokeTop), SMALL_FONT_ID,
+                             ReaderUtils::readerForegroundBlack());
     renderer.displayBuffer();
     return;
   }

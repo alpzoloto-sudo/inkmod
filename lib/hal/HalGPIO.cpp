@@ -212,11 +212,12 @@ void HalGPIO::update() {
 
   // Reading GPIO20 is cheap on X4, but X3 detects charging through the
   // BQ27220 over I2C. Do not issue that transaction on every pass through
-  // the main loop; twice per second is still fast enough for the charging
-  // icon and unplug persistence.
+  // the main loop. One poll per second is enough for charging indication and
+  // unplug persistence, and avoids repeatedly waking the I2C block while the
+  // reader is otherwise idle.
   usbStateChanged = false;
   const unsigned long now = millis();
-  constexpr unsigned long X3_USB_POLL_INTERVAL_MS = 500;
+  constexpr unsigned long X3_USB_POLL_INTERVAL_MS = 1000;
   if (deviceIsX3() && lastUsbPollMs != 0 && now - lastUsbPollMs < X3_USB_POLL_INTERVAL_MS) {
     return;
   }

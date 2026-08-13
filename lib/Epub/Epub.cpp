@@ -6,6 +6,7 @@
 #include <JpegToBmpConverter.h>
 #include <Logging.h>
 #include <PngToBmpConverter.h>
+#include <ReaderWork.h>
 #include <ZipFile.h>
 
 #include <algorithm>
@@ -13,6 +14,8 @@
 #include <cstdlib>
 #include <functional>
 #include <limits>
+#include <memory>
+#include <new>
 #include <utility>
 
 #include "Epub/parsers/ContainerParser.h"
@@ -775,7 +778,7 @@ const std::string& Epub::getLanguage() const {
 }
 
 std::string Epub::getCoverBmpPath(bool cropped) const {
-  const auto coverFileName = std::string("cover") + (cropped ? "_crop" : "");
+  const auto coverFileName = std::string("cover_q2") + (cropped ? "_crop" : "");
   return cachePath + "/" + coverFileName + ".bmp";
 }
 
@@ -1076,7 +1079,8 @@ uint8_t* Epub::readItemContentsToBytes(const std::string& itemHref, size_t* size
   return content;
 }
 
-bool Epub::readItemContentsToStream(const std::string& itemHref, Print& out, const size_t chunkSize) const {
+bool Epub::readItemContentsToStream(const std::string& itemHref, Print& out, const size_t chunkSize,
+                                    const reader::ReaderCancellationToken* cancellationToken) const {
   if (itemHref.empty()) {
     LOG_DBG("EBP", "Failed to read item, empty href");
     return false;
@@ -1097,7 +1101,7 @@ bool Epub::readItemContentsToStream(const std::string& itemHref, Print& out, con
       chapterIndex = std::atoi(itemHref.c_str() + prefixPos + 8);
     }
     if (chapterIndex >= 0) {
-      return Fb2::renderChapterOnDemand(cachePath, chapterIndex, out);
+      return Fb2::renderChapterOnDemand(cachePath, chapterIndex, out, cancellationToken);
     }
     // Not a chapter item. container.xml/content.opf/toc.ncx/style.css exist
     // already (written eagerly by Fb2::load()); an image under OEBPS/images/
@@ -1111,18 +1115,30 @@ bool Epub::readItemContentsToStream(const std::string& itemHref, Print& out, con
     // normal read below is always correct - decodeImageOnDemand() either
     // materialized the file just now, or the path was never one of ours.
     if (!Storage.exists(path.c_str())) {
-      Fb2::decodeImageOnDemand(path);
+      Fb2::decodeImageOnDemand(path, cancellationToken);
     }
+    if (cancellationToken && cancellationToken->isCancellationRequested()) return false;
   }
 
   if (unpackedPackage) {
     HalFile file;
     if (!Storage.openFileForRead("EBP", path, file) || file.isDirectory()) return false;
-    std::vector<uint8_t> buffer(std::max<size_t>(chunkSize, 1));
+    const size_t bufferSize = std::max<size_t>(chunkSize, 1);
+    auto buffer = std::unique_ptr<uint8_t[]>(new (std::nothrow) uint8_t[bufferSize]);
+    if (!buffer) {
+      LOG_ERR("EBP", "Failed to allocate %zu-byte stream buffer", bufferSize);
+      file.close();
+      return false;
+    }
     bool success = true;
     while (file.available() > 0) {
-      const int read = file.read(buffer.data(), buffer.size());
-      if (read <= 0 || out.write(buffer.data(), static_cast<size_t>(read)) != static_cast<size_t>(read)) {
+      if (cancellationToken && cancellationToken->isCancellationRequested()) {
+        LOG_INF("EBP", "Item stream cancelled: %s", itemHref.c_str());
+        success = false;
+        break;
+      }
+      const int read = file.read(buffer.get(), bufferSize);
+      if (read <= 0 || out.write(buffer.get(), static_cast<size_t>(read)) != static_cast<size_t>(read)) {
         success = false;
         break;
       }
@@ -1130,7 +1146,7 @@ bool Epub::readItemContentsToStream(const std::string& itemHref, Print& out, con
     file.close();
     return success;
   }
-  return ZipFile(filepath).readFileToStream(path.c_str(), out, chunkSize);
+  return ZipFile(filepath).readFileToStream(path.c_str(), out, chunkSize, cancellationToken);
 }
 
 bool Epub::getItemSize(const std::string& itemHref, size_t* size) const {

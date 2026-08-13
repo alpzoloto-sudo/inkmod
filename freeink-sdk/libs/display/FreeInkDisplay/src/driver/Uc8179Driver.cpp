@@ -161,7 +161,15 @@ bool Uc8179Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* p
   // KW (black->white) NEVER runs and last page's text is never erased = heavy
   // ghosting. Feeding the previous frame lets KW clear it. (0x10 is synced to the
   // just-displayed frame in displayFinish; a full refresh reseeds it to white.)
-  const bool fast = (mode != RefreshMode::Full) && !_needFullClear && _oldPlaneValid;
+  // FIX (ghosting on periodic "clean" refresh): Half was previously grouped with
+  // Fast here (`mode != Full`), so the reader's periodic ghost-clearing pass
+  // (ReaderUtils::displayWithRefreshCycle, which alternates Fast/Half and never
+  // requests Full) silently ran the same DIFFERENTIAL partial waveform as every
+  // other page. The absolute GC-from-white waveform below — the only thing that
+  // actually clears accumulated ghosts on this controller — never fired. Only
+  // Fast should take the differential path; Half now gets the same full flash as
+  // Full, matching the SSD1677 sibling's already-correct Half handling.
+  const bool fast = (mode == RefreshMode::Fast) && !_needFullClear && _oldPlaneValid;
 
   // NEW plane (0x13) = new frame.
   streamPlane(bus, CMD_DTM2, fb);

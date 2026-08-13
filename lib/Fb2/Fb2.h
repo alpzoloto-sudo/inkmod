@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <string>
@@ -13,6 +14,10 @@
 #include "native/Fb2Parser.h"
 #include "native/Fb2Types.h"
 #include "native/IByteReader.h"
+
+namespace reader {
+class ReaderCancellationToken;
+}
 
 // FB2 -> EPUB-shaped package converter, built for lazy per-chapter rendering
 // instead of eagerly writing out every chapter's XHTML up front.
@@ -65,7 +70,8 @@ class Fb2 {
   // `packageCachePath` is the *.epub package directory's cache path (i.e.
   // Fb2's own cachePath - the two were unified so a converted book doesn't
   // leave a second orphaned cache folder behind).
-  static bool renderChapterOnDemand(const std::string& packageCachePath, int chapterIndex, Print& out);
+  static bool renderChapterOnDemand(const std::string& packageCachePath, int chapterIndex, Print& out,
+                                    const reader::ReaderCancellationToken* cancellationToken = nullptr);
 
   // Decodes and writes the single image at `imagePath` (an absolute path
   // like ".../fb2_<hash>/package.epub/OEBPS/images/image_7.png") from its
@@ -78,7 +84,8 @@ class Fb2 {
   // image has been viewed, Epub's own .pxc pixel-cache (a much smaller,
   // already screen-sized bitmap) is what every later view actually reads,
   // so the raw source rarely needs to stick around.
-  static bool decodeImageOnDemand(const std::string& imagePath);
+  static bool decodeImageOnDemand(const std::string& imagePath,
+                                  const reader::ReaderCancellationToken* cancellationToken = nullptr);
 
   // Estimated decoded-text size of chapter `chapterIndex`, in bytes - not a
   // real file size (the chapter isn't a real file until rendered), just
@@ -125,7 +132,7 @@ class Fb2 {
   bool loaded = false;
 
   int chapterCount = 0;
-  std::vector<ImageInfoPublic> images;
+  std::deque<ImageInfoPublic> images;
 
   // v6: for FB2.ZIP, prepareSource() can parse the decompressed byte stream
   // while the same bytes are being staged to .source.fb2. convertToPackage()

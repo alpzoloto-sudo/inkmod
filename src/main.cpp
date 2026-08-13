@@ -1074,19 +1074,24 @@ void loop() {
     }
   }
 
-  // Add delay at the end of the loop to prevent tight spinning
-  // When an activity requests skip loop delay (e.g., webserver running), use yield() for faster response
-  // Otherwise, use longer delay to save power
+  // Safe idle power saving for X3/X4:
+  //   < 500 ms idle : normal CPU, 10 ms loop delay
+  //   >=500 ms idle : 10 MHz CPU + ordinary 50 ms delay
+  //
+  // IMPORTANT: no esp_light_sleep_start() is used here. On X4, entering
+  // timer light-sleep immediately after USB disconnect can leave the device
+  // stuck depending on the USB/power/GPIO state. Downclocking still provides
+  // a large part of the idle saving without that risk.
   if (activityManager.skipLoopDelay()) {
-    powerManager.setPowerSaving(false);  // Make sure we're at full performance when skipLoopDelay is requested
-    yield();                             // Give FreeRTOS a chance to run tasks, but return immediately
+    powerManager.setPowerSaving(false);
+    yield();
   } else {
-    if (millis() - lastActivityTime >= HalPowerManager::IDLE_POWER_SAVING_MS) {
-      // If we've been inactive for a while, increase the delay to save power
-      powerManager.setPowerSaving(true);  // Lower CPU frequency after extended inactivity
+    const unsigned long idleMs = millis() - lastActivityTime;
+    if (idleMs >= HalPowerManager::IDLE_POWER_SAVING_MS) {
+      powerManager.setPowerSaving(true);
       delay(50);
     } else {
-      // Short delay to prevent tight loop while still being responsive
+      powerManager.setPowerSaving(false);
       delay(10);
     }
   }

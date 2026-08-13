@@ -112,6 +112,8 @@ void removeLastUtf8Codepoint(char* text, size_t& length) {
 
 void DictionaryActivity::onEnter() {
   Activity::onEnter();
+  inputArmed_ = false;
+  quietInputFrames_ = 0;
   dictionaries_.scan();
   if (!page_ || !selectFirstWord()) {
     mode_ = Mode::NoWords;
@@ -292,20 +294,39 @@ bool DictionaryActivity::buildSelectedLookupWords() {
 
 bool DictionaryActivity::selectFirstWord() {
   if (!page_) return false;
+
+  // Start at the selectable word whose rendered position is nearest the
+  // centre of the visible page. This avoids walking from the first word
+  // every time the dictionary is opened.
+  const int centreX = renderer.getScreenWidth() / 2;
+  const int centreY = renderer.getScreenHeight() / 2;
+  long bestDistance = LONG_MAX;
+  bool found = false;
+
   for (size_t elementIndex = 0; elementIndex < page_->elements.size(); ++elementIndex) {
     const auto& element = page_->elements[elementIndex];
     if (!element || element->getTag() != TAG_PageLine) continue;
     const auto& line = static_cast<const PageLine&>(*element);
-    if (!line.getBlock()) continue;
-    for (size_t wordIndex = 0; wordIndex < line.getBlock()->getWords().size(); ++wordIndex) {
-      if (isSelectableWord(static_cast<int>(elementIndex), wordIndex)) {
+    const auto& block = line.getBlock();
+    if (!block) continue;
+    const auto& xPositions = block->getWordXPositions();
+
+    for (size_t wordIndex = 0; wordIndex < block->getWords().size(); ++wordIndex) {
+      if (!isSelectableWord(static_cast<int>(elementIndex), wordIndex)) continue;
+      const int wordX = line.xPos + (wordIndex < xPositions.size() ? xPositions[wordIndex] : 0);
+      const int wordY = line.yPos;
+      const long dx = wordX - centreX;
+      const long dy = wordY - centreY;
+      const long distance = dx * dx + dy * dy;
+      if (!found || distance < bestDistance) {
+        found = true;
+        bestDistance = distance;
         selectedElement_ = static_cast<int>(elementIndex);
         selectedWord_ = wordIndex;
-        return true;
       }
     }
   }
-  return false;
+  return found;
 }
 
 void DictionaryActivity::moveHorizontal(const int direction) {
@@ -457,6 +478,39 @@ int DictionaryActivity::articleFontId() const {
 }
 
 void DictionaryActivity::loop() {
+  // Quick-action entry quarantine.
+  //
+  // If Dictionary was opened by a button that is still physically held
+  // (or whose release event lands on the first child frame), consuming the
+  // event here prevents:
+  //   Back    -> immediately closing the dictionary
+  //   Confirm -> immediately opening the selected word
+  //   Left/Right/front nav -> one unwanted move
+  //   Power   -> unwanted confirm fallback
+  //
+  // Require one completely quiet input frame after every trigger event.
+  if (!inputArmed_) {
+    const bool anyHeld =
+        mappedInput.isPressed(MappedInputManager::Button::Back) ||
+        mappedInput.isPressed(MappedInputManager::Button::Confirm) ||
+        mappedInput.isPressed(MappedInputManager::Button::Left) ||
+        mappedInput.isPressed(MappedInputManager::Button::Right) ||
+        mappedInput.isPressed(MappedInputManager::Button::Up) ||
+        mappedInput.isPressed(MappedInputManager::Button::Down) ||
+        mappedInput.isPressed(MappedInputManager::Button::Power) ||
+        mappedInput.isPressed(MappedInputManager::Button::PageBack) ||
+        mappedInput.isPressed(MappedInputManager::Button::PageForward);
+
+    if (anyHeld || mappedInput.wasAnyPressed() || mappedInput.wasAnyReleased()) {
+      quietInputFrames_ = 0;
+      return;
+    }
+
+    if (++quietInputFrames_ < 1) return;
+    inputArmed_ = true;
+    return;
+  }
+
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     if (mode_ == Mode::Article) {
       mode_ = Mode::SelectWord;
@@ -659,6 +713,12 @@ void DictionaryActivity::drawSelectionPage(const bool showHints) {
   }
 
   if (showHints) {
+    const auto& metrics = UITheme::getInstance().getMetrics();
+    const bool foreground = ReaderUtils::readerForegroundBlack();
+    const int footerTop = std::max(0, renderer.getScreenHeight() - metrics.buttonHintsHeight - 4);
+    renderer.fillRect(0, footerTop, renderer.getScreenWidth(), renderer.getScreenHeight() - footerTop,
+                      !foreground);
+    renderer.drawLine(0, footerTop, renderer.getScreenWidth(), footerTop, foreground);
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, true);
   }

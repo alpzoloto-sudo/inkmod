@@ -17,6 +17,7 @@
 
 #include "AppVersion.h"
 #include "InkMODSettings.h"
+#include "InkMODState.h"
 #include "FontInstaller.h"
 #include "OpdsServerStore.h"
 #include "SdCardFontSystem.h"
@@ -29,6 +30,7 @@
 #include "html/HomePageHtml.generated.h"
 #include "html/LogoPng.generated.h"
 #include "html/SettingsPageHtml.generated.h"
+#include "html/WallpapersPageHtml.generated.h"
 #include "html/StyleCss.generated.h"
 #include "html/js/jszip_minJs.generated.h"
 #include "html/js/i18nJs.generated.h"
@@ -181,6 +183,7 @@ void InkMODWebServer::begin() {
   server->on("/", HTTP_GET, [this] { handleRoot(); });
   server->on("/files", HTTP_GET, [this] { handleFileList(); });
   server->on("/epubkit", HTTP_GET, [this] { handleEpubKitPage(); });
+  server->on("/wallpapers", HTTP_GET, [this] { handleWallpapersPage(); });
   server->on("/js/jszip.min.js", HTTP_GET, [this] { handleJszip(); });
   server->on("/js/i18n.js", HTTP_GET, [this] { handleI18nJs(); });
   server->on("/style.css", HTTP_GET, [this] { handleStyleCss(); });
@@ -209,6 +212,7 @@ void InkMODWebServer::begin() {
   server->on("/settings", HTTP_GET, [this] { handleSettingsPage(); });
   server->on("/api/settings", HTTP_GET, [this] { handleGetSettings(); });
   server->on("/api/settings", HTTP_POST, [this] { handlePostSettings(); });
+  server->on("/api/wallpapers/apply", HTTP_POST, [this] { handleApplyWallpaper(); });
 
   // Font management endpoints
   server->on("/fonts", HTTP_GET, [this] { handleFontsPage(); });
@@ -513,6 +517,12 @@ void InkMODWebServer::handleFileList() const {
 void InkMODWebServer::handleEpubKitPage() const {
   sendHtmlContent(server.get(), EpubKitPageHtml, sizeof(EpubKitPageHtml));
   LOG_DBG("WEB", "Served EPUB Kit page");
+}
+
+
+void InkMODWebServer::handleWallpapersPage() const {
+  sendHtmlContent(server.get(), WallpapersPageHtml, sizeof(WallpapersPageHtml));
+  LOG_DBG("WEB", "Served sleep-screen generator page");
 }
 
 void InkMODWebServer::handleFileListData() const {
@@ -1129,6 +1139,42 @@ void InkMODWebServer::handleDelete() const {
   } else {
     server->send(500, "text/plain", "Failed to delete some items: " + failedItems);
   }
+}
+
+void InkMODWebServer::handleApplyWallpaper() {
+  if (!server->hasArg("path")) {
+    server->send(400, "text/plain", "Missing path");
+    return;
+  }
+
+  const String path = normalizeWebPath(server->arg("path"));
+  if (path.isEmpty() || path == "/" || isProtectedPath(path)) {
+    server->send(400, "text/plain", "Invalid wallpaper path");
+    return;
+  }
+
+  if (!path.endsWith(".png") && !path.endsWith(".PNG")) {
+    server->send(400, "text/plain", "Wallpaper must be PNG");
+    return;
+  }
+
+  if (!Storage.exists(path.c_str())) {
+    server->send(404, "text/plain", "Uploaded PNG not found");
+    return;
+  }
+
+  APP_STATE.favoriteSleepImagePath = path.c_str();
+  SETTINGS.sleepScreen = InkMODSettings::OVERLAY;
+
+  const bool stateSaved = APP_STATE.saveToFile();
+  const bool settingsSaved = SETTINGS.saveToFile();
+  if (!stateSaved || !settingsSaved) {
+    server->send(500, "text/plain", "PNG uploaded, but sleep-screen setting could not be saved");
+    return;
+  }
+
+  LOG_INF("WEB", "Sleep overlay set from web generator: %s", path.c_str());
+  server->send(200, "application/json", "{\"ok\":true}");
 }
 
 void InkMODWebServer::handleSettingsPage() const {

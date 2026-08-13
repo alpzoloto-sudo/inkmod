@@ -15,6 +15,7 @@
 #include "AppVersion.h"
 #include "BackupStatsActivity.h"
 #include "ButtonRemapActivity.h"
+#include "BookMenuSettingsActivity.h"
 #include "ClearCacheActivity.h"
 #include "ClockOffsetActivity.h"
 #include "ClockSyncActivity.h"
@@ -30,6 +31,7 @@
 #include "SdFirmwareUpdateActivity.h"
 #include "SettingsList.h"
 #include "StatusBarSettingsActivity.h"
+#include "SupportInkMODActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/reader/GlobalReadingStats.h"
 #include "activities/util/ConfirmationActivity.h"
@@ -824,6 +826,12 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::CalculateStorageUsage:
         StorageUsageCalc::start();
         requestUpdate();
+        break;
+      case SettingAction::BookMenuSettings:
+        startActivityForResult(std::make_unique<BookMenuSettingsActivity>(renderer, mappedInput), resultHandler);
+        break;
+      case SettingAction::SupportInkMOD:
+        startActivityForResult(std::make_unique<SupportInkMODActivity>(renderer, mappedInput), resultHandler);
         break;
       case SettingAction::ReaderFontOptions:
       case SettingAction::ReaderPageLayout:

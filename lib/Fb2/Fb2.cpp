@@ -13,6 +13,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <ReaderWork.h>
 
 #include "Fb2Encoding.h"
 #include "native/Fb2ZipOpener.h"
@@ -1054,7 +1055,12 @@ bool Fb2::prepareSource(const ProgressFn& onProgress) {
     TaskHandle_t scanTaskHandle = nullptr;
     bool fusedScanStarted = false;
 
-    if (scanStream && scanDone && ESP.getFreeHeap() >= 100 * 1024 && ESP.getMaxAllocHeap() >= 64 * 1024) {
+    // Fused ZIP scan is useful only for small archives. Above 1 MiB
+    // uncompressed, keeping DEFLATE + pipe + XML task alive together costs
+    // more RAM than it saves on ESP32-C3. Large ZIPs stage to SD first and are
+    // scanned sequentially.
+    if (scanStream && scanDone && zipEntry.uncompressedSize <= 1024 * 1024 &&
+        ESP.getFreeHeap() >= 100 * 1024 && ESP.getMaxAllocHeap() >= 64 * 1024) {
       candidateScan.reset(new (std::nothrow) Fb2ScanResult());
       if (candidateScan) {
         pipeReader.reset(new (std::nothrow) Fb2PipeReader(scanStream, zipEntry.uncompressedSize, &producerDone));
@@ -1436,6 +1442,9 @@ bool Fb2::convertToPackage(const ProgressFn& onProgress) {
     FsFileReader reader(source);
     Fb2Parser parser;
     const unsigned long scanStarted = millis();
+    LOG_INF("FB2-PROF", "scan start mem: free=%u max=%u",
+            static_cast<unsigned>(ESP.getFreeHeap()),
+            static_cast<unsigned>(ESP.getMaxAllocHeap()));
     if (!parser.scan(reader, scan)) {
       source.close();
       LOG_ERR("FB2", "FB2 scan failed (not well-formed?): %s", filepath.c_str());
@@ -1443,6 +1452,12 @@ bool Fb2::convertToPackage(const ProgressFn& onProgress) {
     }
     source.close();
     LOG_INF("FB2-PROF", "scan: %lums", millis() - scanStarted);
+    LOG_INF("FB2-PROF", "scan end mem: free=%u max=%u sections=%u binaries=%u pool=%u",
+            static_cast<unsigned>(ESP.getFreeHeap()),
+            static_cast<unsigned>(ESP.getMaxAllocHeap()),
+            static_cast<unsigned>(scan.sections.size()),
+            static_cast<unsigned>(scan.binaries.size()),
+            static_cast<unsigned>(scan.stringPool.size()));
   }
   if (onProgress) onProgress(40);
 
@@ -1480,7 +1495,6 @@ bool Fb2::convertToPackage(const ProgressFn& onProgress) {
   // copying them. On illustration-heavy FB2s, keeping both copies alive is
   // enough to exhaust the C3 heap before the first chapter can be opened.
   images.clear();
-  images.reserve(scan.binaries.size());
   for (auto& binary : scan.binaries) {
     const std::string mediaType = normalizeImageMediaType(binary.contentType);
     if (mediaType.empty()) continue;
@@ -1490,7 +1504,7 @@ bool Fb2::convertToPackage(const ProgressFn& onProgress) {
     image.filename = "image_" + std::to_string(images.size()) + (mediaType == "image/png" ? ".png" : ".jpg");
     images.push_back(std::move(image));
   }
-  std::vector<Fb2BinaryIndexEntry>().swap(scan.binaries);
+  std::deque<Fb2BinaryIndexEntry>().swap(scan.binaries);
   if (onProgress) onProgress(70);
 
   // Persist the section index (level, innerStartOffset, id, title, image
@@ -1513,10 +1527,12 @@ bool Fb2::convertToPackage(const ProgressFn& onProgress) {
       const bool imageSliced = section.imageRefCount > 0;
       const uint8_t level = static_cast<uint8_t>(std::min<uint16_t>(section.level, 255));
       const uint32_t innerStartOffset = section.innerStartOffset;
-      const uint16_t idLen = static_cast<uint16_t>(std::min(section.id.size(), static_cast<size_t>(4096)));
+      const std::string_view sectionId = scan.sectionId(section);
+      const std::string_view sectionTitle = scan.sectionTitle(section);
+      const uint16_t idLen = static_cast<uint16_t>(std::min(sectionId.size(), static_cast<size_t>(4096)));
 
       for (uint32_t slice = 0; slice < sliceCount; ++slice) {
-        const std::string& title = slice == 0 ? section.title : std::string();
+        const std::string_view title = slice == 0 ? sectionTitle : std::string_view();
         const uint16_t titleLen = static_cast<uint16_t>(std::min(title.size(), static_cast<size_t>(4096)));
 
         uint32_t imageRangeStart = 0;
@@ -1544,7 +1560,7 @@ bool Fb2::convertToPackage(const ProgressFn& onProgress) {
         sectionsOut.write(&level, sizeof(level));
         sectionsOut.write(&innerStartOffset, sizeof(innerStartOffset));
         sectionsOut.write(&idLen, sizeof(idLen));
-        if (idLen) sectionsOut.write(section.id.data(), idLen);
+        if (idLen) sectionsOut.write(sectionId.data(), idLen);
         sectionsOut.write(&titleLen, sizeof(titleLen));
         if (titleLen) sectionsOut.write(title.data(), titleLen);
         sectionsOut.write(&approxBytes, sizeof(approxBytes));
@@ -1617,7 +1633,9 @@ constexpr char IMAGE_LRU_FILE[] = "/.fb2_image_lru";
 }  // namespace
 
 // static
-bool Fb2::decodeImageOnDemand(const std::string& imagePath) {
+bool Fb2::decodeImageOnDemand(const std::string& imagePath,
+                              const reader::ReaderCancellationToken* cancellationToken) {
+  if (cancellationToken && cancellationToken->isCancellationRequested()) return false;
   // imagePath looks like ".../<cachePrefix>_<hash>/package.epub/OEBPS/images/image_7.png".
   // Recover that package's own cache dir from it rather than needing an
   // Fb2 instance (ImageBlock only has the path baked into its serialized
@@ -1642,6 +1660,10 @@ bool Fb2::decodeImageOnDemand(const std::string& imagePath) {
   Fb2BinaryIndexEntry binary;
   bool found = false;
   for (;;) {
+    if (cancellationToken && cancellationToken->isCancellationRequested()) {
+      imagesIn.close();
+      return false;
+    }
     uint16_t idLen = 0, nameLen = 0;
     if (imagesIn.read(&idLen, sizeof(idLen)) != sizeof(idLen)) break;
     std::string id(idLen, '\0');
@@ -1680,24 +1702,38 @@ bool Fb2::decodeImageOnDemand(const std::string& imagePath) {
   // writing straight through would be tens of thousands of individual SD
   // writes for one sizeable illustration.
   constexpr size_t kFlushBufSize = 4096;
-  std::vector<uint8_t> flushBuf;
-  flushBuf.reserve(kFlushBufSize);
+  std::array<uint8_t, kFlushBufSize> flushBuf{};
+  size_t flushUsed = 0;
+  bool writeOk = true;
   int flushCount = 0;
   Fb2Parser parser;
-  parser.decodeBinary(reader, binary, [&](const uint8_t* d, size_t n) {
-    flushBuf.insert(flushBuf.end(), d, d + n);
-    if (flushBuf.size() >= kFlushBufSize) {
-      out.write(flushBuf.data(), flushBuf.size());
-      flushBuf.clear();
+  const bool decoded = parser.decodeBinary(reader, binary, [&](const uint8_t* d, size_t n) {
+    if (!writeOk) return;
+    size_t offset = 0;
+    while (offset < n) {
+      const size_t copy = std::min(n - offset, kFlushBufSize - flushUsed);
+      memcpy(flushBuf.data() + flushUsed, d + offset, copy);
+      flushUsed += copy;
+      offset += copy;
+      if (flushUsed != kFlushBufSize) continue;
+      writeOk = out.write(flushBuf.data(), flushUsed) == flushUsed;
+      flushUsed = 0;
       // Rare on purpose - see the comment on the equivalent yield in
       // transcodeToUtf8IfNeeded(). A single image is rarely more than a
       // few hundred KB, so this will often not fire at all, which is fine.
       if (++flushCount % 256 == 0) vTaskDelay(1);
     }
-  });
-  if (!flushBuf.empty()) out.write(flushBuf.data(), flushBuf.size());
+  }, cancellationToken);
+  if (decoded && writeOk && flushUsed > 0) {
+    writeOk = out.write(flushBuf.data(), flushUsed) == flushUsed;
+  }
   out.close();
   source.close();
+  if (!decoded || !writeOk || (cancellationToken && cancellationToken->isCancellationRequested())) {
+    Storage.remove(imagePath.c_str());
+    LOG_INF("FB2", "Lazy image decode incomplete/cancelled: %s", filename.c_str());
+    return false;
+  }
 
   // LRU bookkeeping: note this filename as most-recently-decoded, and evict
   // the raw file for anything that's fallen out of the last
@@ -1935,8 +1971,10 @@ StreamSink::LinkResolver buildLinkResolver(const std::string& packageCachePath) 
 }
 
 // static
-bool Fb2::renderChapterOnDemand(const std::string& packageCachePath, int chapterIndex, Print& out) {
+bool Fb2::renderChapterOnDemand(const std::string& packageCachePath, int chapterIndex, Print& out,
+                                const reader::ReaderCancellationToken* cancellationToken) {
   if (chapterIndex < 0) return false;
+  if (cancellationToken && cancellationToken->isCancellationRequested()) return false;
 
   std::string sourcePath;
   if (!ensurePreparedSource(packageCachePath, sourcePath)) {
@@ -2034,6 +2072,11 @@ bool Fb2::renderChapterOnDemand(const std::string& packageCachePath, int chapter
       bool emitted = false;
       bool paragraphOpen = false;
       while (true) {
+        if (cancellationToken && cancellationToken->isCancellationRequested()) {
+          annotation.close();
+          source.close();
+          return false;
+        }
         const int bytesRead = annotation.read(chunk.data(), chunk.size());
         if (bytesRead <= 0) break;
         for (int i = 0; i < bytesRead; ++i) {
@@ -2066,7 +2109,7 @@ bool Fb2::renderChapterOnDemand(const std::string& packageCachePath, int chapter
   StreamSink sink(out, packageCachePath + IMAGES_INDEX_FILE, buildLinkResolver(packageCachePath));
   RangeFilterSink imageRangeSink(sink, imageRangeStart, imageRangeEnd);
   TextRangeFilterSink textRangeSink(imageRangeSink, textRangeStart, textRangeEnd);
-  const bool renderOk = parser.renderSection(reader, section, textRangeSink);
+  const bool renderOk = parser.renderSection(reader, section, textRangeSink, cancellationToken);
 
   writeBytes(out, "</section>\n</body></html>\n");
   source.close();
@@ -2180,7 +2223,8 @@ bool Fb2::writeNcxFile(const Fb2ScanResult& scan) const {
         isNotesBody(scan.bodies[section.bodyIndex].name)) {
       continue;
     }
-    std::string sectionTitle = section.title;
+    const std::string_view pooledTitle = scan.sectionTitle(section);
+    std::string sectionTitle(pooledTitle.begin(), pooledTitle.end());
     normalizeText(sectionTitle);
     if (sectionTitle.empty()) continue;
 
@@ -2190,8 +2234,10 @@ bool Fb2::writeNcxFile(const Fb2ScanResult& scan) const {
       --openDepth;
     }
 
+    const std::string_view pooledId = scan.sectionId(section);
     const uint64_t anchor =
-        section.id.empty() ? automaticAnchor("section", static_cast<int>(i)) : fnvHash64(section.id.data(), section.id.size());
+        pooledId.empty() ? automaticAnchor("section", static_cast<int>(i))
+                         : fnvHash64(pooledId.data(), pooledId.size());
     writeBytes(file, "<navPoint id=\"nav-" + std::to_string(playOrder) + "\" playOrder=\"" +
                          std::to_string(playOrder) + "\"><navLabel><text>");
     writeXmlEscaped(file, sectionTitle);

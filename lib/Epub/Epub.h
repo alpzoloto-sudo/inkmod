@@ -13,6 +13,9 @@
 #include "Epub/css/CssParser.h"
 
 class ZipFile;
+namespace reader {
+class ReaderCancellationToken;
+}
 
 class Epub {
   // the ncx file (EPUB 2)
@@ -96,7 +99,8 @@ class Epub {
   bool generateAdaptiveThumbBmp(int width, int height) const;
   uint8_t* readItemContentsToBytes(const std::string& itemHref, size_t* size = nullptr,
                                    bool trailingNullByte = false) const;
-  bool readItemContentsToStream(const std::string& itemHref, Print& out, size_t chunkSize) const;
+  bool readItemContentsToStream(const std::string& itemHref, Print& out, size_t chunkSize,
+                                const reader::ReaderCancellationToken* cancellationToken = nullptr) const;
   bool getItemSize(const std::string& itemHref, size_t* size) const;
   BookMetadataCache::SpineEntry getSpineItem(int spineIndex) const;
   BookMetadataCache::TocEntry getTocItem(int tocIndex) const;

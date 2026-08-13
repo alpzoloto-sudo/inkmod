@@ -5,22 +5,27 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <Epub.h>
 
 #include <algorithm>
 #include <cctype>
 #include <cstring>
 
 #include "BookActions.h"
+#include "BookmarkStore.h"
 #include "InkMODSettings.h"
 #include "InkMODState.h"
+#include "InkMODHumor.h"
 #include "FileBrowserActionActivity.h"
 #include "MappedInputManager.h"
 #include "activities/util/ConfirmationActivity.h"
+#include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
 #include "components/themes/minimal/MinimalTheme.h"
 #include "fontIds.h"
 #include "Fb2.h" // Добавлено для поддержки FB2
 #include "util/BookArchiveUtils.h"
+#include "util/BookMoveUtils.h"
 
 namespace {
 constexpr unsigned long GO_HOME_MS = 1000;
@@ -87,6 +92,17 @@ std::string buildFullPath(std::string basepath, const std::string& entry) {
   return basepath + entry;
 }
 
+std::string stripTrailingSlash(std::string value) {
+  while (value.size() > 1 && value.back() == '/') {
+    value.pop_back();
+  }
+  return value;
+}
+
+bool isProtectedRenamePath(const std::string& path) {
+  return path.empty() || path == "/" || path.rfind("/.inkmod", 0) == 0 || path.rfind("/System Volume Information", 0) == 0 ||
+         path.rfind("/XTCache", 0) == 0;
+}
 
 std::string normalizeDirectoryPath(std::string path) {
   while (path.length() > 1 && path.back() == '/') {
@@ -342,12 +358,110 @@ void FileBrowserActivity::promptDeleteDirectory(const std::string& fullPath, con
       handler);
 }
 
+
+void FileBrowserActivity::promptRenamePath(const std::string& fullPath, const std::string& entry, const bool isDirectory,
+                                           const bool ignoreInitialConfirmRelease) {
+  if (isProtectedRenamePath(fullPath)) {
+    return;
+  }
+
+  const std::string initialName = stripTrailingSlash(entry);
+  auto keyboard = std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_RENAME), initialName, 96,
+                                                          InputType::Text, 1);
+  startActivityForResult(std::move(keyboard),
+                         [this, fullPath, initialName, isDirectory, ignoreInitialConfirmRelease](
+                             const ActivityResult& result) {
+                           if (result.isCancelled) {
+                             requestUpdate();
+                             return;
+                           }
+
+                           const auto* kb = std::get_if<KeyboardResult>(&result.data);
+                           if (!kb) {
+                             requestUpdate();
+                             return;
+                           }
+
+                           std::string newName = kb->text;
+                           while (!newName.empty() && (newName.back() == ' ' || newName.back() == '.')) {
+                             newName.pop_back();
+                           }
+                           while (!newName.empty() && newName.front() == ' ') {
+                             newName.erase(newName.begin());
+                           }
+                           if (newName.empty() || newName.find('/') != std::string::npos || newName == "." ||
+                               newName == "..") {
+                             requestUpdate();
+                             return;
+                           }
+                           if (newName == initialName) {
+                             requestUpdate();
+                             return;
+                           }
+
+                           const std::string parentPath = FsHelpers::extractFolderPath(stripTrailingSlash(fullPath));
+                           const std::string newPath = buildFullPath(parentPath, newName);
+                           if (isProtectedRenamePath(newPath) || Storage.exists(newPath.c_str())) {
+                             requestUpdate();
+                             return;
+                           }
+
+                           RecentBook originalBook{};
+                           std::string oldCachePath;
+                           if (!isDirectory && FsHelpers::hasEpubExtension(fullPath)) {
+                             originalBook = RECENT_BOOKS.getDataFromBook(fullPath);
+                             const Epub epub(fullPath, "/.inkmod");
+                             oldCachePath = epub.getCachePath();
+                           }
+
+                           const bool renamed = Storage.rename(fullPath.c_str(), newPath.c_str());
+                           if (!renamed) {
+                             LOG_ERR("FileBrowser", "Failed to rename: %s -> %s", fullPath.c_str(), newPath.c_str());
+                             requestUpdate();
+                             return;
+                           }
+
+                           if (APP_STATE.favoriteSleepImagePath == fullPath) {
+                             APP_STATE.favoriteSleepImagePath = newPath;
+                             APP_STATE.saveToFile();
+                           }
+                           if (isDirectory && APP_STATE.preferredSleepFolderPath == normalizeDirectoryPath(fullPath)) {
+                             APP_STATE.preferredSleepFolderPath = normalizeDirectoryPath(newPath);
+                             APP_STATE.saveToFile();
+                           }
+
+                           if (!isDirectory) {
+                             if (FsHelpers::hasEpubExtension(fullPath)) {
+                               const std::string title = originalBook.title.empty() ? getFileName(initialName) : originalBook.title;
+                               BookMoveUtils::migrateMovedEpubState(fullPath, newPath, oldCachePath, title,
+                                                                    originalBook.author, true);
+                             } else if (FsHelpers::hasXtcExtension(fullPath)) {
+                               const RecentBook book = RECENT_BOOKS.getDataFromBook(newPath);
+                               RECENT_BOOKS.updatePath(fullPath, newPath, "", "");
+                               BookmarkStore::migrateForFilePath(fullPath, newPath,
+                                                                 book.title.empty() ? getFileName(newName) : book.title,
+                                                                 book.author, "xtc");
+                             } else if (FsHelpers::hasTxtExtension(fullPath) || FsHelpers::hasMarkdownExtension(fullPath)) {
+                               RECENT_BOOKS.updatePath(fullPath, newPath, "", "");
+                               BookmarkStore::migrateForFilePath(fullPath, newPath, getFileName(newName), "", "txt");
+                             }
+                           }
+
+                           loadFiles();
+                           const std::string refreshedEntry = isDirectory ? newName + "/" : newName;
+                           selectorIndex = files.empty() ? 0 : std::min(findEntry(refreshedEntry), files.size() - 1);
+                           longPressConfirmHandled = false;
+                           requestUpdate(true);
+                         });
+}
+
 void FileBrowserActivity::showDirectoryActionMenu(const std::string& entry, bool ignoreInitialConfirmRelease) {
   const std::string fullPath = normalizeDirectoryPath(buildFullPath(basepath, entry));
   const bool useDefaultFolders = isDefaultSleepFolderPath(fullPath) || isPreferredSleepFolder(fullPath);
   std::vector<FileBrowserActionActivity::MenuItem> items;
   items.push_back({useDefaultFolders ? FileBrowserAction::ClearSleepFolder : FileBrowserAction::SetSleepFolder,
                    useDefaultFolders ? StrId::STR_USE_DEFAULT_SLEEP_FOLDERS : StrId::STR_SET_AS_SLEEP_FOLDER});
+  items.push_back({FileBrowserAction::Rename, StrId::STR_RENAME});
   items.push_back({FileBrowserAction::Delete, StrId::STR_DELETE});
 
   startActivityForResult(std::make_unique<FileBrowserActionActivity>(renderer, mappedInput, getFileName(entry),
@@ -364,6 +478,9 @@ void FileBrowserActivity::showDirectoryActionMenu(const std::string& entry, bool
                              case FileBrowserAction::Delete:
                                promptDeleteDirectory(fullPath, entry);
                                return;
+                             case FileBrowserAction::Rename:
+                               promptRenamePath(fullPath, entry, true, true);
+                               return;
                              case FileBrowserAction::SetSleepFolder:
                                setPreferredSleepFolder(fullPath);
                                return;
@@ -376,6 +493,7 @@ void FileBrowserActivity::showDirectoryActionMenu(const std::string& entry, bool
                              case FileBrowserAction::RemoveFromRecents:
                              case FileBrowserAction::PinFavorite:
                              case FileBrowserAction::UnpinFavorite:
+                             case FileBrowserAction::SetSleepOverlay:
                                return;
                            }
                          });
@@ -455,6 +573,11 @@ bool FileBrowserActivity::isSleepFavoriteFolder(const std::string& fullPath) con
 void FileBrowserActivity::showFileActionMenu(const std::string& entry, bool ignoreInitialConfirmRelease) {
   const std::string fullPath = buildFullPath(basepath, entry);
   std::vector<FileBrowserActionActivity::MenuItem> items = BookActions::buildBookActionItems(fullPath, false);
+  items.push_back({FileBrowserAction::Rename, StrId::STR_RENAME});
+
+  if (isSleepImageFile(entry)) {
+    items.push_back({FileBrowserAction::SetSleepOverlay, StrId::STR_SET_AS_SLEEP_OVERLAY});
+  }
 
   const bool canPinFavorite = isSleepFavoriteFolder(basepath) && isSleepImageFile(entry);
   if (canPinFavorite) {
@@ -474,8 +597,18 @@ void FileBrowserActivity::showFileActionMenu(const std::string& entry, bool igno
 
         const auto action = static_cast<FileBrowserAction>(std::get<FileBrowserActionResult>(result.data).action);
         switch (action) {
+          case FileBrowserAction::SetSleepOverlay:
+            APP_STATE.favoriteSleepImagePath = fullPath;
+            SETTINGS.sleepScreen = InkMODSettings::OVERLAY;
+            APP_STATE.saveToFile();
+            SETTINGS.saveToFile();
+            requestUpdate();
+            return;
           case FileBrowserAction::Delete:
             promptDeleteFile(fullPath, entry);
+            return;
+          case FileBrowserAction::Rename:
+            promptRenamePath(fullPath, entry, false, true);
             return;
           case FileBrowserAction::DeleteCache:
             startActivityForResult(std::make_unique<ConfirmationActivity>(
@@ -786,6 +919,12 @@ void FileBrowserActivity::render(RenderLock&&) {
                                ? tr(STR_MEMORY_ERROR)
                                : ((mode == Mode::PickFirmware) ? tr(STR_NO_BIN_FILES) : tr(STR_NO_FILES_FOUND));
     renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, contentTop + 20, emptyMsg);
+    if (!fileListMemoryLimited && mode != Mode::PickFirmware) {
+      const int jokeTop = contentTop + 58;
+      InkMODHumor::drawBounded(renderer, InkMODHumor::Moment::EmptyFolder, 0, jokeTop, pageWidth,
+                               std::max(0, contentHeight - 70), SMALL_FONT_ID, true,
+                               static_cast<uint32_t>(basepath.size()));
+    }
   } else {
     const bool compactFileRows = SETTINGS.fileBrowserDisplay == InkMODSettings::FILE_BROWSER_DISPLAY_2_LINES;
     const std::function<std::string(int)> compactRowMarker =

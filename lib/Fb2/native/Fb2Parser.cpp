@@ -1,9 +1,11 @@
 #include "Fb2Parser.h"
 #include "Fb2XmlReader.h"
 #include "Base64Decoder.h"
+#include <algorithm>
 #include <cstdlib>
 #include <cctype>
 #include <cstring>
+#include <ReaderWork.h>
 
 namespace {
 
@@ -102,6 +104,91 @@ void countTwoTagOpeners(IByteReader& reader, const char* tagA, uint32_t& countA,
 
 } // namespace
 
+namespace {
+constexpr size_t kMaxFb2SectionIdBytes = 192;
+constexpr size_t kMaxFb2SectionTitleBytes = 384;
+constexpr size_t kMaxFb2BinaryIdBytes = 192;
+constexpr size_t kMaxFb2ContentTypeBytes = 80;
+constexpr size_t kMaxFb2BodyNameBytes = 80;
+
+// The shared section-string pool is a hard safety boundary. 48 KiB is enough
+// for >700 normal chapter titles while remaining one predictable allocation.
+constexpr size_t kSectionStringPoolReserve = 28 * 1024;
+constexpr size_t kSectionStringPoolHardLimit = 28 * 1024;
+
+bool storePoolString(Fb2ScanResult& out, const std::string& value,
+                     uint32_t& offset, uint16_t& length) {
+    offset = UINT32_MAX;
+    length = 0;
+    if (value.empty() || out.stringPool.size() >= kSectionStringPoolHardLimit) return false;
+
+    const size_t available = kSectionStringPoolHardLimit - out.stringPool.size();
+    const size_t copyLen = std::min({value.size(), available, static_cast<size_t>(UINT16_MAX)});
+    if (copyLen == 0) return false;
+
+    offset = static_cast<uint32_t>(out.stringPool.size());
+    length = static_cast<uint16_t>(copyLen);
+    out.stringPool.append(value.data(), copyLen);
+    return true;
+}
+
+bool storePoolCString(Fb2ScanResult& out, const char* value, const size_t maxLen,
+                      uint32_t& offset, uint16_t& length) {
+    if (!value) {
+        offset = UINT32_MAX;
+        length = 0;
+        return false;
+    }
+    const size_t n = strnlen(value, maxLen);
+    return storePoolString(out, std::string(value, n), offset, length);
+}
+
+bool storePoolTitle(Fb2ScanResult& out, const std::string& value,
+                    uint32_t& offset, uint16_t& length) {
+    offset = UINT32_MAX;
+    length = 0;
+    if (value.empty() || out.stringPool.size() >= kSectionStringPoolHardLimit) return false;
+
+    const size_t start = out.stringPool.size();
+    bool pendingSpace = false;
+    for (const unsigned char c : value) {
+        if (out.stringPool.size() >= kSectionStringPoolHardLimit) break;
+        if (c == ' ' || c == '\r' || c == '\n' || c == '\t') {
+            pendingSpace = out.stringPool.size() > start;
+            continue;
+        }
+        if (pendingSpace && out.stringPool.size() < kSectionStringPoolHardLimit) {
+            out.stringPool.push_back(' ');
+        }
+        pendingSpace = false;
+        if (out.stringPool.size() < kSectionStringPoolHardLimit) {
+            out.stringPool.push_back(static_cast<char>(c));
+        }
+    }
+
+    const size_t stored = out.stringPool.size() - start;
+    if (stored == 0) return false;
+    offset = static_cast<uint32_t>(start);
+    length = static_cast<uint16_t>(std::min(stored, static_cast<size_t>(UINT16_MAX)));
+    return true;
+}
+
+void assignBoundedFb2(std::string& dst, const char* src, const size_t limit) {
+    if (!src) {
+        dst.clear();
+        return;
+    }
+    const size_t len = strnlen(src, limit);
+    dst.assign(src, len);
+}
+
+void appendBoundedFb2(std::string& dst, const std::string& src, const size_t limit) {
+    if (dst.size() >= limit || src.empty()) return;
+    const size_t remaining = limit - dst.size();
+    dst.append(src.data(), std::min(remaining, src.size()));
+}
+}  // namespace
+
 bool Fb2Parser::scan(IByteReader& reader, Fb2ScanResult& out, size_t xmlBufferSize) {
     out = Fb2ScanResult{};
 
@@ -110,9 +197,14 @@ bool Fb2Parser::scan(IByteReader& reader, Fb2ScanResult& out, size_t xmlBufferSi
     // count <section>/<binary>, then the real XML scan read the whole file
     // again. Keep only small bounded reserves so we don't trade SD time for
     // large contiguous heap allocations on ESP32-C3.
-    out.sections.reserve(64);
-    out.binaries.reserve(32);
+    // sections/binaries use deque: no large contiguous reserve/reallocation.
     out.bodies.reserve(4);
+
+    // One predictable allocation replaces hundreds of per-section title/ID
+    // allocations. 28 KiB is intentionally below the normal contiguous block
+    // available at scan start on X3/X4 and is enough for hundreds of normal
+    // chapter titles. The pool never grows past that limit.
+    out.stringPool.reserve(reader.size() >= 8ULL * 1024 * 1024 ? kSectionStringPoolReserve : 8 * 1024);
 
     // Keep the proven 4 KiB tokenizer buffer. v3's 16 KiB + large reserves
     // caused OOM on real X4.
@@ -187,14 +279,14 @@ bool Fb2Parser::scan(IByteReader& reader, Fb2ScanResult& out, size_t xmlBufferSi
                     out.metadata.coverBinaryId = stripHash(href);
                 }
             } else if (name == "image" && !inCoverpage && !sectionStack.empty()) {
-                out.sections[sectionStack.back()].imageRefCount++;
+                if (out.sections[sectionStack.back()].imageRefCount < UINT16_MAX) out.sections[sectionStack.back()].imageRefCount++;
             } else if (name == "sequence" && inTitleInfo && !inAuthorTag &&
                        out.metadata.sequenceName.empty()) {
                 if (const char* n = xml.attr("name")) out.metadata.sequenceName = n;
                 if (const char* num = xml.attr("number")) out.metadata.sequenceNumber = static_cast<uint32_t>(std::strtoul(num, nullptr, 10));
             } else if (name == "body") {
                 Fb2BodyIndexEntry b;
-                if (const char* n = xml.attr("name")) b.name = n;
+                if (const char* n = xml.attr("name")) assignBoundedFb2(b.name, n, kMaxFb2BodyNameBytes);
                 out.bodies.push_back(b);
                 currentBodyIndex = static_cast<int>(out.bodies.size()) - 1;
                 sectionStack.clear();
@@ -202,7 +294,9 @@ bool Fb2Parser::scan(IByteReader& reader, Fb2ScanResult& out, size_t xmlBufferSi
                 Fb2SectionIndexEntry e;
                 e.level = static_cast<uint16_t>(sectionStack.size());
                 e.bodyIndex = currentBodyIndex;
-                if (const char* id = xml.attr("id")) e.id = id;
+                if (const char* id = xml.attr("id")) {
+                    storePoolCString(out, id, kMaxFb2SectionIdBytes, e.idPoolOffset, e.idLength);
+                }
                 out.sections.push_back(e);
                 sectionStack.push_back(static_cast<int>(out.sections.size()) - 1);
                 out.sections.back().innerStartOffset = xml.streamPos();
@@ -216,8 +310,8 @@ bool Fb2Parser::scan(IByteReader& reader, Fb2ScanResult& out, size_t xmlBufferSi
             } else if (name == "binary") {
                 inBinaryTag = true;
                 curBinary = Fb2BinaryIndexEntry{};
-                if (const char* id = xml.attr("id")) curBinary.id = id;
-                if (const char* ct = xml.attr("content-type")) curBinary.contentType = ct;
+                if (const char* id = xml.attr("id")) assignBoundedFb2(curBinary.id, id, kMaxFb2BinaryIdBytes);
+                if (const char* ct = xml.attr("content-type")) assignBoundedFb2(curBinary.contentType, ct, kMaxFb2ContentTypeBytes);
                 curBinary.payloadStartOffset = xml.streamPos();
             }
         } else if (tok == Fb2Token::Text) {
@@ -229,7 +323,7 @@ bool Fb2Parser::scan(IByteReader& reader, Fb2ScanResult& out, size_t xmlBufferSi
             } else if (inAnnotation) {
                 if (annotationBuf.size() < kMaxAnnotationBytes) annotationBuf += xml.text();
             } else if (inTitle) {
-                titleBuf += xml.text();
+                appendBoundedFb2(titleBuf, xml.text(), kMaxFb2SectionTitleBytes);
             } else if (inBinaryTag) {
                 // Skip: base64 payload bytes are read directly by
                 // decodeBinary() later via byte offsets, never buffered here.
@@ -270,7 +364,10 @@ bool Fb2Parser::scan(IByteReader& reader, Fb2ScanResult& out, size_t xmlBufferSi
             } else if (name == "section" && !sectionStack.empty()) {
                 sectionStack.pop_back();
             } else if (name == "title") {
-                if (!sectionStack.empty()) out.sections[sectionStack.back()].title = titleBuf;
+                if (!sectionStack.empty()) {
+                    auto& section = out.sections[sectionStack.back()];
+                    storePoolTitle(out, titleBuf, section.titlePoolOffset, section.titleLength);
+                }
                 inTitle = false;
             } else if (name == "binary") {
                 curBinary.payloadEndOffset = xml.tokenStartOffset();
@@ -285,7 +382,8 @@ bool Fb2Parser::scan(IByteReader& reader, Fb2ScanResult& out, size_t xmlBufferSi
 
 bool Fb2Parser::renderSection(IByteReader& reader,
                                const Fb2SectionIndexEntry& section,
-                               Fb2ContentSink& sink) {
+                               Fb2ContentSink& sink,
+                               const reader::ReaderCancellationToken* cancellationToken) {
     // See scan() above for why this isn't the default 512.
     Fb2XmlReader xml(reader, 4096);
     xml.seekTo(section.innerStartOffset);
@@ -315,6 +413,7 @@ bool Fb2Parser::renderSection(IByteReader& reader,
     int skipDepth = 0;
 
     for (;;) {
+        if (cancellationToken && cancellationToken->isCancellationRequested()) return false;
         Fb2Token tok = xml.next();
         if (tok == Fb2Token::Eof) return true; // malformed/truncated: best effort
         if (tok == Fb2Token::Error) return false;
@@ -444,7 +543,8 @@ bool Fb2Parser::renderSection(IByteReader& reader,
 
 bool Fb2Parser::decodeBinary(IByteReader& reader,
                               const Fb2BinaryIndexEntry& binary,
-                              const BinaryOutputFn& out) {
+                              const BinaryOutputFn& out,
+                              const reader::ReaderCancellationToken* cancellationToken) {
     if (binary.payloadEndOffset < binary.payloadStartOffset) return false;
     if (!reader.seek(binary.payloadStartOffset)) return false;
 
@@ -452,12 +552,13 @@ bool Fb2Parser::decodeBinary(IByteReader& reader,
     uint32_t remaining = binary.payloadEndOffset - binary.payloadStartOffset;
     uint8_t chunk[256];
     while (remaining > 0) {
+        if (cancellationToken && cancellationToken->isCancellationRequested()) return false;
         size_t want = remaining < sizeof(chunk) ? remaining : sizeof(chunk);
         size_t got = reader.read(chunk, want);
-        if (got == 0) break; // short read: truncated file, bail gracefully
+        if (got == 0) return false; // short read: truncated file, bail gracefully
         decoder.feed(reinterpret_cast<const char*>(chunk), got);
         remaining -= static_cast<uint32_t>(got);
     }
     decoder.finish();
-    return true;
+    return remaining == 0;
 }

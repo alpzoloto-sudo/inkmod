@@ -31,7 +31,13 @@
 #include "fontIds.h"
 
 namespace {
-constexpr uint32_t XTC_2BIT_SETTLE_DELAY_MS = 400;
+// EXPERIMENTAL: raised from 400ms. The panel needs time to physically settle
+// after the fixed-waveform grayscale (gray_aa) refresh before the next
+// refresh starts; 400ms wasn't enough under rapid page turning on some
+// units, showing up as ghosting that gets worse the faster you flip pages.
+// If this doesn't fully clear it either, the delay isn't the (whole) story —
+// report back either way so this isn't tuned blind.
+constexpr uint32_t XTC_2BIT_SETTLE_DELAY_MS = 900;
 }
 
 void XtcReaderActivity::onEnter() {
@@ -524,8 +530,10 @@ void XtcReaderActivity::renderPage() {
     LOG_DBG("XTR", "Pixel distribution: White=%lu, DarkGrey=%lu, LightGrey=%lu, Black=%lu", pixelCounts[0],
             pixelCounts[1], pixelCounts[2], pixelCounts[3]);
 
-    // Use the normal reader refresh cadence. This restores the same 2-bit
-    // smoothing behavior as before without bringing back the 96-KB malloc.
+    // Keep native 4-level grayscale, but do NOT force a full flashing refresh
+    // on every XTC page. Use the same refresh cadence as the normal reader:
+    // fast/partial turns most of the time, with a full cleanup only when the
+    // configured refresh cycle says it is due.
     ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
 
     // Pass 2: LSB grayscale plane.
@@ -561,14 +569,17 @@ void XtcReaderActivity::renderPage() {
     renderer.cleanupGrayscaleWithFrameBuffer();
     free(plane1);
 
-    // A 2-bit page finishes with a grayscale LUT refresh. Starting the next
-    // BW frame immediately after BUSY drops can leave the panel physically
-    // unsettled and accumulate strong ghosts during rapid page turning. Keep
-    // this pause inside the 2-bit path only; ordinary 1-bit XTC remains fast.
-    delay(XTC_2BIT_SETTLE_DELAY_MS);
+    // X4 native grayscale needs physical settling time after its LUT pass.
+    // Do not try to repair rapid bursts with extra refreshes: that makes
+    // residual images worse. Instead, simply prevent another 2-bit page
+    // from being rendered before the panel has had time to settle.
+    //
+    // This adds no flash and keeps the real four grayscale levels.
+    constexpr uint32_t XTC_NATIVE_GRAY_SETTLE_MS = 1200;
+    delay(XTC_NATIVE_GRAY_SETTLE_MS);
 
-    LOG_DBG("XTR", "Rendered page %lu/%lu (2-bit grayscale, low-memory streaming)", currentPage + 1,
-            xtc->getPageCount());
+    LOG_DBG("XTR", "Rendered page %lu/%lu (native 2-bit grayscale, anti-burst settle=%lums)",
+            currentPage + 1, xtc->getPageCount(), XTC_NATIVE_GRAY_SETTLE_MS);
     return;
   }
 

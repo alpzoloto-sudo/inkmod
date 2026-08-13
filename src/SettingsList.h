@@ -421,7 +421,8 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                            StrId::STR_SCREENSHOT_BUTTON,
                            StrId::STR_READER_DARK_MODE,
                            StrId::STR_FOOTNOTES,
-                           StrId::STR_BROWSE_FILES},
+                           StrId::STR_BROWSE_FILES,
+                           StrId::STR_DICTIONARY},
                           "shortPwrBtn", StrId::STR_CAT_CONTROLS)
             .withEnumRawValues({InkMODSettings::IGNORE,
                                 InkMODSettings::SLEEP,
@@ -442,7 +443,8 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                                 InkMODSettings::SCREENSHOT,
                                 InkMODSettings::TOGGLE_DARK_MODE,
                                 InkMODSettings::FOOTNOTES,
-                                InkMODSettings::FILE_BROWSER}));
+                                InkMODSettings::FILE_BROWSER,
+                                InkMODSettings::DICTIONARY_LOOKUP}));
     add(SettingInfo::Enum(StrId::STR_LONG_PRESS_ACTION, &InkMODSettings::longPwrBtn,
                           {StrId::STR_IGNORE,
                            StrId::STR_SLEEP,
@@ -463,7 +465,8 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                            StrId::STR_SCREENSHOT_BUTTON,
                            StrId::STR_READER_DARK_MODE,
                            StrId::STR_FOOTNOTES,
-                           StrId::STR_BROWSE_FILES},
+                           StrId::STR_BROWSE_FILES,
+                           StrId::STR_DICTIONARY},
                           "longPwrBtn", StrId::STR_CAT_CONTROLS)
             .withEnumRawValues({InkMODSettings::IGNORE,
                                 InkMODSettings::SLEEP,
@@ -484,14 +487,16 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                                 InkMODSettings::SCREENSHOT,
                                 InkMODSettings::TOGGLE_DARK_MODE,
                                 InkMODSettings::FOOTNOTES,
-                                InkMODSettings::FILE_BROWSER}));
+                                InkMODSettings::FILE_BROWSER,
+                                InkMODSettings::DICTIONARY_LOOKUP}));
     add(SettingInfo::Enum(
             StrId::STR_LONG_PRESS_MENU_ACTION, &InkMODSettings::longPressMenuAction,
             {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_TOGGLE_BOOKMARK, StrId::STR_READING_STATS,
              StrId::STR_MARK_FINISHED, StrId::STR_FORCE_REFRESH, StrId::STR_CHANGE_FONT, StrId::STR_TOGGLE_GUIDE_DOTS,
              StrId::STR_TOGGLE_BIONIC_READING, StrId::STR_CYCLE_PAGE_TURN, StrId::STR_SYNC_PROGRESS,
              StrId::STR_FILE_TRANSFER, StrId::STR_CALIBRE_WIRELESS, StrId::STR_JOIN_NETWORK, StrId::STR_CREATE_HOTSPOT,
-             StrId::STR_SCREENSHOT_BUTTON, StrId::STR_READER_DARK_MODE, StrId::STR_FOOTNOTES, StrId::STR_BROWSE_FILES},
+             StrId::STR_SCREENSHOT_BUTTON, StrId::STR_READER_DARK_MODE, StrId::STR_FOOTNOTES, StrId::STR_BROWSE_FILES,
+             StrId::STR_DICTIONARY},
             "longPressMenuAction", StrId::STR_CAT_CONTROLS)
             .withEnumRawValues(
                 {InkMODSettings::LONG_MENU_OFF, InkMODSettings::LONG_MENU_SLEEP,
@@ -503,14 +508,15 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                  InkMODSettings::LONG_MENU_CALIBRE_WIRELESS, InkMODSettings::LONG_MENU_JOIN_NETWORK,
                  InkMODSettings::LONG_MENU_CREATE_HOTSPOT, InkMODSettings::LONG_MENU_SCREENSHOT,
                  InkMODSettings::LONG_MENU_TOGGLE_DARK_MODE, InkMODSettings::LONG_MENU_FOOTNOTES,
-                 InkMODSettings::LONG_MENU_FILE_BROWSER}));
+                 InkMODSettings::LONG_MENU_FILE_BROWSER, InkMODSettings::LONG_MENU_DICTIONARY_LOOKUP}));
     add(SettingInfo::Enum(
             StrId::STR_LONG_PRESS_BACK_ACTION, &InkMODSettings::longPressBackAction,
             {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_TOGGLE_BOOKMARK, StrId::STR_READING_STATS,
              StrId::STR_MARK_FINISHED, StrId::STR_FORCE_REFRESH, StrId::STR_CHANGE_FONT, StrId::STR_TOGGLE_GUIDE_DOTS,
              StrId::STR_TOGGLE_BIONIC_READING, StrId::STR_CYCLE_PAGE_TURN, StrId::STR_SYNC_PROGRESS,
              StrId::STR_FILE_TRANSFER, StrId::STR_CALIBRE_WIRELESS, StrId::STR_JOIN_NETWORK, StrId::STR_CREATE_HOTSPOT,
-             StrId::STR_SCREENSHOT_BUTTON, StrId::STR_READER_DARK_MODE, StrId::STR_FOOTNOTES, StrId::STR_BROWSE_FILES},
+             StrId::STR_SCREENSHOT_BUTTON, StrId::STR_READER_DARK_MODE, StrId::STR_FOOTNOTES, StrId::STR_BROWSE_FILES,
+             StrId::STR_DICTIONARY},
             "longPressBackAction", StrId::STR_CAT_CONTROLS)
             .withEnumRawValues(
                 {InkMODSettings::LONG_MENU_OFF, InkMODSettings::LONG_MENU_SLEEP,
@@ -522,7 +528,7 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                  InkMODSettings::LONG_MENU_CALIBRE_WIRELESS, InkMODSettings::LONG_MENU_JOIN_NETWORK,
                  InkMODSettings::LONG_MENU_CREATE_HOTSPOT, InkMODSettings::LONG_MENU_SCREENSHOT,
                  InkMODSettings::LONG_MENU_TOGGLE_DARK_MODE, InkMODSettings::LONG_MENU_FOOTNOTES,
-                 InkMODSettings::LONG_MENU_FILE_BROWSER}));
+                 InkMODSettings::LONG_MENU_FILE_BROWSER, InkMODSettings::LONG_MENU_DICTIONARY_LOOKUP}));
     add(SettingInfo::Toggle(StrId::STR_PWR_BTN_FOOTNOTE_BACK, &InkMODSettings::pwrBtnFootnoteBack,
                             "pwrBtnFootnoteBack", StrId::STR_CAT_CONTROLS));
 
@@ -911,12 +917,14 @@ inline std::vector<SettingInfo> buildSystemSettingsParentList(const std::vector<
   systemSettings.push_back(SettingInfo::Submenu(StrId::STR_SYSTEM_DEVICE, SettingAction::SystemDevice));
   systemSettings.push_back(SettingInfo::Submenu(StrId::STR_SYSTEM_FILES_CACHE, SettingAction::SystemFilesCache));
   systemSettings.push_back(SettingInfo::Submenu(StrId::STR_READING_STATS, SettingAction::SystemReadingStats));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_BOOK_MENU_SETTINGS, SettingAction::BookMenuSettings));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_BOOT_OTHER_SLOT, SettingAction::SwitchOtaSlot));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_SUPPORT_INKMOD, SettingAction::SupportInkMOD));
   return systemSettings;
 }
 

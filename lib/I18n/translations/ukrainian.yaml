@@ -645,3 +645,23 @@ STR_NEARBY_STATS_SCANNING: "Пошук читалки для обміну ста
 STR_NEARBY_STATS_SYNCING: "Надсилання та отримання статистики"
 STR_NEARBY_STATS_SYNCED: "Обидві читалки синхронізовано"
 STR_NEARBY_STATS_SIMULATOR_UNAVAILABLE: "Синхронізація статистики поруч недоступна в симуляторі"
+
+STR_BOOK_MENU_SETTINGS: "Меню книги"
+
+STR_ASSIGNED_TO_BUTTON: "Призначено на кнопку"
+
+STR_SET_AS_SLEEP_OVERLAY: "Встановити як екран сну"
+STR_RENAME: "Перейменувати"
+STR_CREATE_CLIPPING: "Створити вирізку"
+STR_CLIPPINGS: "Вирізки"
+STR_NO_CLIPPINGS: "Вирізок поки немає"
+STR_CLIPPING_START: "Початок"
+STR_CLIPPING_DONE: "Зберегти"
+STR_CLIPPING_SAVED: "Вирізку збережено"
+STR_CLIPPING_LIMIT: "Досягнуто ліміт вирізок"
+STR_CLIPPING_DELETE_HINT: "Утримуйте «Відкрити» для видалення"
+STR_SUPPORT_INKMOD: "Підтримати InkMOD"
+STR_SUPPORT_INKMOD_TEXT: "Подобається InkMOD? Відскануйте QR-код і підтримайте проєкт у Telegram."
+STR_SUPPORT_INKMOD_THANKS: "Дякуємо, що допомагаєте InkMOD розвиватися."
+STR_SAVE_FAILED: "Не вдалося зберегти"
+STR_CLIPPING_REMOVED: "Вирізку видалено"

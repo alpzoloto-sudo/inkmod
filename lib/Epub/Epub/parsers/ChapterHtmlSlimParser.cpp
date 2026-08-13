@@ -6,6 +6,7 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <MemoryBudget.h>
+#include <ReaderWork.h>
 #include <Utf8.h>
 #include <XmlParserUtils.h>
 #include <expat.h>
@@ -52,6 +53,26 @@ static constexpr const char* const IMAGE_TAGS[] = {"img"};
 static constexpr const char* const SKIP_TAGS[] = {"head"};
 
 bool isWhitespace(const char c) { return c == ' ' || c == '\r' || c == '\n' || c == '\t'; }
+
+const char* lowMemoryImagePlaceholder(const std::string& key) {
+  static constexpr const char* PHRASES[] = {
+      "Я честно старалась это нарисовать, но оперативка сказала: нет.",
+      "Здесь должна была быть картинка. Она проиграла битву за RAM.",
+      "Я бы нарисовала это, но тут и шрифт еле помещается.",
+      "Эту иллюстрацию съела память. Представь, что она была прекрасна.",
+      "Картинка оказалась слишком роскошной для этой оперативки.",
+      "Тут была иллюстрация. ESP32 попросил оставить только буквы.",
+      "Я старалась. Правда. Но эта картинка оказалась сильнее меня.",
+  };
+
+  // Stable FNV-1a hash: phrase varies between images but not between boots.
+  uint32_t hash = 2166136261u;
+  for (const unsigned char ch : key) {
+    hash ^= ch;
+    hash *= 16777619u;
+  }
+  return PHRASES[hash % (sizeof(PHRASES) / sizeof(PHRASES[0]))];
+}
 
 static char asciiLower(const char c) { return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c; }
 
@@ -230,9 +251,9 @@ bool ChapterHtmlSlimParser::shouldAbortForLowMemory(const char* stage) {
 
   if (!attemptedTextLayoutFontCacheRelease) {
     attemptedTextLayoutFontCacheRelease = true;
-    if (renderer.releaseSdCardFontForLowMemory(fontId)) {
+    if (renderer.trimSdCardFontForLowMemory(fontId)) {
       const auto afterRelease = MemoryBudget::snapshot();
-      LOG_DBG("EHP", "Released SD font caches before %s: free=%u->%u maxAlloc=%u->%u", stage, heap.freeHeap,
+      LOG_DBG("EHP", "Trimmed SD font glyph cache before %s: free=%u->%u maxAlloc=%u->%u", stage, heap.freeHeap,
               afterRelease.freeHeap, heap.maxAllocHeap, afterRelease.maxAllocHeap);
       heap = afterRelease;
       if (heap.freeHeap >= MIN_FREE_HEAP_FOR_TEXT_LAYOUT && heap.maxAllocHeap >= MIN_MAX_ALLOC_FOR_TEXT_LAYOUT) {
@@ -850,6 +871,10 @@ void ChapterHtmlSlimParser::fallbackCurrentTableBufferIfNeeded(const char* stage
 
 void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char* name, const XML_Char** atts) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+  if (self->cancellationToken && self->cancellationToken->isCancellationRequested()) {
+    self->cancelled = true;
+    return;
+  }
   if (self->shouldAbortForLowMemory("element start")) {
     return;
   }
@@ -1090,6 +1115,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   if (matches(name, IMAGE_TAGS, std::size(IMAGE_TAGS))) {
     std::string src;
     std::string alt;
+    bool lowMemoryPlaceholderText = false;
     if (atts != nullptr) {
       bool amznM8Removed = false;
       for (int i = 0; atts[i]; i += 2) {
@@ -1132,9 +1158,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         {
           const auto releaseHeapBefore = MemoryBudget::snapshot();
           if (MemoryBudget::shouldReleaseSdFontCachesForEpubInlineImage(releaseHeapBefore) &&
-              self->renderer.releaseSdCardFontForLowMemory(self->fontId)) {
+              self->renderer.trimSdCardFontForLowMemory(self->fontId)) {
             const auto releaseHeapAfter = MemoryBudget::snapshot();
-            LOG_DBG("EHP", "Released SD font caches before image extraction: free=%u->%u maxAlloc=%u->%u src=%s",
+            LOG_DBG("EHP", "Trimmed page-local SD font glyphs before image extraction: free=%u->%u maxAlloc=%u->%u src=%s",
                     releaseHeapBefore.freeHeap, releaseHeapAfter.freeHeap, releaseHeapBefore.maxAllocHeap,
                     releaseHeapAfter.maxAllocHeap, src.c_str());
           }
@@ -1147,8 +1173,12 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
           }
 
           if (self->lowMemoryImageFallback) {
-            self->skipCurrentElement();
-            return;
+            // Keep the image's layout position meaningful instead of silently
+            // deleting it. A compact, deterministic in-book joke tells the
+            // reader that this specific illustration was omitted because the
+            // X3/X4 ran out of safe working RAM.
+            alt = lowMemoryImagePlaceholder(src);
+            lowMemoryPlaceholderText = true;
           } else {
             // Resolve the image path relative to the HTML file
             std::string resolvedPath = FsHelpers::normalisePath(FsHelpers::decodeUriEscapes(self->contentBase + src));
@@ -1166,11 +1196,16 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
               FsFile cachedImageFile;
               bool extractSuccess = false;
               if (Storage.openFileForWrite("EHP", cachedImagePath, cachedImageFile)) {
-                extractSuccess =
-                    self->epub->readItemContentsToStream(resolvedPath, cachedImageFile, IMAGE_EXTRACT_CHUNK_SIZE);
+                extractSuccess = self->epub->readItemContentsToStream(resolvedPath, cachedImageFile,
+                                                                      IMAGE_EXTRACT_CHUNK_SIZE,
+                                                                      self->cancellationToken);
                 cachedImageFile.flush();
                 cachedImageFile.close();
-                delay(50);  // Give SD card time to sync
+                if (extractSuccess) {
+                  delay(50);  // Give SD card time to sync
+                } else {
+                  Storage.remove(cachedImagePath.c_str());
+                }
               }
 
               if (extractSuccess) {
@@ -1439,9 +1474,20 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         }
       }
 
+      // Extraction can fail first and only then flip the low-memory fallback
+      // flag. In that case replace publisher alt text with the same friendly
+      // RAM placeholder. Broken/unsupported images that are NOT memory-related
+      // continue to use their normal alt text or remain skipped.
+      if (!src.empty() && self->lowMemoryImageFallback && !lowMemoryPlaceholderText) {
+        alt = lowMemoryImagePlaceholder(src);
+        lowMemoryPlaceholderText = true;
+      }
+
       // Fallback to alt text if image processing fails
       if (!alt.empty()) {
-        alt = "[Image: " + alt + "]";
+        if (!lowMemoryPlaceholderText) {
+          alt = "[Image: " + alt + "]";
+        }
         self->startNewTextBlock(self->blockStyleStack.back()
                                     .getCombinedBlockStyle(centeredBlockStyle, BlockStyle::CombineAxis::Horizontal)
                                     .withoutBottom());
@@ -1862,6 +1908,11 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
 void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char* s, const int len) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+  if (self->cancelled ||
+      (self->cancellationToken && self->cancellationToken->isCancellationRequested())) {
+    self->cancelled = true;
+    return;
+  }
   if (self->tableDepth == 1) {
     self->fallbackCurrentTableBufferIfNeeded("low heap while buffering table");
   }
@@ -2050,6 +2101,11 @@ void XMLCALL ChapterHtmlSlimParser::defaultHandlerExpand(void* userData, const X
 
 void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* name) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+  if (self->cancelled ||
+      (self->cancellationToken && self->cancellationToken->isCancellationRequested())) {
+    self->cancelled = true;
+    return;
+  }
   if (self->lowMemoryAbort) {
     return;
   }
@@ -2257,6 +2313,13 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
   // Compute the time taken to parse and build pages
   const uint32_t chapterStartTime = millis();
   do {
+    if (cancellationToken && cancellationToken->isCancellationRequested()) {
+      cancelled = true;
+      LOG_INF("EHP", "Section parse cancelled");
+      destroyXmlParser(parser);
+      file.close();
+      return false;
+    }
     void* const buf = XML_GetBuffer(parser, PARSE_BUFFER_SIZE);
     if (!buf) {
       LOG_ERR("EHP", "Couldn't allocate memory for buffer");
@@ -2290,6 +2353,12 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
       file.close();
       return false;
     }
+    if (cancelled) {
+      LOG_INF("EHP", "Aborting section parse after cancellation");
+      destroyXmlParser(parser);
+      file.close();
+      return false;
+    }
 
   } while (!done);
   LOG_DBG("EHP", "Time to parse and build pages: %lu ms (free=%u, maxAlloc=%u)", millis() - chapterStartTime,
@@ -2297,6 +2366,11 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
 
   destroyXmlParser(parser);
   file.close();
+
+  if (cancellationToken && cancellationToken->isCancellationRequested()) {
+    cancelled = true;
+    return false;
+  }
 
   // Process last page if there is still text
   if (currentTextBlock) {

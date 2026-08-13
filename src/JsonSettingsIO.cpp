@@ -194,6 +194,8 @@ bool JsonSettingsIO::saveSettings(const InkMODSettings& s, const char* path) {
     doc["sdFontFamilyName"] = s.sdFontFamilyName;
   }
 
+  doc["bookMenuLayout"] = s.bookMenuLayout;
+
   // Language -- managed by LanguageSelectActivity, not in SettingsList.
   // Stored as ISO code string ("EN", "DE", ...) for stability across enum reorders.
   doc["language"] = (s.language < getLanguageCount()) ? LANGUAGE_CODES[s.language] : "EN";
@@ -297,6 +299,12 @@ bool JsonSettingsIO::loadSettings(InkMODSettings& s, const char* json, bool* nee
       }
       s.*(info.valuePtr) = v;
     }
+  }
+
+  {
+    const char* layout = doc["bookMenuLayout"] | "";
+    strncpy(s.bookMenuLayout, layout, sizeof(s.bookMenuLayout) - 1);
+    s.bookMenuLayout[sizeof(s.bookMenuLayout) - 1] = '\0';
   }
 
   // Migration: preserve Minimal users' old two-line file browser default when the new

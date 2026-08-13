@@ -11,7 +11,9 @@
 
 #pragma once
 #include <cstdint>
+#include <deque>
 #include <string>
+#include <string_view>
 #include <vector>
 
 struct Fb2Author {
@@ -54,17 +56,23 @@ struct Fb2Metadata {
 // of sections exhausts the ESP32-C3 heap before the index can be persisted.
 struct Fb2SectionIndexEntry {
     uint32_t innerStartOffset = 0; // offset right after the opening <section ...> tag
-    uint16_t level = 0;         // nesting depth, 0 = direct child of <body>
-    int32_t bodyIndex = 0;      // which <body> this section lives under
-    std::string id;             // section's id="" attribute, if any
-    std::string title;          // flattened text of the section's <title>, if any
+    uint16_t level = 0;            // nesting depth, 0 = direct child of <body>
+    int16_t bodyIndex = 0;         // which <body> this section lives under
+
+    // IMPORTANT: do not put std::string here.
+    //
+    // A 700-section anthology previously kept two std::string objects in
+    // EVERY section entry even when most IDs were empty. On ESP32-C3 the
+    // object/capacity overhead alone consumed tens of KiB before actual title
+    // bytes were counted. Offsets below point into Fb2ScanResult::stringPool,
+    // so one bounded contiguous allocation holds all section text.
+    uint32_t idPoolOffset = UINT32_MAX;
+    uint16_t idLength = 0;
+    uint32_t titlePoolOffset = UINT32_MAX;
+    uint16_t titleLength = 0;
+
     uint32_t approxTextBytes = 0; // decoded-text size estimate, for progress math
-    uint32_t imageRefCount = 0; // count of inline <image> tags directly under this
-                                 // section (not nested sub-sections' own images) -
-                                 // used to split image-heavy sections into several
-                                 // virtual chapters so a low-memory device isn't
-                                 // asked to extract dozens of images for one chapter
-                                 // at once (see Fb2.h's chapter-splitting comment).
+    uint16_t imageRefCount = 0;   // direct inline images, capped at UINT16_MAX
 };
 
 // One entry per top-level <body>. CrossPoint currently only renders the
@@ -86,8 +94,30 @@ struct Fb2BinaryIndexEntry {
 struct Fb2ScanResult {
     Fb2Metadata metadata;
     std::vector<Fb2BodyIndexEntry> bodies;
-    std::vector<Fb2SectionIndexEntry> sections;   // flat, in document order
-    std::vector<Fb2BinaryIndexEntry> binaries;
+    std::deque<Fb2SectionIndexEntry> sections;   // flat, in document order
+    std::deque<Fb2BinaryIndexEntry> binaries;
+
+    // Shared pool for section IDs/titles. It is deliberately bounded: TOC
+    // text is useful, but must never be allowed to consume the reader heap.
+    // The parser reserves this once near the start of a seekable scan, so the
+    // heap does not get fragmented by hundreds of tiny title allocations.
+    std::string stringPool;
+
+    std::string_view sectionId(const Fb2SectionIndexEntry& section) const {
+        if (section.idPoolOffset == UINT32_MAX || section.idLength == 0 ||
+            section.idPoolOffset + section.idLength > stringPool.size()) {
+            return {};
+        }
+        return std::string_view(stringPool.data() + section.idPoolOffset, section.idLength);
+    }
+
+    std::string_view sectionTitle(const Fb2SectionIndexEntry& section) const {
+        if (section.titlePoolOffset == UINT32_MAX || section.titleLength == 0 ||
+            section.titlePoolOffset + section.titleLength > stringPool.size()) {
+            return {};
+        }
+        return std::string_view(stringPool.data() + section.titlePoolOffset, section.titleLength);
+    }
 };
 
 // ---------------------------------------------------------------------

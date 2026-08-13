@@ -23,6 +23,13 @@ class XtcReaderActivity final : public Activity {
   bool frontButtonLongPressHandled = false;
   bool longPressBackHandled = false;
 
+  // 2-bit XTC burst protection.
+  // Fast repeated turns are allowed without forcing a full flash on every page.
+  // After the user stops a rapid burst, the final page gets one cleanup refresh.
+  uint32_t lastXtcPageTurnMs = 0;
+  uint8_t rapidXtcTurnCount = 0;
+  bool rapidXtcCleanupPending = false;
+
   enum class StatusBarOverlayPosition { Bottom, Top };
   struct StatusBarInfo {
     int currentPage;

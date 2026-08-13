@@ -32,3 +32,8 @@ h2 {
         font-size: 0.85em;
         font-weight: 600;
       }
+
+.support-card{margin-top:16px;text-align:left}
+.support-copy{margin:0 0 14px;color:var(--label-color);line-height:1.5}
+.support-button{display:inline-flex;align-items:center;justify-content:center;text-decoration:none;padding:10px 16px;border-radius:9px;background:var(--accent-color);color:var(--accent-contrast);font-weight:600;border:1px solid var(--accent-color)}
+.support-button:hover{filter:brightness(.96)}

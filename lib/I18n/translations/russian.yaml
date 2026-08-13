@@ -644,3 +644,23 @@ STR_NEARBY_STATS_SCANNING: "Поиск устройства для обмена 
 STR_NEARBY_STATS_SYNCING: "Передача и получение статистики"
 STR_NEARBY_STATS_SYNCED: "Оба устройства синхронизированы"
 STR_NEARBY_STATS_SIMULATOR_UNAVAILABLE: "Синхронизация статистики недоступна в симуляторе"
+
+STR_BOOK_MENU_SETTINGS: "Меню книги"
+
+STR_ASSIGNED_TO_BUTTON: "Назначено на кнопку"
+
+STR_SET_AS_SLEEP_OVERLAY: "Установить как экран сна"
+STR_RENAME: "Переименовать"
+STR_CREATE_CLIPPING: "Создать вырезку"
+STR_CLIPPINGS: "Вырезки"
+STR_NO_CLIPPINGS: "Вырезок пока нет"
+STR_CLIPPING_START: "Начало"
+STR_CLIPPING_DONE: "Сохранить"
+STR_CLIPPING_SAVED: "Вырезка сохранена"
+STR_CLIPPING_LIMIT: "Достигнут лимит вырезок"
+STR_CLIPPING_DELETE_HINT: "Удерживайте «Открыть» для удаления"
+STR_SUPPORT_INKMOD: "Поддержать InkMOD"
+STR_SUPPORT_INKMOD_TEXT: "Нравится InkMOD? Сканируйте QR-код и поддержите проект в Telegram."
+STR_SUPPORT_INKMOD_THANKS: "Спасибо, что помогаете InkMOD развиваться."
+STR_SAVE_FAILED: "Не удалось сохранить"
+STR_CLIPPING_REMOVED: "Вырезка удалена"

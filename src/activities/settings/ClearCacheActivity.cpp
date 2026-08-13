@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "InkMODState.h"
+#include "InkMODHumor.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
@@ -57,6 +58,9 @@ void ClearCacheActivity::render(RenderLock&&) {
       resultText += ", " + std::to_string(failedCount) + " " + std::string(tr(STR_FAILED_LOWER));
     }
     renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 10, resultText.c_str());
+    InkMODHumor::drawBounded(renderer, InkMODHumor::Moment::CacheCleared, 0, pageHeight / 2 + 48, pageWidth,
+                             std::max(0, pageHeight / 2 - metrics.buttonHintsHeight - 62), SMALL_FONT_ID, true,
+                             static_cast<uint32_t>(clearedCount));
 
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
@@ -68,6 +72,9 @@ void ClearCacheActivity::render(RenderLock&&) {
     renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 - 20, tr(STR_CLEAR_CACHE_FAILED), true,
                               EpdFontFamily::BOLD);
     renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 10, tr(STR_CHECK_SERIAL_OUTPUT));
+    InkMODHumor::drawBounded(renderer, InkMODHumor::Moment::CacheFailed, 0, pageHeight / 2 + 48, pageWidth,
+                             std::max(0, pageHeight / 2 - metrics.buttonHintsHeight - 62), SMALL_FONT_ID, true,
+                             static_cast<uint32_t>(failedCount));
 
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);

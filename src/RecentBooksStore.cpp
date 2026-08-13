@@ -17,6 +17,23 @@ constexpr char RECENT_BOOKS_FILE_BIN[] = "/.inkmod/recent.bin";
 constexpr char RECENT_BOOKS_FILE_JSON[] = "/.inkmod/recent.json";
 constexpr char RECENT_BOOKS_FILE_BAK[] = "/.inkmod/recent.bin.bak";
 constexpr int MAX_RECENT_BOOKS = 18;
+constexpr char MY_CLIPPINGS_FILE[] = "My Clippings.txt";
+
+bool isMyClippingsExportPath(const std::string& path) {
+  const size_t slash = path.find_last_of("/\\");
+  const std::string_view name =
+      slash == std::string::npos ? std::string_view(path) : std::string_view(path).substr(slash + 1);
+
+  if (name.size() != sizeof(MY_CLIPPINGS_FILE) - 1) return false;
+  for (size_t i = 0; i < name.size(); ++i) {
+    unsigned char a = static_cast<unsigned char>(name[i]);
+    unsigned char b = static_cast<unsigned char>(MY_CLIPPINGS_FILE[i]);
+    if (a >= 'A' && a <= 'Z') a = static_cast<unsigned char>(a - 'A' + 'a');
+    if (b >= 'A' && b <= 'Z') b = static_cast<unsigned char>(b - 'A' + 'a');
+    if (a != b) return false;
+  }
+  return true;
+}
 }  // namespace
 
 RecentBooksStore RecentBooksStore::instance;
@@ -28,6 +45,13 @@ void RecentBooksStore::addBook(const std::string& path, const std::string& title
 
 void RecentBooksStore::addOrUpdateBook(const std::string& path, const std::string& title, const std::string& author,
                                        const std::string& coverBmpPath) {
+  // /My Clippings.txt is an InkMOD export artifact, not a book. Never allow
+  // opening it from the file browser to promote it into Recent Books.
+  if (isMyClippingsExportPath(path)) {
+    removeByPath(path);  // also cleans up an entry created by older builds
+    return;
+  }
+
   // Drop stale entries first so a new add can't evict a valid book in their stead.
   pruneMissing();
 
@@ -98,7 +122,10 @@ bool RecentBooksStore::isMissing(const RecentBook& book) { return !Storage.exist
 
 bool RecentBooksStore::pruneMissing() {
   const size_t before = recentBooks.size();
-  recentBooks.erase(std::remove_if(recentBooks.begin(), recentBooks.end(), &isMissing), recentBooks.end());
+  recentBooks.erase(
+      std::remove_if(recentBooks.begin(), recentBooks.end(),
+                     [](const RecentBook& book) { return isMissing(book) || isMyClippingsExportPath(book.path); }),
+      recentBooks.end());
   return recentBooks.size() != before;
 }
 
@@ -115,6 +142,10 @@ RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
   }
 
   LOG_DBG("RBS", "Loading recent book: %s", path.c_str());
+
+  if (isMyClippingsExportPath(path)) {
+    return RecentBook{path, "", "", ""};
+  }
 
   // If epub, try to load the metadata for title/author and cover.
   // Use buildIfMissing=false to avoid heavy epub loading on boot; getTitle()/getAuthor() may be
@@ -140,7 +171,14 @@ bool RecentBooksStore::loadFromFile() {
   if (Storage.exists(RECENT_BOOKS_FILE_JSON)) {
     String json = Storage.readFile(RECENT_BOOKS_FILE_JSON);
     if (!json.isEmpty()) {
-      return JsonSettingsIO::loadRecentBooks(*this, json.c_str());
+      if (!JsonSettingsIO::loadRecentBooks(*this, json.c_str())) {
+        return false;
+      }
+      if (pruneMissing()) {
+        LOG_DBG("RBS", "Removed non-book export/stale entries from recents");
+        saveToFile();
+      }
+      return true;
     }
   }
 
@@ -220,6 +258,7 @@ bool RecentBooksStore::loadFromBinaryFile() {
     return false;
   }
 
+  pruneMissing();
   LOG_DBG("RBS", "Recent books loaded from binary file (%d entries)", static_cast<int>(recentBooks.size()));
   return true;
 }

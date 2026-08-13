@@ -1,38 +1,22 @@
-inkMOD 1.1.3 — XTC / paragraph spacing / clock-disabled stats fix
-================================================================
+InkMOD Telegram support patch
 
-1) XTC/XTCH 2-bit low-memory render
-- Раньше XTC reader пытался malloc(96000) для страницы 480x800x2bit.
-- На реальном X4 было Free ~110 KB, но MaxAlloc ~69 KB, поэтому книга сразу
-  показывала "Ошибка памяти".
-- Теперь хранится только первая 48-KB bit-plane.
-- Вторая bit-plane читается потоково кусками по 2 KB для каждого grayscale pass.
-- Максимальная крупная XTC-аллокация падает примерно с 96 KB до 48 KB.
-- 1-bit XTC путь не менялся.
+Adds:
+- System -> "Поддержать InkMOD ❤️"
+- bounded QR screen to https://t.me/inkmodx4
+- @inkmodx4 label
+- EN/RU/UK translations
+- web-home support card/button to the Telegram channel
 
-2) Paragraph spacing
-- extra paragraph spacing: 1/3 высоты строки -> 1/4.
-- Изменено во всех трех местах ChapterHtmlSlimParser, включая таблицы.
+No nags, ads, paid locks or disabled features.
 
-3) Statistics when clock is disabled
-- Если Clock Disabled включён, BookStatsView теперь использует no-RTC/X4 layout.
-- halClock может оставаться available на X4 из-за software clock, поэтому раньше
-  статистика продолжала выглядеть как RTC/X3.
-- При включённых часах поведение осталось прежним.
+QR layout is bounded for X3/X4:
+- intro max 3 lines
+- QR size derived from remaining content area
+- footer only drawn if it fits
+- bottom button-hint area reserved
 
-Основа пакета:
-inkmod 1.1.3 release candidate source, включая предыдущие FB2 v8 и UI fixes.
+Does NOT touch XTC, FB2/EPUB, dictionary, clippings, sleep, battery,
+power-saving, wallpaper generator or display code.
 
-Установка:
-скопировать содержимое архива поверх текущего проекта с заменой файлов.
-Папку rollback не копировать.
-
-Сборка:
-  pio run -e tiny
-
-Проверка:
-- XTC/XTCH 2-bit открывается без "Ошибка памяти";
-- пролистать несколько XTC страниц и проверить оттенки серого;
-- EPUB/FB2 с включенным "Расстояние между абзацами";
-- отключить часы и открыть статистику: должен вернуться компактный X4/no-RTC вид;
-- снова включить часы: RTC-статистика должна вернуться.
+Build:
+  pio run -e developer -t upload

@@ -140,64 +140,106 @@ int pngOverlayDraw(PNGDRAW* pDraw) {
   const int pixelType = pDraw->iPixelType;
   const int hasAlpha = pDraw->iHasAlpha;
 
-  int srcX = 0, error = 0;
-  for (int dstX = 0; dstX < dstWidth; dstX++) {
-    const int outX = ctx->dstX + dstX;
-    if (outX >= 0 && outX < ctx->screenW) {
-      uint8_t alpha = 255, gray = 0;
-      switch (pixelType) {
-        case PNG_PIXEL_TRUECOLOR_ALPHA: {
-          const uint8_t* p = &pixels[srcX * 4];
-          alpha = p[3];
-          gray = (uint8_t)((p[0] * 77 + p[1] * 150 + p[2] * 29) >> 8);
-          break;
-        }
-        case PNG_PIXEL_GRAY_ALPHA:
-          gray = pixels[srcX * 2];
-          alpha = pixels[srcX * 2 + 1];
-          break;
-        case PNG_PIXEL_TRUECOLOR: {
-          const uint8_t* p = &pixels[srcX * 3];
-          gray = (uint8_t)((p[0] * 77 + p[1] * 150 + p[2] * 29) >> 8);
-          // tRNS color-key: if pixel matches the designated transparent color, skip it
-          if (ctx->transparentColor >= 0 && p[0] == (uint8_t)((ctx->transparentColor >> 16) & 0xFF) &&
-              p[1] == (uint8_t)((ctx->transparentColor >> 8) & 0xFF) &&
-              p[2] == (uint8_t)(ctx->transparentColor & 0xFF)) {
-            alpha = 0;
-          }
-          break;
-        }
-        case PNG_PIXEL_GRAYSCALE:
-          gray = pixels[srcX];
-          // tRNS color-key: transparent gray value stored in low byte
-          if (ctx->transparentColor >= 0 && gray == (uint8_t)(ctx->transparentColor & 0xFF)) {
-            alpha = 0;
-          }
-          break;
-        case PNG_PIXEL_INDEXED:
-          if (pDraw->pPalette) {
-            const uint8_t idx = pixels[srcX];
-            const uint8_t* p = &pDraw->pPalette[idx * 3];
-            gray = (uint8_t)((p[0] * 77 + p[1] * 150 + p[2] * 29) >> 8);
-            if (hasAlpha) alpha = pDraw->pPalette[768 + idx];
-          }
-          break;
-        default:
-          gray = pixels[srcX];
-          break;
+  // Find the visible drawing span on this scanline. The exterior near-white
+  // background stays transparent, but ALL pixels between the first and last
+  // real drawing pixel belong to the overlay. This is important for line-art:
+  // white skin/clothes/highlights inside the outline must be painted white so
+  // reader glyphs cannot show through them.
+  auto sourceGray = [&](int x) -> uint8_t {
+    switch (pixelType) {
+      case PNG_PIXEL_TRUECOLOR_ALPHA: {
+        const uint8_t* p = &pixels[x * 4];
+        return static_cast<uint8_t>((p[0] * 77 + p[1] * 150 + p[2] * 29) >> 8);
       }
+      case PNG_PIXEL_GRAY_ALPHA:
+        return pixels[x * 2];
+      case PNG_PIXEL_TRUECOLOR: {
+        const uint8_t* p = &pixels[x * 3];
+        return static_cast<uint8_t>((p[0] * 77 + p[1] * 150 + p[2] * 29) >> 8);
+      }
+      case PNG_PIXEL_GRAYSCALE:
+        return pixels[x];
+      case PNG_PIXEL_INDEXED: {
+        if (!pDraw->pPalette) return 0;
+        const uint8_t* p = &pDraw->pPalette[pixels[x] * 3];
+        return static_cast<uint8_t>((p[0] * 77 + p[1] * 150 + p[2] * 29) >> 8);
+      }
+      default:
+        return pixels[x];
+    }
+  };
 
-      if (alpha >= 128) {
-        ctx->renderer->drawPixel(outX, destY, gray < 128);  // true = black, false = white
+  auto sourceAlpha = [&](int x) -> uint8_t {
+    switch (pixelType) {
+      case PNG_PIXEL_TRUECOLOR_ALPHA:
+        return pixels[x * 4 + 3];
+      case PNG_PIXEL_GRAY_ALPHA:
+        return pixels[x * 2 + 1];
+      case PNG_PIXEL_INDEXED:
+        if (hasAlpha && pDraw->pPalette) return pDraw->pPalette[768 + pixels[x]];
+        return 255;
+      case PNG_PIXEL_TRUECOLOR: {
+        if (ctx->transparentColor < 0) return 255;
+        const uint8_t* p = &pixels[x * 3];
+        return (p[0] == static_cast<uint8_t>((ctx->transparentColor >> 16) & 0xFF) &&
+                p[1] == static_cast<uint8_t>((ctx->transparentColor >> 8) & 0xFF) &&
+                p[2] == static_cast<uint8_t>(ctx->transparentColor & 0xFF))
+                   ? 0
+                   : 255;
       }
-      // alpha < 128: transparent — leave the reader page pixel intact
+      case PNG_PIXEL_GRAYSCALE:
+        if (ctx->transparentColor >= 0 &&
+            pixels[x] == static_cast<uint8_t>(ctx->transparentColor & 0xFF)) {
+          return 0;
+        }
+        return 255;
+      default:
+        return 255;
+    }
+  };
+
+  constexpr uint8_t kBackgroundWhite = 245;
+  int firstInk = -1;
+  int lastInk = -1;
+  for (int x = 0; x < srcWidth; ++x) {
+    if (sourceAlpha(x) >= 128 && sourceGray(x) < kBackgroundWhite) {
+      if (firstInk < 0) firstInk = x;
+      lastInk = x;
+    }
+  }
+
+  // A completely white/transparent row is exterior background: leave the
+  // saved reader page untouched.
+  if (firstInk < 0) return 1;
+
+  int srcX = 0;
+  int error = 0;
+  for (int dstX = 0; dstX < dstWidth; ++dstX) {
+    const int outX = ctx->dstX + dstX;
+    if (outX >= 0 && outX < ctx->screenW && srcX >= firstInk && srcX <= lastInk) {
+      const uint8_t alpha = sourceAlpha(srcX);
+      if (alpha >= 128) {
+        const uint8_t gray = sourceGray(srcX);
+
+        // The entire silhouette span is opaque. White pixels explicitly clear
+        // old reader text; gray pixels use a stable 2x2 dither; dark pixels
+        // remain black.
+        bool black = false;
+        if (gray < 64) {
+          black = true;
+        } else if (gray < 160) {
+          black = ((outX + destY) & 1) == 0;
+        } else if (gray < kBackgroundWhite) {
+          black = ((outX & 1) == 0) && ((destY & 1) == 0);
+        }
+        ctx->renderer->drawPixel(outX, destY, black);
+      }
     }
 
-    // Bresenham-style X stepping (handles downscaling; 1:1 when srcWidth == dstWidth)
     error += srcWidth;
     while (error >= dstWidth) {
       error -= dstWidth;
-      srcX++;
+      ++srcX;
     }
   }
   return 1;
@@ -1309,9 +1351,92 @@ void SleepActivity::renderOverlaySleepScreen() const {
       y = (pageHeight - bitmap.getHeight()) / 2;
     }
 
-    // Draw without clearScreen so the reader page remains in the frame buffer beneath
-    LOG_INF("SLP", "Drawing BMP overlay: %s", filename.c_str());
-    renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, cropX, cropY);
+    // The generic drawBitmap() intentionally skips white pixels in BW mode.
+    // That is useful for icons, but wrong for a sleep overlay: white skin,
+    // clothes and highlights would become transparent and reader text would
+    // show through. Composite scanline-by-scanline instead.
+    LOG_INF("SLP", "Drawing BMP overlay with opaque silhouette: %s", filename.c_str());
+
+    const int srcW = bitmap.getWidth();
+    const int srcH = bitmap.getHeight();
+    const float scale = std::min(1.0f, std::min(static_cast<float>(pageWidth) / srcW,
+                                                static_cast<float>(pageHeight) / srcH));
+    const int dstW = std::max(1, static_cast<int>(std::round(srcW * scale)));
+    const int dstH = std::max(1, static_cast<int>(std::round(srcH * scale)));
+    const int dstX0 = (pageWidth - dstW) / 2;
+    const int dstY0 = (pageHeight - dstH) / 2;
+
+    const int packedRowBytes = (srcW + 3) / 4;
+    uint8_t* packed = new (std::nothrow) uint8_t[packedRowBytes];
+    uint8_t* rawRow = new (std::nothrow) uint8_t[bitmap.getRowBytes()];
+    if (!packed || !rawRow) {
+      delete[] packed;
+      delete[] rawRow;
+      file.close();
+      LOG_ERR("SLP", "Not enough heap for BMP overlay row buffers");
+      return OverlayDrawResult::Failed;
+    }
+
+    if (bitmap.rewindToData() != BmpReaderError::Ok) {
+      delete[] packed;
+      delete[] rawRow;
+      file.close();
+      LOG_ERR("SLP", "Failed to rewind BMP overlay");
+      return OverlayDrawResult::Failed;
+    }
+
+    int lastDstY = -1;
+    for (int fileRow = 0; fileRow < srcH; ++fileRow) {
+      if (bitmap.readNextRow(packed, rawRow) != BmpReaderError::Ok) {
+        delete[] packed;
+        delete[] rawRow;
+        file.close();
+        LOG_ERR("SLP", "Failed to read BMP overlay row %d", fileRow);
+        return OverlayDrawResult::Failed;
+      }
+
+      const int logicalY = bitmap.isTopDown() ? fileRow : (srcH - 1 - fileRow);
+      const int dstY = dstY0 + static_cast<int>(std::floor(logicalY * scale));
+      if (dstY == lastDstY || dstY < 0 || dstY >= pageHeight) continue;
+      lastDstY = dstY;
+
+      auto valueAt = [&](const int sx) -> uint8_t {
+        return static_cast<uint8_t>((packed[sx / 4] >> (6 - ((sx * 2) % 8))) & 0x3);
+      };
+
+      int firstInk = -1;
+      int lastInk = -1;
+      for (int sx = 0; sx < srcW; ++sx) {
+        if (valueAt(sx) < 3) {
+          if (firstInk < 0) firstInk = sx;
+          lastInk = sx;
+        }
+      }
+      if (firstInk < 0) continue;
+
+      for (int dx = 0; dx < dstW; ++dx) {
+        const int sx = std::min(srcW - 1, static_cast<int>(dx / scale));
+        if (sx < firstInk || sx > lastInk) continue;
+
+        const int outX = dstX0 + dx;
+        if (outX < 0 || outX >= pageWidth) continue;
+
+        const uint8_t v = valueAt(sx);
+        bool black = false;
+        if (v == 0) {
+          black = true;
+        } else if (v == 1) {
+          black = ((outX + dstY) & 1) == 0;
+        } else if (v == 2) {
+          black = ((outX & 1) == 0) && ((dstY & 1) == 0);
+        }
+        // v==3 is deliberately drawn white INSIDE the silhouette span.
+        renderer.drawPixel(outX, dstY, black);
+      }
+    }
+
+    delete[] packed;
+    delete[] rawRow;
     file.close();
     return OverlayDrawResult::Drawn;
   };
@@ -1424,7 +1549,13 @@ void SleepActivity::renderOverlaySleepScreen() const {
   // over the sleep image.
   const bool shouldRunGrayscalePass = shouldUseReaderPageBackground && backgroundSupportsGrayscale && !overlayDrawn &&
                                       (backgroundWasRebuilt || (overlayBackgroundBufferStored && !path.empty()));
-  renderer.displayBuffer(HalDisplay::HALF_REFRESH, !shouldRunGrayscalePass && TURN_OFF_SCREEN_AFTER_SLEEP_REFRESH);
+  // The overlay compositor now paints white pixels inside the image silhouette
+  // explicitly, so a forced full-screen waveform is no longer necessary.
+  // Keep sleep entry quiet: use the normal HALF_REFRESH for the composited frame.
+  // This removes the visible full-flash "disco" while preserving the opaque
+  // character mask and the saved reader page outside it.
+  renderer.displayBuffer(HalDisplay::HALF_REFRESH,
+                         !shouldRunGrayscalePass && TURN_OFF_SCREEN_AFTER_SLEEP_REFRESH);
 
   if (!shouldRunGrayscalePass) {
     return;

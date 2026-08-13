@@ -220,6 +220,7 @@ class InkMODSettings {
     CALIBRE_WIRELESS = 18,
     JOIN_NETWORK = 19,
     CREATE_HOTSPOT = 20,
+    DICTIONARY_LOOKUP = 21,
     SHORT_PWRBTN_COUNT
   };
 
@@ -289,6 +290,7 @@ class InkMODSettings {
     LONG_MENU_CALIBRE_WIRELESS = 17,
     LONG_MENU_JOIN_NETWORK = 18,
     LONG_MENU_CREATE_HOTSPOT = 19,
+    LONG_MENU_DICTIONARY_LOOKUP = 20,
     LONG_PRESS_MENU_ACTION_COUNT
   };
 
@@ -467,6 +469,8 @@ class InkMODSettings {
   uint8_t language = 0;
   // Custom KOReader sync device display name. Empty means use the hardware default.
   char deviceName[21] = "";
+  // Compact persisted reader-menu order. Prefix an id with ! to hide it.
+  char bookMenuLayout[128] = "";
   // Quick Resume: keep current content visible with moon icon instead of showing a static sleep screen.
   uint8_t quickResumeSleepScreen = QUICK_RESUME_NEVER;
 #ifdef INKMOD_ENABLE_READING_STATS_TOGGLE

@@ -18,6 +18,8 @@ enum class FileBrowserAction : int {
   ToggleCompleted = 6,
   RemoveFromRecents = 7,
   DeleteStats = 8,
+  SetSleepOverlay = 9,
+  Rename = 10,
 };
 
 class FileBrowserActionActivity final : public Activity {

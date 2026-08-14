@@ -1,3 +1,24 @@
+# inkMOD — Custom Firmware for Xteink X4 / X3
+
+**inkMOD** is an open-source custom firmware for **Xteink X4 and Xteink X3**
+with native **FB2 / FB2.ZIP / EPUB** reading, Russian and Ukrainian localization,
+dictionaries, improved typography, sleep covers, web file manager and EPUB optimization.
+
+## inkMOD for Xteink X4
+
+inkMOD extends the Xteink X4 e-reader with:
+
+- Native FB2 and FB2.ZIP support
+- EPUB support
+- Russian and Ukrainian interface
+- StarDict dictionaries
+- Word hyphenation
+- Custom fonts and Unicode fallback
+- Web file manager
+- EPUB optimization
+- Custom sleep screens and book covers
+- Reading statistics
+
 # inkMOD
 
 A community mod of the inkMOD e-reader firmware featuring Russian and Ukrainian interface localization, expanded format support, and comprehensive UI and reliability enhancements.

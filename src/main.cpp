@@ -520,7 +520,11 @@ void enterDeepSleep(bool fromTimeout) {
       SETTINGS.sleepScreen == InkMODSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
       (fromTimeout &&
        SETTINGS.quickResumeSleepScreen == InkMODSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT);
-  APP_STATE.showBootScreen = !isQuickResumeSleep;
+  // Any automatic timeout sleep should wake like a real resume, not a cold boot.
+  // The selected timeout sleep screen is still rendered; we simply preserve it
+  // and skip the inkMOD splash on wake. Manual/power-button sleep keeps the splash.
+  const bool resumeWithoutSplash = fromTimeout || isQuickResumeSleep;
+  APP_STATE.showBootScreen = !resumeWithoutSplash;
 
   APP_STATE.saveToFile();
 
@@ -529,7 +533,7 @@ void enterDeepSleep(bool fromTimeout) {
   deepSleepInProgress = true;
   activityManager.goToSleep(fromTimeout);
 
-  if (isQuickResumeSleep) {
+  if (resumeWithoutSplash) {
     saveSleepFrameBuffer();
   } else {
     delay(POST_SLEEP_SCREEN_SETTLE_MS);

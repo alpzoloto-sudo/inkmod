@@ -2321,7 +2321,10 @@ void EpubReaderActivity::executeReaderQuickAction(InkMODSettings::LONG_PRESS_MEN
       onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction::BOOKMARK_TOGGLE);
       break;
     case InkMODSettings::LONG_MENU_REFRESH_SCREEN:
-      pagesUntilFullRefresh = 1;  // Forces HALF_REFRESH on next render
+      // Clean ghosting immediately, then repaint through the normal reader path
+      // so grayscale/anti-aliasing is applied again after the forced refresh.
+      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+      pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
       requestUpdate();
       break;
     case InkMODSettings::LONG_MENU_SYNC_PROGRESS:

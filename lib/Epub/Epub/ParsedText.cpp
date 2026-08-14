@@ -367,8 +367,7 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
   // on a narrow 480 px reader.  When the user explicitly chooses "Justify",
   // use the language-aware hyphenator even if the separate hyphenation toggle
   // is off. Left/center/right alignment keep respecting that toggle exactly.
-  const bool smartJustifiedHyphenation = blockStyle.alignment == CssTextAlign::Justify;
-  if (hyphenationEnabled || smartJustifiedHyphenation) {
+  if (hyphenationEnabled) {
     lineBreakIndices = computeHyphenatedLineBreaks(renderer, fontId, pageWidth, wordWidths, wordContinues);
   } else {
     lineBreakIndices = computeLineBreaks(renderer, fontId, pageWidth, wordWidths, wordContinues);
@@ -415,16 +414,7 @@ std::vector<size_t> ParsedText::computeLineBreaks(const GfxRenderer& renderer, c
 
   const int firstLineIndent = resolveFirstLineIndent(true, renderer, fontId);
 
-  // Ensure any word that would overflow even as the first entry on a line is split using fallback hyphenation.
-  for (size_t i = 0; i < wordWidths.size(); ++i) {
-    // First word needs to fit in reduced width if there's an indent
-    const int effectiveWidth = i == 0 ? pageWidth - firstLineIndent : pageWidth;
-    while (wordWidths[i] > effectiveWidth) {
-      if (!hyphenateWordAtIndex(i, effectiveWidth, renderer, fontId, wordWidths, /*allowFallbackBreaks=*/true)) {
-        break;
-      }
-    }
-  }
+  // Hyphenation is disabled here. Do not silently split oversized words.
 
   const size_t totalWordCount = words.size();
 

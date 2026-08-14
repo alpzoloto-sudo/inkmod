@@ -334,7 +334,10 @@ bool TxtReaderActivity::executeLongPressBackAction() {
       enterDeepSleep();
       return true;
     case InkMODSettings::LONG_PRESS_MENU_ACTION::LONG_MENU_REFRESH_SCREEN:
-      pagesUntilFullRefresh = 1;
+      // Clean ghosting immediately, then repaint normally so smoothing/grayscale
+      // is restored instead of leaving the page in the temporary 1-bit state.
+      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+      pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
       requestUpdate();
       return true;
     case InkMODSettings::LONG_PRESS_MENU_ACTION::LONG_MENU_FILE_TRANSFER:

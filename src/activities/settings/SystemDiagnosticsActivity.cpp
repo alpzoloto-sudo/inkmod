@@ -115,13 +115,19 @@ void SystemDiagnosticsActivity::render(RenderLock&&) {
   const bool crashReport = Storage.exists("/crash_report.txt");
 
   std::vector<std::pair<std::string, std::string>> rows;
-  rows.reserve(9);
+  rows.reserve(10);
   rows.push_back({tr(STR_DIAG_FIRMWARE), std::string(INKMOD_VERSION) + " (" + INKMOD_FIRMWARE_VARIANT + ")"});
   rows.push_back({tr(STR_DIAG_DEVICE), gpio.deviceIsX3() ? "X3" : "X4"});
   rows.push_back({tr(STR_DIAG_FREE_HEAP), bytesHuman(heap.freeHeap)});
   rows.push_back({tr(STR_DIAG_MAX_ALLOC), bytesHuman(heap.maxAllocHeap)});
   rows.push_back({tr(STR_INTERNAL_STORAGE), StorageUsageCalc::display()});
-  rows.push_back({tr(STR_SINCE_LAST_CHARGE), sinceLastChargeDisplay()});
+  rows.push_back({tr(STR_BATTERY), std::to_string(powerManager.getBatteryPercentage()) + "%"});
+  // X4's "since last charge" depends on the software clock. When the clock is
+  // disabled the value is not meaningful, so omit the row instead of showing
+  // stale/partial timing information.
+  if (!SETTINGS.clockDisabled) {
+    rows.push_back({tr(STR_SINCE_LAST_CHARGE), sinceLastChargeDisplay()});
+  }
   rows.push_back({tr(STR_DIAG_RESET_REASON), resetReasonDisplay()});
   rows.push_back({tr(STR_DIAG_CRASH_REPORT), crashReport ? tr(STR_YES) : tr(STR_NO)});
 

@@ -29,6 +29,21 @@ A community mod of the inkMOD e-reader firmware featuring Russian and Ukrainian 
 
 ## Changelog
 
+### v1.1.4 — 2026-08-14
+
+#### Stability release
+
+- Disabled the unstable runtime EPUB pre-splitter; large EPUBs now use the proven direct BMC/ERS reader path.
+- Compact low-memory FB2 indexing for very large books and safer FB2.ZIP first-open processing.
+- Added release crash breadcrumbs and `/crash_report.txt` generation for OOM/guarded restarts.
+- Added **System → Device → Diagnostics** with live heap/reset/storage information.
+- Added **Book information** to the File Browser long-press menu.
+- Added separate timeout sleep-screen behavior with custom overlay/image + Quick Resume.
+- Fixed Lyra Carousel right-edge clipping with seven icons.
+- Kept Cover Mode / Cover Filter visible consistently in sleep-screen settings.
+- GitHub Releases now publish the actual `release` firmware variant (`firmware-release-vX.Y.Z.bin`) instead of a diagnostic/tiny build.
+- CI validates both developer and release builds and guards against re-enabling known unstable release paths.
+
 ### v1.1.3 — 2026-08-13
 
 #### Highlights

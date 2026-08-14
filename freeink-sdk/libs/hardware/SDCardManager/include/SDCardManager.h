@@ -33,7 +33,7 @@ class SDCardManager {
   bool begin();
   bool ready() const;
   // Returns the total card capacity in bytes. Cached at begin(); 0 if not mounted.
-  uint64_t sdTotalBytes() const;
+  uint64_t sdTotalBytes();
   // Returns used space in bytes, cached with a 20-second TTL (freeClusterCount
   // scans the FAT and is too slow to call on every frame). 0 if not mounted or
   // the cluster count cannot be determined.

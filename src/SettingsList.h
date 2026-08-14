@@ -962,11 +962,20 @@ inline void start() {
 }
 
 inline std::string display() {
-  const uint64_t total = Storage.getCardTotalBytes();
-  if (total == 0) return std::string("-");
   if (!started()) return std::string(tr(STR_TAP_TO_CALCULATE));
   if (!ready()) return tr(STR_LOADING_POPUP) + std::string("...");
+
   const uint64_t used = cachedUsedBytes();
+  const uint64_t total = Storage.getCardTotalBytes();
+  if (total == 0) {
+    char usedOnly[32];
+    if (used < 1073741824ULL) {
+      snprintf(usedOnly, sizeof(usedOnly), "%.0f %s", used / 1048576.0, tr(STR_UNIT_MB_SHORT));
+    } else {
+      snprintf(usedOnly, sizeof(usedOnly), "%.1f %s", used / 1073741824.0, tr(STR_UNIT_GB_SHORT));
+    }
+    return std::string(usedOnly);
+  }
   char buf[32];
   if (used < 1073741824ULL) {
     // Under 1GB used on a card this size is worth saying in MB - "0 ГБ"
@@ -995,38 +1004,7 @@ inline std::vector<SettingInfo> buildSystemDeviceSettingsList(const std::vector<
     settings.push_back(SettingInfo::Action(StrId::STR_CLOCK_SYNC_NOW, SettingAction::ClockSync));
   }
 
-  {
-    SettingInfo storageRow = SettingInfo::Action(StrId::STR_INTERNAL_STORAGE, SettingAction::CalculateStorageUsage);
-    storageRow.stringGetter = [] { return StorageUsageCalc::display(); };
-    settings.push_back(storageRow);
-  }
-  // Elapsed-time display needs a real clock to be meaningful - hide it once
-  // the user has turned the clock off (X4-only setting), same as the
-  // calendar sleep-screen options are hidden below for the same reason.
-  if (!SETTINGS.clockDisabled) {
-    settings.push_back(SettingInfo::Info(StrId::STR_SINCE_LAST_CHARGE, [] {
-      const uint64_t lastChargeEpoch = powerManager.getLastChargeEpochSeconds();
-      const uint64_t nowEpoch = static_cast<uint64_t>(time(nullptr));
-      // A value of 0 means never observed this boot and nothing persisted
-      // from a previous one either. kMinValidEpoch-style sanity check isn't
-      // needed here the way it is when seeding the clock itself - if the
-      // clock has never been synced, "now" itself is implausibly small and
-      // elapsedSeconds comes out small/zero rather than negative or huge,
-      // which reads as "0 ч" rather than garbage - acceptable, and self-
-      // corrects the moment the clock does get synced.
-      if (lastChargeEpoch == 0 || nowEpoch < lastChargeEpoch) return std::string("-");
-      const uint64_t elapsedSeconds = nowEpoch - lastChargeEpoch;
-      const uint32_t days = static_cast<uint32_t>(elapsedSeconds / 86400ULL);
-      const uint32_t hours = static_cast<uint32_t>((elapsedSeconds % 86400ULL) / 3600ULL);
-      char buf[32];
-      if (days > 0) {
-        snprintf(buf, sizeof(buf), "%u %s %u %s", days, tr(STR_STATS_DAYS), hours, tr(STR_UNIT_HOUR_SHORT));
-      } else {
-        snprintf(buf, sizeof(buf), "%u %s", hours, tr(STR_UNIT_HOUR_SHORT));
-      }
-      return std::string(buf);
-    }));
-  }
+  settings.push_back(SettingInfo::Action(StrId::STR_DIAGNOSTICS, SettingAction::SystemDiagnostics));
   return settings;
 }
 

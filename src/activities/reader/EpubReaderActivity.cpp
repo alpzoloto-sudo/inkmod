@@ -11,6 +11,7 @@
 #include <Logging.h>
 #include <Memory.h>
 #include <MemoryBudget.h>
+#include <HalSystem.h>
 
 #include <algorithm>
 #include <cmath>
@@ -2943,6 +2944,12 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         }
         LOG_INF("ERS", "Building spine %d in %s mode (free=%u maxAlloc=%u)", currentSpineIndex,
                 readerMemoryModeName(buildMode), ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+        {
+          char breadcrumb[48];
+          snprintf(breadcrumb, sizeof(breadcrumb), "ERS build s=%d mode=%s", currentSpineIndex,
+                   readerMemoryModeName(buildMode));
+          HalSystem::recordBreadcrumb(breadcrumb);
+        }
 
         section = makeUniqueNoThrow<Section>(epub, currentSpineIndex, renderer, config.suffix);
         if (!section) {
@@ -3002,6 +3009,11 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       releaseReaderSdFontCachesForLowMemory(renderer, "ERS", "section cache build");
       LOG_INF("ERS", "Cache build complete: pages=%u mode=%s font=%d free=%u maxAlloc=%u", section->pageCount,
               readerMemoryModeName(activeMemoryMode), activeSectionFontId, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+      {
+        char breadcrumb[48];
+        snprintf(breadcrumb, sizeof(breadcrumb), "ERS done s=%d pages=%u", currentSpineIndex, section->pageCount);
+        HalSystem::recordBreadcrumb(breadcrumb);
+      }
 
       if (usedFallbackFont) {
         queueFallbackFontAlert();

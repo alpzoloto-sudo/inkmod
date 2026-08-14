@@ -1,28 +1,15 @@
-InkMOD release/runtime parity fix
+InkMOD 1.1.4 — карта памяти + IPA fallback
 
-Problem:
-developer works, while release can behave differently (for example on EPUB).
+Карта памяти:
+- До нажатия: "Нажмите «Выбрать»", а не "-".
+- После нажатия реальный обход дерева SD суммирует размеры файлов.
+- Общий размер берется из FAT; если FAT вернул 0 — из sectorCount карты.
+- В Serial появляется: [SD] Used-space scan: N bytes.
 
-Cause:
-developer defines ENABLE_SERIAL_LOG, release did not.
-That define is used not only by LOG_* macros but also by real hardware/runtime
-code under #ifdef ENABLE_SERIAL_LOG (USB CDC setup/teardown and other paths).
+Символы:
+- Старый fallback был включен, но встроенный Inter был собран без IPA.
+- Добавлены U+0250–U+02FF и U+1D00–U+1DBF.
+- Должны нормально отображаться ə ʲ ˈ ˌ ɪ ʃ ɲ ː и другие IPA/phonetic символы.
+- Основной текст остается в выбранном шрифте; fallback используется только для отсутствующего символа.
 
-Fix:
-release now also defines:
-  -DENABLE_SERIAL_LOG
-  -DLOG_LEVEL=-1
-
-LOG_LEVEL=-1 means LOG_ERR/LOG_INF/LOG_DBG still compile to nothing.
-So:
-- release stays silent
-- no serial log spam
-- USB flashing remains available
-- developer/release execute the same ENABLE_SERIAL_LOG-gated runtime paths
-
-Build:
-  pio run -e release -t upload
-
-Diagnostic:
-If the problematic EPUB now behaves like developer, the bug was confirmed as
-a build-configuration divergence rather than EPUB parsing or -Os optimization.
+Обложки, FB2/EPUB, web и sleep/logo этим патчем не меняются.

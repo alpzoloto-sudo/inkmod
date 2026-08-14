@@ -563,14 +563,31 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(FsFile& jpegFile, Print& bm
   // scale to fill the requested box, then sample a centered source crop before dithering.
   const bool containInsteadOfCrop =
       crop && adaptiveContain && shouldContainAdaptive(effectiveSrcW, effectiveSrcH, targetWidth, targetHeight);
-  // A genuinely small embedded cover should not be blown up to 480x800/528x792
-  // with nearest-sample-looking blocks. If either original source dimension is
-  // below the requested display dimension, keep it at native size (or only
-  // downscale the other dimension) and center it later on the sleep screen.
-  // Progressive JPEG decode uses an internal 1/8 source, but `sourceIsSmall`
-  // is intentionally based on the ORIGINAL JPEG dimensions.
-  const bool sourceIsSmall = srcWidth < targetWidth || srcHeight < targetHeight;
-  const bool allowUpscale = !sourceIsSmall;
+  // Adaptive cover upscaling.  The previous guard disabled ALL upscaling when
+  // either source dimension was even one pixel below the panel size.  That
+  // turned perfectly usable 470x720 covers into a small centred card on X4.
+  //
+  // Allow a modest/full-screen upscale when the source is already reasonably
+  // detailed, but keep genuinely tiny thumbnails at native size so a 100x150
+  // embedded image is not magnified into huge blocks.
+  const float fitUpscale = std::min(static_cast<float>(targetWidth) / std::max(1, srcWidth),
+                                    static_cast<float>(targetHeight) / std::max(1, srcHeight));
+  const int64_t sourcePixels = static_cast<int64_t>(srcWidth) * srcHeight;
+  const bool sourceHasUsefulDetail =
+      fitUpscale <= 2.50f || srcWidth >= 240 || srcHeight >= 360 || sourcePixels >= 90000;
+
+  // IMPORTANT: progressive JPEGs are decoded by JPEGDEC at 1/8 internally,
+  // but geometry must still be based on the ORIGINAL JPEG quality/size.
+  // Forbidding upscale merely because the file is progressive makes a
+  // perfectly normal 470x720 FB2 cover become a ~59x90 postage stamp both
+  // on Home and on the sleep screen.
+  //
+  // Keep the existing "don't blow up genuinely tiny source images" guard,
+  // but allow a normal-sized progressive cover to fill the requested box.
+  // Browser uploads normalize FB2 covers to baseline JPEG, so newly uploaded
+  // books retain full source detail; this fallback keeps old/on-card books
+  // usable instead of tiny.
+  const bool allowUpscale = fitUpscale <= 1.0f || sourceHasUsefulDetail;
   const bool cropOutput = crop && !containInsteadOfCrop && allowUpscale;
   const OutputGeometry geometry =
       calculateOutputGeometry(effectiveSrcW, effectiveSrcH, targetWidth, targetHeight, cropOutput, allowUpscale);

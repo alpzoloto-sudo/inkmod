@@ -1,6 +1,28 @@
 # Changelog
 
-## [Unreleased]
+## [v1.1.4] - 2026-08-14
+
+### Added
+- Added an on-device **Diagnostics** screen with firmware variant, device type, free heap, largest allocatable block, SD size, reset reason and crash-report status.
+- Added a low-overhead RTC breadcrumb trail for release builds. OOM-triggered restarts now persist the last reader actions into `/crash_report.txt` on the next boot, even when serial logging is compiled out.
+- Added **Book information** to the File Browser long-press menu with format, source size, cache state and a lightweight load-profile hint.
+- Added separate timeout sleep-screen profiles, including a dedicated custom overlay/image for automatic sleep while preserving Quick Resume behavior.
+
+### Release engineering
+- GitHub Releases now build the real `release` PlatformIO environment and publish `firmware-release-v<version>.bin`, matching what release OTA clients search for.
+- CI now builds both developer and release environments. Release validation rejects an accidentally re-enabled runtime EPUB pre-splitter and verifies the production artifact naming path.
+
+### Changed
+- Runtime EPUB opening now uses the proven direct EPUB → BMC → ERS pipeline. The optional pre-splitter remains in-tree for future work/tests but is no longer called from `ReaderActivity`, eliminating a release-only reboot observed before normal cache creation.
+- Large EPUB logical fragments are prepared on demand instead of synchronously paginating all sibling fragments before showing the first page.
+- Large FB2 indexing uses a compact pooled section index and safer ZIP extraction thresholds to reduce persistent heap pressure on ESP32-C3.
+- Lyra Carousel now keeps equal safe margins at both screen edges with seven icons, including the selection highlight.
+- Cover mode/filter stay visible in Sleep Screen settings instead of disappearing when another wallpaper mode is selected.
+
+### Fixed
+- Removed the redundant `Back — НЕТ / OK — ДА` text from the easter-egg prompt because the actual button hints are already rendered at the bottom.
+- Removed the experimental idle light-sleep path that could freeze X4 after USB disconnect while keeping safe low-frequency idle behavior.
+
 
 ### Added
 - Added a single reader-work controller for EPUB, FB2 and FB2.ZIP chapter preparation. Navigation invalidates obsolete work at bounded ZIP/XML/image checkpoints without starting a second parser, SD reader, or background worker.

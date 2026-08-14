@@ -15,3 +15,6 @@
 #include <builtinFonts/inter_14_bold.h>
 #include <builtinFonts/inter_14_regular.h>
 #include <builtinFonts/inter_8_regular.h>
+
+#include <builtinFonts/inter_12_ipa_fallback.h>
+#include <builtinFonts/inter_14_ipa_fallback.h>

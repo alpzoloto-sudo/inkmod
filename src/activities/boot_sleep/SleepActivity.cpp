@@ -30,9 +30,30 @@
 #include "components/themes/minimal/MinimalTheme.h"
 #include "fontIds.h"
 #include "images/InkMODLogo120.h"
+#include "images/InkMODLogo240.h"
 #include "images/MoonIcon.h"
 
 namespace {
+
+void drawInkMODBitmap(const GfxRenderer& renderer, const uint8_t* bitmap, const int width, const int height,
+                      const int x, const int y) {
+  const int bytesPerRow = (width + 7) / 8;
+  for (int row = 0; row < height; ++row) {
+    const uint8_t* srcRow = bitmap + row * bytesPerRow;
+    int runStart = -1;
+    for (int col = 0; col <= width; ++col) {
+      const bool black =
+          col < width && !((srcRow[col / 8] >> (7 - (col % 8))) & 1);
+      if (black && runStart < 0) {
+        runStart = col;
+      } else if (!black && runStart >= 0) {
+        renderer.fillRect(x + runStart, y + row, col - runStart, 1, true);
+        runStart = -1;
+      }
+    }
+  }
+}
+
 
 constexpr bool TURN_OFF_SCREEN_AFTER_SLEEP_REFRESH = true;
 constexpr int sleepBuildInfoSideMargin = 20;
@@ -549,8 +570,9 @@ void SleepActivity::renderDefaultSleepScreen() const {
   const auto pageHeight = renderer.getScreenHeight();
 
   renderer.clearScreen();
-  renderer.drawImage(InkMODLogo120, (pageWidth - 120) / 2, (pageHeight - 120) / 2, 120, 120);
-  renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 70, tr(STR_INKMOD), true, EpdFontFamily::BOLD);
+  drawInkMODBitmap(renderer, InkMODLogo240, INKMODLOGO240_WIDTH, INKMODLOGO240_HEIGHT,
+                   (pageWidth - INKMODLOGO240_WIDTH) / 2,
+                   (pageHeight - INKMODLOGO240_HEIGHT) / 2);
   renderer.drawCenteredText(SMALL_FONT_ID, pageHeight / 2 + 95, tr(STR_SLEEPING));
 
   // Make sleep screen dark unless light is selected in settings
@@ -910,37 +932,7 @@ void drawBigDigit(const GfxRenderer& renderer, const int x, const int y, const i
 // rectangles (one per horizontal run of "on" pixels in a row) through
 // that same call instead of as a single blitted image, guaranteeing
 // consistent rotation handling instead of another blind guess at it.
-void drawRotationSafeLogo(const GfxRenderer& renderer, const int x, const int y) {
-  constexpr int kSize = 120;
-  constexpr int kBytesPerRow = kSize / 8;  // 15
-  // 90 degrees clockwise: a horizontal run of "on" pixels at source row R,
-  // columns [runStart, runEnd), lands at a single column (kSize-1-R) in
-  // the rotated output, spanning rows [runStart, runEnd) there - i.e. it
-  // becomes a vertical run instead of a horizontal one. Standard 90°CW
-  // point mapping is (row, col) -> (newRow=col, newCol=kSize-1-row); this
-  // is that same mapping applied to a whole run instead of one pixel at a
-  // time, since fillRect() can draw the whole run in one call either way.
-  for (int row = 0; row < kSize; row++) {
-    const uint8_t* srcRow = InkMODLogo120 + row * kBytesPerRow;
-    const int rotatedCol = kSize - 1 - row;
-    int runStart = -1;
-    for (int col = 0; col <= kSize; col++) {
-      // InkMODLogo120's own comment: "0 = black ink" - a *clear* bit is
-      // the one that should be drawn, not a set one. Got this backwards
-      // the first time, which is exactly why it came out as a near-solid
-      // black square: the background (the majority of the image, all 1
-      // bits under this format) was what got filled in, leaving the actual
-      // logo shape as the unfilled negative space instead.
-      const bool bitSet = col < kSize && !((srcRow[col / 8] >> (7 - (col % 8))) & 1);
-      if (bitSet && runStart < 0) {
-        runStart = col;
-      } else if (!bitSet && runStart >= 0) {
-        renderer.fillRect(x + rotatedCol, y + runStart, 1, col - runStart, true);
-        runStart = -1;
-      }
-    }
-  }
-}
+
 }  // namespace
 
 void SleepActivity::renderCalendarSleepScreen() const {
@@ -993,7 +985,7 @@ void SleepActivity::renderCalendarSleepScreen() const {
   // header+weekday+grid block in whatever's left above it - the block's own height
   // varies with how many week-rows the month needs (4-6), so this keeps it looking
   // centered every month instead of using one fixed top margin.
-  constexpr int kLogoAreaH = 230;
+  constexpr int kLogoAreaH = 250;
   const int available = pageHeight - kLogoAreaH;
   const int monthTop = std::max(kMargin, (available - blockH) / 2);
 
@@ -1071,9 +1063,9 @@ void SleepActivity::renderCalendarSleepScreen() const {
   // height passed in match its actual 120x120 layout, so it has to be drawn at native
   // size (like renderDefaultSleepScreen does) or the row stride comes out wrong and
   // the image comes out corrupted instead of shrunk.
-  const int logoY = pageHeight - 210;
-  renderer.drawImage(InkMODLogo120, (pageWidth - 120) / 2, logoY, 120, 120);
-  renderer.drawCenteredText(UI_10_FONT_ID, logoY + 128, tr(STR_INKMOD), true, EpdFontFamily::BOLD);
+  const int logoY = pageHeight - INKMODLOGO240_HEIGHT - 18;
+  drawInkMODBitmap(renderer, InkMODLogo240, INKMODLOGO240_WIDTH, INKMODLOGO240_HEIGHT,
+                   (pageWidth - INKMODLOGO240_WIDTH) / 2, logoY);
 
   if (SETTINGS.sleepScreen == InkMODSettings::SLEEP_SCREEN_MODE::CALENDAR_SLEEP_INVERTED) {
     renderer.invertScreen();
@@ -1200,11 +1192,10 @@ void SleepActivity::renderCalendarSleepScreenLandscape() const {
   // drawRotationSafeLogo(), not a plain drawImage() call, specifically
   // because this screen runs under LandscapeClockwise - see that
   // function's own comment for why.
-  drawRotationSafeLogo(renderer, kMargin, sidebarY);
+  const int landscapeLogoX = kMargin + (kSidebarW - kLogoSize) / 2;
+  drawInkMODBitmap(renderer, InkMODLogo120, INKMODLOGO120_WIDTH, INKMODLOGO120_HEIGHT,
+                   landscapeLogoX, sidebarY);
   sidebarY += kLogoSize + 4;
-  const int wordmarkW = renderer.getTextWidth(UI_10_FONT_ID, tr(STR_INKMOD), EpdFontFamily::BOLD);
-  renderer.drawText(UI_10_FONT_ID, kMargin + (kLogoSize - wordmarkW) / 2, sidebarY, tr(STR_INKMOD), true,
-                    EpdFontFamily::BOLD);
 
   // Weekday header row + day grid, on the right, starting from the same
   // sharedTop the sidebar used above.

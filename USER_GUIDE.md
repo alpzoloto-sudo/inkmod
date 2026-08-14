@@ -652,3 +652,36 @@ Press **Ctrl-C** or close the graph window to exit.
 If the device is stuck in a bootloop, press and release the Reset button. Then, press and hold on to the configured Back button and the Power Button to boot to the Home Screen.
 
 There can be issues with broken cache or config. In this case, delete the `.inkmod` directory on your SD card (or consider deleting only `settings.json`, `state.json`, or `epub_*` cache directories in the `.inkmod/` folder).
+
+## Diagnostics and crash reports (v1.1.4+)
+
+Open **Settings → System → Device → Diagnostics** to see the firmware variant,
+device model, current free heap, largest allocatable heap block, SD capacity,
+reset reason and whether `/crash_report.txt` exists.
+
+Release builds keep a tiny allocation-free breadcrumb trail in RTC memory. If a
+guarded out-of-memory restart happens, the next boot writes the last reader
+steps into `/crash_report.txt`. This allows useful crash reports even though
+verbose serial logging is disabled in release firmware.
+
+## Book information
+
+In File Browser, hold **Open** on a book and choose **Book information**. The
+screen shows the file format, source size, whether an EPUB metadata cache is
+already prepared, and a lightweight load-profile hint. It intentionally avoids
+deeply parsing a book so inspecting a problematic file cannot itself become a
+large memory operation.
+
+## Separate timeout sleep screen
+
+**Settings → Display → Sleep screen on timeout** controls automatic sleep
+independently from manual power-button sleep. Available modes are:
+
+- Same as normal sleep
+- Quick Resume
+- Custom overlay + Quick Resume
+- Custom image
+
+To pick a separate timeout overlay, hold **Open** on a PNG/BMP in File Browser
+and choose **Set as timeout overlay**. PNG transparency is recommended for the
+overlay mode.

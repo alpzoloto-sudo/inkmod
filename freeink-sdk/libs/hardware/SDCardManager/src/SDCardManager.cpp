@@ -8,6 +8,26 @@
 
 SDCardManager SDCardManager::instance;
 
+namespace {
+uint64_t sumDirectoryFileBytes(FsFile& dir) {
+  uint64_t total = 0;
+  dir.rewind();
+
+  while (true) {
+    FsFile entry = dir.openNextFile();
+    if (!entry) break;
+
+    if (entry.isDirectory()) {
+      total += sumDirectoryFileBytes(entry);
+    } else {
+      total += static_cast<uint64_t>(entry.fileSize());
+    }
+    entry.close();
+  }
+  return total;
+}
+}  // namespace
+
 #if FREEINK_SD_SDMMC
 SDCardManager::SDCardManager() {}
 
@@ -321,24 +341,48 @@ bool SDCardManager::openFileForWrite(const char* moduleName, const String& path,
   return openFileForWrite(moduleName, path.c_str(), file);
 }
 
-uint64_t SDCardManager::sdTotalBytes() const { return cachedTotalBytes; }
+uint64_t SDCardManager::sdTotalBytes() {
+  if (!initialized) return 0;
+
+  if (cachedTotalBytes == 0) {
+    const uint64_t clusters = vol().clusterCount();
+    const uint64_t bytesPerCluster = vol().bytesPerCluster();
+    if (clusters != 0 && bytesPerCluster != 0) {
+      cachedTotalBytes = clusters * bytesPerCluster;
+    }
+  }
+
+  if (cachedTotalBytes == 0) {
+#if FREEINK_SD_SDMMC
+    if (_dev) cachedTotalBytes = static_cast<uint64_t>(_dev->sectorCount()) * 512ULL;
+#else
+    if (sd.card()) cachedTotalBytes = static_cast<uint64_t>(sd.card()->sectorCount()) * 512ULL;
+#endif
+  }
+
+  return cachedTotalBytes;
+}
 
 uint64_t SDCardManager::sdUsedBytes() {
   if (!initialized) return 0;
+
   const uint32_t now = millis();
   if (!cachedUsedBytesValid || (now - cachedUsedBytesAt) >= USED_BYTES_CACHE_TTL_MS) {
-    const int32_t freeClusters = vol().freeClusterCount();
-    const uint64_t clusterCount = vol().clusterCount();
-    if (freeClusters < 0) {
-      cachedUsedBytes = 0;
-    } else {
-      const uint64_t cappedFree = (static_cast<uint64_t>(freeClusters) > clusterCount)
-                                      ? clusterCount
-                                      : static_cast<uint64_t>(freeClusters);
-      cachedUsedBytes = (clusterCount - cappedFree) * vol().bytesPerCluster();
+    uint64_t used = 0;
+    FsFile root = vol().open("/");
+    if (root && root.isDirectory()) {
+      used = sumDirectoryFileBytes(root);
+      root.close();
     }
+
+    cachedUsedBytes = used;
     cachedUsedBytesValid = true;
     cachedUsedBytesAt = now;
+
+    if (Serial) {
+      Serial.printf("[%lu] [SD] Used-space scan: %llu bytes\n",
+                    millis(), static_cast<unsigned long long>(cachedUsedBytes));
+    }
   }
   return cachedUsedBytes;
 }

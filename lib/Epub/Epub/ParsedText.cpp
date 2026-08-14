@@ -363,8 +363,12 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
   auto wordWidths = calculateWordWidths(renderer, fontId);
 
   std::vector<size_t> lineBreakIndices;
-  if (hyphenationEnabled) {
-    // Use greedy layout that can split words mid-loop when a hyphenated prefix fits.
+  // Full justification without hyphenation produces very visible white rivers
+  // on a narrow 480 px reader.  When the user explicitly chooses "Justify",
+  // use the language-aware hyphenator even if the separate hyphenation toggle
+  // is off. Left/center/right alignment keep respecting that toggle exactly.
+  const bool smartJustifiedHyphenation = blockStyle.alignment == CssTextAlign::Justify;
+  if (hyphenationEnabled || smartJustifiedHyphenation) {
     lineBreakIndices = computeHyphenatedLineBreaks(renderer, fontId, pageWidth, wordWidths, wordContinues);
   } else {
     lineBreakIndices = computeLineBreaks(renderer, fontId, pageWidth, wordWidths, wordContinues);

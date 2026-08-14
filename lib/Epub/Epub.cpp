@@ -778,7 +778,10 @@ const std::string& Epub::getLanguage() const {
 }
 
 std::string Epub::getCoverBmpPath(bool cropped) const {
-  const auto coverFileName = std::string("cover_q2") + (cropped ? "_crop" : "");
+  // v2 invalidates cover BMPs produced by the old no-upscale policy.
+  // Without a cache-version bump users would keep seeing the old tiny sleep
+  // cover even after installing the new adaptive scaler.
+  const auto coverFileName = std::string("cover_q2_v6") + (cropped ? "_crop" : "");
   return cachePath + "/" + coverFileName + ".bmp";
 }
 

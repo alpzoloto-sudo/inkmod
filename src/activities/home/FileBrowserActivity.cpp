@@ -12,6 +12,7 @@
 #include <cstring>
 
 #include "BookActions.h"
+#include "BookInfoActivity.h"
 #include "BookmarkStore.h"
 #include "InkMODSettings.h"
 #include "InkMODState.h"
@@ -501,6 +502,7 @@ void FileBrowserActivity::showDirectoryActionMenu(const std::string& entry, bool
                              case FileBrowserAction::UnpinFavorite:
                              case FileBrowserAction::SetSleepOverlay:
                              case FileBrowserAction::SetTimeoutSleepOverlay:
+                             case FileBrowserAction::BookInfo:
                                return;
                            }
                          });
@@ -580,6 +582,7 @@ bool FileBrowserActivity::isSleepFavoriteFolder(const std::string& fullPath) con
 void FileBrowserActivity::showFileActionMenu(const std::string& entry, bool ignoreInitialConfirmRelease) {
   const std::string fullPath = buildFullPath(basepath, entry);
   std::vector<FileBrowserActionActivity::MenuItem> items = BookActions::buildBookActionItems(fullPath, false);
+  items.insert(items.begin(), {FileBrowserAction::BookInfo, StrId::STR_BOOK_INFO});
   items.push_back({FileBrowserAction::Rename, StrId::STR_RENAME});
 
   if (isSleepImageFile(entry)) {
@@ -605,6 +608,10 @@ void FileBrowserActivity::showFileActionMenu(const std::string& entry, bool igno
 
         const auto action = static_cast<FileBrowserAction>(std::get<FileBrowserActionResult>(result.data).action);
         switch (action) {
+          case FileBrowserAction::BookInfo:
+            startActivityForResult(std::make_unique<BookInfoActivity>(renderer, mappedInput, fullPath),
+                                   [this](const ActivityResult&) { requestUpdate(true); });
+            return;
           case FileBrowserAction::SetSleepOverlay:
             APP_STATE.favoriteSleepImagePath = fullPath;
             SETTINGS.sleepScreen = InkMODSettings::OVERLAY;

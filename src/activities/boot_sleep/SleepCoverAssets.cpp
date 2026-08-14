@@ -1,6 +1,7 @@
 #include "SleepCoverAssets.h"
 
 #include <Epub.h>
+#include <Fb2.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Txt.h>
@@ -28,6 +29,30 @@ bool shouldPrepareMinimalCover() {
 }
 
 bool fileExists(const std::string& path) { return !path.empty() && Storage.exists(path.c_str()); }
+
+bool isDirectFb2Path(const std::string& path) {
+  return FsHelpers::checkFileExtension(path, ".fb2") || FsHelpers::checkFileExtension(path, ".fb2.zip") ||
+         FsHelpers::checkFileExtension(path, "_fb2.zip");
+}
+
+// Build/use the FB2 lazy package and then deliberately ask Epub to generate
+// its FULL cover BMP. Epub::readItemContentsToStream() recognizes the FB2
+// package marker and materializes the original embedded binary on demand;
+// no home-screen thumbnail participates in this path.
+bool prepareFb2FullCover(const std::string& originalPath, const bool cropped) {
+  Fb2 fb2(originalPath, "/.inkmod");
+  if (!fb2.load()) return false;
+
+  Epub package(fb2.getPackagePath(), "/.inkmod");
+  if (!package.load(/*buildIfMissing=*/true, /*skipLoadingCss=*/true)) return false;
+  return package.generateCoverBmp(cropped);
+}
+
+std::string fb2FullCoverPath(const std::string& originalPath, const bool cropped) {
+  Fb2 fb2(originalPath, "/.inkmod");
+  Epub package(fb2.getPackagePath(), "/.inkmod");
+  return package.getCoverBmpPath(cropped);
+}
 
 }  // namespace
 
@@ -70,6 +95,10 @@ bool prepareFullCoverForPath(const std::string& bookPath, const bool cropped) {
     return false;
   }
 
+  if (isDirectFb2Path(bookPath)) {
+    return prepareFb2FullCover(bookPath, cropped);
+  }
+
   if (FsHelpers::hasEpubExtension(bookPath)) {
     Epub epub(bookPath, "/.inkmod");
     if (!epub.load(/*buildIfMissing=*/false, /*skipLoadingCss=*/true)) {
@@ -92,6 +121,10 @@ bool prepareFullCoverForPath(const std::string& bookPath, const bool cropped) {
 }
 
 std::string reusableCoverPathFor(const std::string& bookPath) {
+  if (isDirectFb2Path(bookPath)) {
+    Fb2 fb2(bookPath, "/.inkmod");
+    return Epub(fb2.getPackagePath(), "/.inkmod").getThumbBmpPath();
+  }
   if (FsHelpers::hasEpubExtension(bookPath)) {
     return Epub(bookPath, "/.inkmod").getThumbBmpPath();
   }
@@ -106,7 +139,9 @@ std::string reusableCoverPathFor(const std::string& bookPath) {
 
 std::string cachedCoverPathFor(const std::string& bookPath, const bool cropped) {
   std::string coverPath;
-  if (FsHelpers::hasEpubExtension(bookPath)) {
+  if (isDirectFb2Path(bookPath)) {
+    coverPath = fb2FullCoverPath(bookPath, cropped);
+  } else if (FsHelpers::hasEpubExtension(bookPath)) {
     coverPath = Epub(bookPath, "/.inkmod").getCoverBmpPath(cropped);
   } else if (FsHelpers::hasXtcExtension(bookPath)) {
     coverPath = Xtc(bookPath, "/.inkmod").getCoverBmpPath();

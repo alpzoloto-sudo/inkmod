@@ -43,6 +43,7 @@ enum class SettingAction {
   CalculateStorageUsage,
   BookMenuSettings,
   SupportInkMOD,
+  SystemDiagnostics,
 };
 
 struct SettingInfo {

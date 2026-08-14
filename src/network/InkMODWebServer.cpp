@@ -537,6 +537,56 @@ void InkMODWebServer::handleFileListData() const {
     return;
   }
 
+  // Stable paged mode for the web UI. Some ESP32 WebServer/browser
+  // combinations can leave a long chunked JSON response open, which makes
+  // fetch().json() wait forever and leaves the spinner visible. Keep each
+  // response small and give it a normal Content-Length instead.
+  if (server->hasArg("paged")) {
+    int offset = server->hasArg("offset") ? server->arg("offset").toInt() : 0;
+    int limit = server->hasArg("limit") ? server->arg("limit").toInt() : 16;
+    offset = std::max(0, offset);
+    limit = std::clamp(limit, 1, 24);
+
+    String body;
+    body.reserve(static_cast<size_t>(limit) * 192 + 2);
+    body += "[";
+
+    char output[512];
+    constexpr size_t outputSize = sizeof(output);
+    JsonDocument doc;
+    int visibleIndex = 0;
+    int emitted = 0;
+    bool hasMore = false;
+
+    scanFiles(currentPath.c_str(), [&body, &output, &doc, &visibleIndex, &emitted, &hasMore, offset, limit](
+                                           const FileInfo& info) mutable {
+      if (visibleIndex++ < offset) return;
+      if (emitted >= limit) {
+        hasMore = true;
+        return;
+      }
+
+      doc.clear();
+      doc["name"] = info.name;
+      doc["size"] = info.size;
+      doc["isDirectory"] = info.isDirectory;
+      doc["isEpub"] = info.isEpub;
+
+      const size_t written = serializeJson(doc, output, outputSize);
+      if (written == 0 || written >= outputSize) return;
+      if (emitted > 0) body += ",";
+      body.concat(output, written);
+      ++emitted;
+    });
+
+    body += "]";
+    server->sendHeader("X-InkMOD-Has-More", hasMore ? "1" : "0");
+    server->send(200, "application/json", body);
+    LOG_DBG("WEB", "Served paged file list path=%s offset=%d count=%d more=%d", currentPath.c_str(), offset,
+            emitted, hasMore ? 1 : 0);
+    return;
+  }
+
   server->setContentLength(CONTENT_LENGTH_UNKNOWN);
   server->send(200, "application/json", "");
   server->sendContent("[");

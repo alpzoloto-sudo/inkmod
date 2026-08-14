@@ -241,6 +241,10 @@ void RecentBooksActivity::showBookActionMenu(const size_t bookIndex, const bool 
           case FileBrowserAction::UnpinFavorite:
           case FileBrowserAction::SetSleepFolder:
           case FileBrowserAction::ClearSleepFolder:
+          case FileBrowserAction::SetSleepOverlay:
+          case FileBrowserAction::SetTimeoutSleepOverlay:
+          case FileBrowserAction::Rename:
+          case FileBrowserAction::BookInfo:
             return;
         }
       });

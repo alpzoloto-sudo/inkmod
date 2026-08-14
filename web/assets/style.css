@@ -11,7 +11,7 @@
   --accent-hover-color: #5a8c73;
   --accent-soft: rgba(110, 154, 130, 0.12);
   --accent-color-10: rgba(110, 154, 130, 0.1);
-  --logo-filter: brightness(0);
+  --logo-filter: none;
   --success-color: #16a34a;
   --success-hover: #15803d;
   --danger-color: #dc2626;
@@ -32,7 +32,7 @@
     --label-color: #9aa3af;
     --border-color: #343941;
     --accent-soft: rgba(110, 154, 130, 0.2);
-    --logo-filter: none;
+    --logo-filter: invert(1);
     --toggle-bg: #4b5563;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
     --shadow-md: 0 6px 24px rgba(0, 0, 0, 0.5);
@@ -160,5 +160,72 @@ h1 {
   .nav-links a {
     padding: 7px 14px;
     font-size: 0.9em;
+  }
+}
+
+/* InkMOD full wordmark logo: the image already contains the project name. */
+.logo-mark.logo-full {
+  width: auto;
+  height: 78px;
+  max-width: 300px;
+  object-fit: contain;
+}
+
+/* Unified InkMOD header: logo and navigation are one visual component. */
+.portal-header {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  margin: 0 0 24px;
+  width: 100%;
+}
+.portal-logo-wrap {
+  height: 50px;
+  width: 92px;
+  flex: 0 0 92px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.portal-logo-wrap .logo-mark.logo-full {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  object-fit: contain;
+  filter: var(--logo-filter);
+}
+.portal-header .nav-links {
+  margin: 0;
+  min-height: 50px;
+  flex: 1 1 auto;
+  width: auto;
+  max-width: none;
+  align-items: center;
+}
+@media (max-width: 700px) {
+  .portal-header {
+    gap: 6px;
+  }
+  .portal-logo-wrap {
+    width: 70px;
+    flex-basis: 70px;
+    height: 46px;
+  }
+  .portal-header .nav-links {
+    min-height: 46px;
+  }
+}
+@media (max-width: 520px) {
+  .portal-header {
+    align-items: flex-start;
+  }
+  .portal-logo-wrap {
+    width: 58px;
+    flex-basis: 58px;
+  }
+  .portal-header .nav-links a {
+    padding-left: 10px;
+    padding-right: 10px;
   }
 }

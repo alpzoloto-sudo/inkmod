@@ -660,9 +660,17 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(FsFile& pngFile, Print& bmpOu
   const bool containInsteadOfCrop =
       crop && adaptiveContain &&
       shouldContainAdaptive(static_cast<int>(width), static_cast<int>(height), targetWidth, targetHeight);
-  const bool sourceIsSmall =
-      static_cast<int>(width) < targetWidth || static_cast<int>(height) < targetHeight;
-  const bool allowUpscale = !sourceIsSmall;
+  // Match JPEG cover behaviour: useful embedded covers may be enlarged to the
+  // panel, while true thumbnails stay small enough to avoid blocky full-screen
+  // upscaling.
+  const int srcW = static_cast<int>(width);
+  const int srcH = static_cast<int>(height);
+  const float fitUpscale = std::min(static_cast<float>(targetWidth) / std::max(1, srcW),
+                                    static_cast<float>(targetHeight) / std::max(1, srcH));
+  const int64_t sourcePixels = static_cast<int64_t>(srcW) * srcH;
+  const bool sourceHasUsefulDetail =
+      fitUpscale <= 2.50f || srcW >= 240 || srcH >= 360 || sourcePixels >= 90000;
+  const bool allowUpscale = fitUpscale <= 1.0f || sourceHasUsefulDetail;
   const bool cropOutput = crop && !containInsteadOfCrop && allowUpscale;
   const OutputGeometry geometry =
       calculateOutputGeometry(static_cast<int>(width), static_cast<int>(height), targetWidth, targetHeight,

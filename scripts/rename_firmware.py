@@ -2,17 +2,12 @@
 PlatformIO post-build script: copy firmware.bin to convenient artifact names
 in the same build directory.
 
-Default outputs:
-  .pio/build/tiny/firmware-tiny.bin
-  .pio/build/xlarge/firmware-xlarge.bin
+Example outputs:
+  .pio/build/developer/firmware-developer.bin
+  .pio/build/release/firmware-release.bin
 
-Release-candidate outputs when INKMOD_RC_ARTIFACTS=1:
-  .pio/build/tiny/firmware-tiny-<branch>-<hash>-RC.bin
-  .pio/build/xlarge/firmware-xlarge-<branch>-<hash>-RC.bin
-
-Release outputs when INKMOD_RELEASE_VERSION is set:
-  .pio/build/tiny/firmware-tiny-v<version>.bin
-  .pio/build/xlarge/firmware-xlarge-v<version>.bin
+Release-candidate outputs when INKMOD_RC_ARTIFACTS=1 append branch/hash/RC.
+Release outputs when INKMOD_RELEASE_VERSION is set append v<version>.
 """
 
 import os

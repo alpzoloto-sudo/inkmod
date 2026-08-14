@@ -32,6 +32,7 @@
 #include "SettingsList.h"
 #include "StatusBarSettingsActivity.h"
 #include "SupportInkMODActivity.h"
+#include "SystemDiagnosticsActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/reader/GlobalReadingStats.h"
 #include "activities/util/ConfirmationActivity.h"
@@ -832,6 +833,9 @@ void SettingsActivity::toggleCurrentSetting() {
         break;
       case SettingAction::SupportInkMOD:
         startActivityForResult(std::make_unique<SupportInkMODActivity>(renderer, mappedInput), resultHandler);
+        break;
+      case SettingAction::SystemDiagnostics:
+        startActivityForResult(std::make_unique<SystemDiagnosticsActivity>(renderer, mappedInput), resultHandler);
         break;
       case SettingAction::ReaderFontOptions:
       case SettingAction::ReaderPageLayout:

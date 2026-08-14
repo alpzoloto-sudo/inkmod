@@ -16,6 +16,37 @@
 RTC_NOINIT_ATTR char panicMessage[256];
 RTC_NOINIT_ATTR HalSystem::StackFrame panicStack[MAX_PANIC_STACK_DEPTH];
 
+namespace {
+constexpr uint32_t BREADCRUMB_MAGIC = 0x494E4B42;  // INKB
+constexpr uint32_t DIAGNOSTIC_REBOOT_MAGIC = 0x494E4B44;  // INKD
+constexpr size_t BREADCRUMB_COUNT = 12;
+constexpr size_t BREADCRUMB_LEN = 48;
+
+struct BreadcrumbStore {
+  uint32_t magic;
+  uint8_t head;
+  uint8_t count;
+  char entries[BREADCRUMB_COUNT][BREADCRUMB_LEN];
+};
+
+RTC_NOINIT_ATTR BreadcrumbStore breadcrumbStore;
+RTC_NOINIT_ATTR uint32_t diagnosticRebootMagic;
+
+void clearBreadcrumbStore() {
+  breadcrumbStore.magic = BREADCRUMB_MAGIC;
+  breadcrumbStore.head = 0;
+  breadcrumbStore.count = 0;
+  for (size_t i = 0; i < BREADCRUMB_COUNT; ++i) breadcrumbStore.entries[i][0] = '\0';
+}
+
+void sanitizeBreadcrumbStore() {
+  if (breadcrumbStore.magic != BREADCRUMB_MAGIC || breadcrumbStore.head >= BREADCRUMB_COUNT ||
+      breadcrumbStore.count > BREADCRUMB_COUNT) {
+    clearBreadcrumbStore();
+  }
+}
+}
+
 extern "C" {
 
 void __real_panic_abort(const char* message);
@@ -72,6 +103,7 @@ void IRAM_ATTR __wrap_panic_print_backtrace(const void* frame, int core) {
 namespace HalSystem {
 
 void begin() {
+  sanitizeBreadcrumbStore();
   // This is mostly for the first boot, we need to initialize the panic info and logs to empty state
   // If we reboot from a panic state, we want to keep the panic info until we successfully dump it to the SD card, use
   // `clearPanic()` to clear it after dumping
@@ -89,17 +121,31 @@ void begin() {
 }
 
 void checkPanic() {
-  if (isRebootFromPanic()) {
-    auto panicInfo = getPanicInfo(true);
-    auto file = Storage.open("/crash_report.txt", O_WRITE | O_CREAT | O_TRUNC);
-    if (file) {
-      file.write(panicInfo.c_str(), panicInfo.size());
-      file.close();
-      LOG_INF("SYS", "Dumped panic info to SD card");
-    } else {
-      LOG_ERR("SYS", "Failed to open crash_report.txt for writing");
-    }
+  const bool panicReset = isRebootFromPanic();
+  const bool diagnosticReset = diagnosticRebootMagic == DIAGNOSTIC_REBOOT_MAGIC;
+  if (!panicReset && !diagnosticReset) return;
+
+  diagnosticRebootMagic = 0;
+  std::string report;
+  if (panicReset) {
+    report = getPanicInfo(true);
+  } else {
+    report = "inkMOD version: " INKMOD_VERSION;
+    report += "\ninkMOD variant: " INKMOD_FIRMWARE_VARIANT;
+    report += "\n\nDiagnostic reboot (usually OOM or guarded restart).\n";
   }
+  const std::string breadcrumbs = getBreadcrumbs();
+  if (!breadcrumbs.empty()) report += "\nLast breadcrumbs:\n" + breadcrumbs;
+
+  auto file = Storage.open("/crash_report.txt", O_WRITE | O_CREAT | O_TRUNC);
+  if (file) {
+    file.write(report.c_str(), report.size());
+    file.close();
+    LOG_INF("SYS", "Dumped crash diagnostics to SD card");
+  } else {
+    LOG_ERR("SYS", "Failed to open crash_report.txt for writing");
+  }
+  clearBreadcrumbStore();
 }
 
 void clearPanic() {
@@ -145,6 +191,33 @@ std::string getPanicInfo(bool full) {
 bool isRebootFromPanic() {
   const auto resetReason = esp_reset_reason();
   return resetReason == ESP_RST_PANIC || resetReason == ESP_RST_CPU_LOCKUP;
+}
+
+void recordBreadcrumb(const char* message) {
+  if (!message) return;
+  sanitizeBreadcrumbStore();
+  char* dst = breadcrumbStore.entries[breadcrumbStore.head];
+  size_t i = 0;
+  for (; i + 1 < BREADCRUMB_LEN && message[i]; ++i) dst[i] = message[i];
+  dst[i] = '\0';
+  breadcrumbStore.head = static_cast<uint8_t>((breadcrumbStore.head + 1) % BREADCRUMB_COUNT);
+  if (breadcrumbStore.count < BREADCRUMB_COUNT) ++breadcrumbStore.count;
+}
+
+void markDiagnosticReboot() { diagnosticRebootMagic = DIAGNOSTIC_REBOOT_MAGIC; }
+
+std::string getBreadcrumbs() {
+  sanitizeBreadcrumbStore();
+  if (breadcrumbStore.count == 0) return {};
+  std::string out;
+  out.reserve(breadcrumbStore.count * (BREADCRUMB_LEN + 2));
+  const size_t start = (breadcrumbStore.head + BREADCRUMB_COUNT - breadcrumbStore.count) % BREADCRUMB_COUNT;
+  for (size_t n = 0; n < breadcrumbStore.count; ++n) {
+    const size_t idx = (start + n) % BREADCRUMB_COUNT;
+    out += breadcrumbStore.entries[idx];
+    out += '\n';
+  }
+  return out;
 }
 
 }  // namespace HalSystem

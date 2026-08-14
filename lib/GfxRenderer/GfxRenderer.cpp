@@ -176,6 +176,36 @@ bool GfxRenderer::ensureBitmapScratchBuffers(const size_t outputRowSize, const s
 
 bool GfxRenderer::isFontCacheScanning() const { return fontCacheManager_ && fontCacheManager_->isScanning(); }
 
+const EpdFontFamily* GfxRenderer::getMissingGlyphFallbackFamily(const int primaryFontId) const {
+  // Runtime glyph substitution is intentionally limited to user/SD reading
+  // fonts. Built-in UI fonts already are their own last resort.
+  if (sdCardFonts_.find(primaryFontId) == sdCardFonts_.end()) return nullptr;
+
+  const auto primaryIt = fontMap.find(primaryFontId);
+  if (primaryIt == fontMap.end()) return nullptr;
+
+  const EpdFontData* primaryData = primaryIt->second.getData(EpdFontFamily::REGULAR);
+  if (!primaryData) return nullptr;
+  const int primaryHeight = primaryData->advanceY;
+
+  const EpdFontFamily* best = nullptr;
+  int bestDelta = 0x7fffffff;
+  const int candidates[2] = {missingGlyphFallbackSmallFontId_, missingGlyphFallbackLargeFontId_};
+  for (const int id : candidates) {
+    if (id == 0 || id == primaryFontId) continue;
+    const auto it = fontMap.find(id);
+    if (it == fontMap.end()) continue;
+    const EpdFontData* data = it->second.getData(EpdFontFamily::REGULAR);
+    if (!data) continue;
+    const int delta = std::abs(static_cast<int>(data->advanceY) - primaryHeight);
+    if (delta < bestDelta) {
+      bestDelta = delta;
+      best = &it->second;
+    }
+  }
+  return best;
+}
+
 void GfxRenderer::insertFont(const int fontId, EpdFontFamily font) {
   auto result = fontMap.insert({fontId, font});
   if (!result.second) {
@@ -709,8 +739,14 @@ int GfxRenderer::getTextWidth(const int fontId, const char* text, const EpdFontF
   if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
     int32_t widthFP = 0;
     const uint8_t styleIdx = resolveSdCardStyle(*sdIt->second, style);
+    const EpdFontFamily* glyphFallback = getMissingGlyphFallbackFamily(fontId);
     while (uint32_t cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&textCursor))) {
-      widthFP += sdIt->second->getAdvance(cp, styleIdx);
+      uint16_t advance = sdIt->second->getAdvance(cp, styleIdx);
+      if (advance == 0 && !utf8IsCombiningMark(cp) && glyphFallback) {
+        const auto fallbackGlyph = glyphFallback->findGlyphData(cp, style);
+        if (fallbackGlyph.glyph) advance = fallbackGlyph.glyph->advanceX;
+      }
+      widthFP += advance;
     }
     return fp4::toPixel(widthFP);
   }
@@ -763,36 +799,60 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
 
   uint32_t cp;
   uint32_t prevCp = 0;
+  const EpdFontFamily* prevGlyphFont = nullptr;
+  const EpdFontFamily* glyphFallback = getMissingGlyphFallbackFamily(fontId);
+
   while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&textCursor)))) {
     if (utf8IsCombiningMark(cp)) {
-      const EpdGlyph* combiningGlyph = font.getGlyph(cp, style);
-      if (!combiningGlyph) continue;
+      const EpdFontFamily* markFont = &font;
+      auto markData = font.findGlyphData(cp, style);
+      if (!markData.glyph && glyphFallback) {
+        const auto fallbackData = glyphFallback->findGlyphData(cp, style);
+        if (fallbackData.glyph) {
+          markFont = glyphFallback;
+          markData = fallbackData;
+        }
+      }
+      if (!markData.glyph) continue;
+
+      const EpdGlyph* combiningGlyph = markData.glyph;
       const int raiseBy = combiningMark::raiseAboveBase(combiningGlyph->top, combiningGlyph->height, lastBaseTop);
       const int combiningX = combiningMark::centerOver(lastBaseX, lastBaseLeft, lastBaseWidth, combiningGlyph->left,
                                                        combiningGlyph->width);
-      renderCharImpl<TextRotation::None>(*this, renderMode, font, cp, combiningX, yPos - raiseBy, black, style);
+      renderCharImpl<TextRotation::None>(*this, renderMode, *markFont, cp, combiningX, yPos - raiseBy, black, style);
       continue;
     }
 
     cp = font.applyLigatures(cp, textCursor, style);
-    cp = font.getFallbackCodepoint(cp, style);
-    const bool hasRealGlyph = font.findGlyphData(cp, style).glyph != nullptr;
 
-    // Differential rounding: snap (previous advance + current kern) as one unit so
-    // identical character pairs always produce the same pixel step regardless of
-    // where they fall on the line.
+    // Prefer the selected reading font. If it genuinely lacks this Unicode
+    // codepoint, try the closest-sized flash-resident Inter family before
+    // falling back to aliases/synthetic tofu.
+    const EpdFontFamily* glyphFont = &font;
+    bool hasRealGlyph = font.findGlyphData(cp, style).glyph != nullptr;
+    if (!hasRealGlyph && glyphFallback) {
+      const auto fallbackData = glyphFallback->findGlyphData(cp, style);
+      if (fallbackData.glyph) {
+        glyphFont = glyphFallback;
+        hasRealGlyph = true;
+      }
+    }
+
+    if (!hasRealGlyph) {
+      cp = font.getFallbackCodepoint(cp, style);
+      hasRealGlyph = font.findGlyphData(cp, style).glyph != nullptr;
+      glyphFont = &font;
+    }
+
+    // Kerning is valid only inside one font family. Never apply the selected
+    // font's kern table across a fallback glyph boundary.
     if (prevCp != 0) {
-      const bool bothDigits = prevCp >= '0' && prevCp <= '9' && cp >= '0' && cp <= '9';
-      // Skip kerning between two ASCII digits: some fonts ship with bad kerning-table
-      // entries for specific digit pairs (observed: "3"+"4", "3"+"5") that pull the
-      // second digit far enough left to visually overlap and disappear behind the
-      // first - e.g. a clock showing "11:34" as "11:3". Digits have no real
-      // typographic need for kerning against each other (they're meant to read like
-      // tabular figures), so just skip the lookup for digit-digit pairs everywhere
-      // rather than special-casing every screen that happens to draw two digits in a
-      // row (clocks, dates, stats, battery percentage, page numbers, ...).
-      const auto kernFP = bothDigits ? 0 : font.getKerning(prevCp, cp, style);  // 4.4 fixed-point kern
-      lastBaseX += fp4::toPixel(prevAdvanceFP + kernFP);       // snap 12.4 fixed-point to nearest pixel
+      int kernFP = 0;
+      if (prevGlyphFont == glyphFont) {
+        const bool bothDigits = prevCp >= '0' && prevCp <= '9' && cp >= '0' && cp <= '9';
+        kernFP = bothDigits ? 0 : glyphFont->getKerning(prevCp, cp, style);
+      }
+      lastBaseX += fp4::toPixel(prevAdvanceFP + kernFP);
     }
 
     if (!hasRealGlyph && syntheticGlyph::isSpaceFallback(cp)) {
@@ -801,6 +861,7 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
       lastBaseWidth = 0;
       lastBaseTop = 0;
       prevCp = 0;
+      prevGlyphFont = nullptr;
       continue;
     }
 
@@ -812,6 +873,7 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
       lastBaseTop = metrics.top;
       prevAdvanceFP = metrics.advanceX;
       prevCp = cp;
+      prevGlyphFont = &font;
       continue;
     }
 
@@ -823,6 +885,7 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
       lastBaseTop = metrics.top;
       prevAdvanceFP = metrics.advanceX;
       prevCp = cp;
+      prevGlyphFont = &font;
       continue;
     }
 
@@ -834,41 +897,37 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
       lastBaseTop = metrics.top;
       prevAdvanceFP = metrics.advanceX;
       prevCp = cp;
+      prevGlyphFont = &font;
       continue;
     }
 
-    const EpdGlyph* glyph = font.getGlyph(cp, style);
-
+    const EpdGlyph* glyph = glyphFont->getGlyph(cp, style);
     if (!glyph) {
-      // Advance was already flushed into lastBaseX above; clear base metrics so the
-      // next character does not kern or attach to stale state.
       prevAdvanceFP = 0;
       lastBaseLeft = 0;
       lastBaseWidth = 0;
       lastBaseTop = 0;
       prevCp = 0;
+      prevGlyphFont = nullptr;
       continue;
     }
 
     lastBaseLeft = glyph->left;
     lastBaseWidth = glyph->width;
     lastBaseTop = glyph->top;
-    prevAdvanceFP = glyph->advanceX;  // 12.4 fixed-point
+    prevAdvanceFP = glyph->advanceX;
 
     const bool isSupSub = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB | EpdFontFamily::SMALL_CAPS)) != 0;
-    if (isSupSub) {
-      // Halve the advance so the cursor advances by the same amount the scaled glyph
-      // actually occupies, keeping spacing correct without needing a separate smaller font.
-      prevAdvanceFP = (prevAdvanceFP + 1) / 2;
-    }
+    if (isSupSub) prevAdvanceFP = (prevAdvanceFP + 1) / 2;
 
     if (isSupSub) {
-      // yPos already carries the vertical offset applied by TextBlock::render().
-      renderCharScaled(*this, renderMode, font, cp, lastBaseX, yPos, black, style);
+      renderCharScaled(*this, renderMode, *glyphFont, cp, lastBaseX, yPos, black, style);
     } else {
-      renderCharImpl<TextRotation::None>(*this, renderMode, font, cp, lastBaseX, yPos, black, style);
+      renderCharImpl<TextRotation::None>(*this, renderMode, *glyphFont, cp, lastBaseX, yPos, black, style);
     }
+
     prevCp = cp;
+    prevGlyphFont = glyphFont;
   }
 }
 
@@ -2024,8 +2083,13 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
     int32_t widthFP = 0;
     const bool isSupSub = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB | EpdFontFamily::SMALL_CAPS)) != 0;
     const uint8_t styleIdx = resolveSdCardStyle(*sdIt->second, style);
+    const EpdFontFamily* glyphFallback = getMissingGlyphFallbackFamily(fontId);
     while (uint32_t cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text))) {
       int32_t advFP = sdIt->second->getAdvance(cp, styleIdx);
+      if (advFP == 0 && !utf8IsCombiningMark(cp) && glyphFallback) {
+        const auto fallbackGlyph = glyphFallback->findGlyphData(cp, style);
+        if (fallbackGlyph.glyph) advFP = fallbackGlyph.glyph->advanceX;
+      }
       widthFP += isSupSub ? (advFP + 1) / 2 : advFP;
     }
     return fp4::toPixel(widthFP);

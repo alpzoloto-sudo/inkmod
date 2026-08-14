@@ -120,6 +120,12 @@ EpdFont ui14RegularFont(&inter_14_regular);
 EpdFont ui14BoldFont(&inter_14_bold);
 EpdFontFamily ui14FontFamily(&ui14RegularFont, &ui14BoldFont);
 
+EpdFont ipaFallback12Font(&inter_12_ipa_fallback);
+EpdFontFamily ipaFallback12Family(&ipaFallback12Font);
+
+EpdFont ipaFallback14Font(&inter_14_ipa_fallback);
+EpdFontFamily ipaFallback14Family(&ipaFallback14Font);
+
 // See UiTextSize.h. Only UI_10_FONT_ID (menu/list body text) grows; two roles
 // are deliberately left untouched:
 //  - UI_12_FONT_ID has no larger built-in size to grow into.
@@ -513,8 +519,7 @@ void enterDeepSleep(bool fromTimeout) {
   const bool isQuickResumeSleep =
       SETTINGS.sleepScreen == InkMODSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
       (fromTimeout &&
-       (SETTINGS.quickResumeSleepScreen == InkMODSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT ||
-        SETTINGS.quickResumeSleepScreen == InkMODSettings::QUICK_RESUME_SLEEP_SCREEN::TIMEOUT_SLEEP_OVERLAY));
+       SETTINGS.quickResumeSleepScreen == InkMODSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT);
   APP_STATE.showBootScreen = !isQuickResumeSleep;
 
   APP_STATE.saveToFile();
@@ -566,6 +571,13 @@ void setupDisplayAndFonts(bool seamless = false) {
   renderer.insertFont(UI_12_FONT_ID, ui12FontFamily);
   renderer.insertFont(UI_14_FONT_ID, ui14FontFamily);
   renderer.insertFont(SMALL_FONT_ID, smallFontFamily);
+  renderer.insertFont(IPA_FALLBACK_12_FONT_ID, ipaFallback12Family);
+  renderer.insertFont(IPA_FALLBACK_14_FONT_ID, ipaFallback14Family);
+
+  // Missing glyphs in a user reading font are drawn from the IPA-capable
+  // built-in Inter fallback. Normal glyphs stay in the selected book font.
+  renderer.setMissingGlyphFallbackFonts(IPA_FALLBACK_12_FONT_ID, IPA_FALLBACK_14_FONT_ID);
+
   applyUiTextSize(renderer);
 
   // Discover and load SD card fonts (font-pack removed, so this will find none,
@@ -693,12 +705,16 @@ void attemptSilentBootTimeSync(const BootTimeSyncCandidate& candidate) {
 // instead of hours of static code review.
 void outOfMemoryHandler() {
   const auto heap = MemoryBudget::snapshot();
+  char breadcrumb[48];
+  snprintf(breadcrumb, sizeof(breadcrumb), "OOM free=%u max=%u", heap.freeHeap, heap.maxAllocHeap);
+  HalSystem::recordBreadcrumb(breadcrumb);
+  HalSystem::markDiagnosticReboot();
   LOG_ERR("MEM", "operator new failed - out of memory (free=%u maxAlloc=%u) - restarting", heap.freeHeap,
           heap.maxAllocHeap);
 #ifdef ENABLE_SERIAL_LOG
   logSerial.flush();
 #endif
-  delay(50);  // Give the serial log time to actually go out before the reset.
+  delay(50);
   esp_restart();
 }
 

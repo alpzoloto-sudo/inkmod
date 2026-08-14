@@ -94,6 +94,14 @@ class GfxRenderer {
   // as before, concentrated in a single pointer instead of four fields.
   mutable FontCacheManager* fontCacheManager_ = nullptr;
 
+  // Flash-resident last-resort glyph families used only when an SD-card
+  // reading font genuinely does not contain a requested Unicode codepoint.
+  // Keeping only IDs here avoids coupling GfxRenderer to application font IDs.
+  int missingGlyphFallbackSmallFontId_ = 0;
+  int missingGlyphFallbackLargeFontId_ = 0;
+
+  const EpdFontFamily* getMissingGlyphFallbackFamily(int primaryFontId) const;
+
   void renderChar(const EpdFontFamily& fontFamily, uint32_t cp, int* x, int* y, bool pixelState,
                   EpdFontFamily::Style style) const;
   void freeBwBufferChunks();
@@ -145,6 +153,10 @@ class GfxRenderer {
     sdCardFonts_.erase(fontId);
   }
   void setFontCacheManager(FontCacheManager* m) { fontCacheManager_ = m; }
+  void setMissingGlyphFallbackFonts(int smallFontId, int largeFontId) {
+    missingGlyphFallbackSmallFontId_ = smallFontId;
+    missingGlyphFallbackLargeFontId_ = largeFontId;
+  }
   FontCacheManager* getFontCacheManager() const { return fontCacheManager_; }
   bool isFontCacheScanning() const;
   const std::map<int, EpdFontFamily>& getFontMap() const { return fontMap; }

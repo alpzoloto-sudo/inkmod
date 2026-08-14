@@ -2,9 +2,11 @@
 
 #include <FsHelpers.h>
 #include <HalStorage.h>
+#include <HalSystem.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <cstdio>
 
 #include "InkMODSettings.h"
 #include "Epub.h"
@@ -42,6 +44,9 @@ bool ReaderActivity::shouldShowLoadingPopup(const std::string& path) {
 }
 
 std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path, const std::function<void(uint8_t)>& onProgress) {
+  char breadcrumb[48];
+  snprintf(breadcrumb, sizeof(breadcrumb), "Open EPUB %.34s", path.c_str());
+  HalSystem::recordBreadcrumb(breadcrumb);
   if (!Storage.exists(path.c_str())) {
     LOG_ERR("READER", "File does not exist: %s", path.c_str());
     return nullptr;
@@ -74,6 +79,9 @@ std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path, const st
 }
 
 std::unique_ptr<Xtc> ReaderActivity::loadXtc(const std::string& path) {
+  char breadcrumb[48];
+  snprintf(breadcrumb, sizeof(breadcrumb), "Open XTC %.35s", path.c_str());
+  HalSystem::recordBreadcrumb(breadcrumb);
   if (!Storage.exists(path.c_str())) {
     LOG_ERR("READER", "File does not exist: %s", path.c_str());
     return nullptr;
@@ -93,6 +101,9 @@ std::unique_ptr<Xtc> ReaderActivity::loadXtc(const std::string& path) {
 }
 
 std::unique_ptr<Txt> ReaderActivity::loadTxt(const std::string& path) {
+  char breadcrumb[48];
+  snprintf(breadcrumb, sizeof(breadcrumb), "Open TXT %.35s", path.c_str());
+  HalSystem::recordBreadcrumb(breadcrumb);
   if (!Storage.exists(path.c_str())) {
     LOG_ERR("READER", "File does not exist: %s", path.c_str());
     return nullptr;

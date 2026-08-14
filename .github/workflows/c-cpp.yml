@@ -29,5 +29,8 @@ jobs:
       - name: Validate release metadata
         run: python scripts/release_check.py
 
-      - name: Build tiny firmware
-        run: pio run -e tiny
+      - name: Build developer firmware
+        run: pio run -e developer
+
+      - name: Build release firmware
+        run: pio run -e release

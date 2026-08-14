@@ -5,9 +5,9 @@ name: Build and publish release firmware
 # in - useful when a tag needs re-publishing under the same version number
 # (re-pushing an identical tag name doesn't reliably re-trigger a tag-push
 # event on GitHub's side) without bumping to a new one.
-# Builds the tiny env and publishes the resulting firmware-tiny-v<version>.bin
-# as a GitHub Release asset. That naming is required for OtaUpdater on-device
-# to recognize it (see isMatchingFirmwareAssetName() in src/network/OtaUpdater.cpp).
+# Builds the production release env and publishes firmware-release-v<version>.bin.
+# Release firmware searches for firmware-release*.bin assets in OtaUpdater, so
+# publishing the real release variant keeps OTA and USB release builds identical.
 on:
   push:
     tags:
@@ -63,21 +63,25 @@ jobs:
         run: |
           # A manual re-publish must not produce a new asset that still
           # reports the version from the checked-out platformio.ini.
+          sed -i -E 's/^version = .*/version = ${{ steps.version.outputs.version }}/' platformio.ini
           sed -i -E 's/^inkmod_version = .*/inkmod_version = ${{ steps.version.outputs.version }}/' platformio.ini
 
-      - name: Build firmware (tiny)
+      - name: Validate release tree
+        run: python scripts/release_check.py
+
+      - name: Build production firmware (release)
         env:
           INKMOD_RELEASE_VERSION: ${{ steps.version.outputs.version }}
-        run: pio run -e tiny
+        run: pio run -e release
 
       - name: Locate built firmware asset
         id: artifact
         run: |
-          FILE=".pio/build/tiny/firmware-tiny-v${{ steps.version.outputs.version }}.bin"
+          FILE=".pio/build/release/firmware-release-v${{ steps.version.outputs.version }}.bin"
           if [ ! -f "$FILE" ]; then
             echo "::error::Expected artifact not found: $FILE"
             echo "Build directory contents:"
-            ls -la .pio/build/tiny/
+            ls -la .pio/build/release/
             exit 1
           fi
           echo "path=$FILE" >> "$GITHUB_OUTPUT"

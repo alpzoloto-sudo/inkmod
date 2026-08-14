@@ -14,6 +14,8 @@ namespace {
 constexpr uint32_t BOOK_CACHE_MAGIC = 0x425843FF;  // bytes: 0xFF, "CXB"
 constexpr uint8_t BOOK_CACHE_VERSION = 7;
 constexpr char bookBinFile[] = "/book.bin";
+constexpr char tmpBookBinFile[] = "/book.bin.tmp";
+constexpr char bakBookBinFile[] = "/book.bin.bak";
 constexpr char tmpSpineBinFile[] = "/spine.bin.tmp";
 constexpr char tmpTocBinFile[] = "/toc.bin.tmp";
 }  // namespace
@@ -104,8 +106,13 @@ bool BookMetadataCache::endWrite() {
 
 bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMetadata& metadata,
                                      const bool unpackedPackage, const BuildProgressFn& onProgress) {
-  // Open all three files, writing to meta, reading from spine and toc
-  if (!Storage.openFileForWrite("BMC", cachePath + bookBinFile, bookFile)) {
+  // Build metadata into a temporary file first. A power loss or OOM during
+  // first-open must never replace a known-good book.bin with a truncated one.
+  const std::string finalBookPath = cachePath + bookBinFile;
+  const std::string tempBookPath = cachePath + tmpBookBinFile;
+  const std::string backupBookPath = cachePath + bakBookBinFile;
+  if (Storage.exists(tempBookPath.c_str())) Storage.remove(tempBookPath.c_str());
+  if (!Storage.openFileForWrite("BMC", tempBookPath, bookFile)) {
     return false;
   }
 
@@ -339,15 +346,42 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
   }
 
   // Explicit close() required: member variables persist beyond function scope
+  bookFile.flush();
   bookFile.close();
   spineFile.close();
   tocFile.close();
+
+  // Atomic-ish promotion on FAT: preserve the old cache until the complete
+  // temporary file has been closed successfully, then rename it into place.
+  if (Storage.exists(backupBookPath.c_str())) Storage.remove(backupBookPath.c_str());
+  if (Storage.exists(finalBookPath.c_str()) && !Storage.rename(finalBookPath.c_str(), backupBookPath.c_str())) {
+    Storage.remove(tempBookPath.c_str());
+    LOG_ERR("BMC", "Could not preserve previous book.bin before promotion");
+    return false;
+  }
+  if (!Storage.rename(tempBookPath.c_str(), finalBookPath.c_str())) {
+    if (Storage.exists(backupBookPath.c_str()) && !Storage.exists(finalBookPath.c_str())) {
+      Storage.rename(backupBookPath.c_str(), finalBookPath.c_str());
+    }
+    Storage.remove(tempBookPath.c_str());
+    LOG_ERR("BMC", "Could not promote temporary book.bin");
+    return false;
+  }
+  if (Storage.exists(backupBookPath.c_str())) Storage.remove(backupBookPath.c_str());
 
   LOG_DBG("BMC", "Successfully built book.bin");
   return true;
 }
 
 bool BookMetadataCache::cleanupTmpFiles() const {
+  const auto bookTmpFile = cachePath + tmpBookBinFile;
+  if (Storage.exists(bookTmpFile.c_str())) Storage.remove(bookTmpFile.c_str());
+  const auto bookBakFile = cachePath + bakBookBinFile;
+  if (Storage.exists(bookBakFile.c_str()) && !Storage.exists((cachePath + bookBinFile).c_str())) {
+    Storage.rename(bookBakFile.c_str(), (cachePath + bookBinFile).c_str());
+  } else if (Storage.exists(bookBakFile.c_str())) {
+    Storage.remove(bookBakFile.c_str());
+  }
   const auto spineBinFile = cachePath + tmpSpineBinFile;
   if (Storage.exists(spineBinFile.c_str())) {
     Storage.remove(spineBinFile.c_str());

@@ -129,14 +129,43 @@
 
     let files = [];
     try {
-      const response = await fetch('/api/files?path=' + encodeURIComponent(currentPath) + '&_=' + Date.now());
-      if (!response.ok) {
-        throw new Error(t('files.load_files_failed', {msg: response.status + ' ' + response.statusText}));
+      const pageSize = 16;
+      let offset = 0;
+      for (;;) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 12000);
+        let response;
+        try {
+          response = await fetch(
+            '/api/files?paged=1&path=' + encodeURIComponent(currentPath) +
+            '&offset=' + offset + '&limit=' + pageSize + '&_=' + Date.now(),
+            { signal: controller.signal, cache: 'no-store' }
+          );
+        } finally {
+          clearTimeout(timeoutId);
+        }
+
+        if (!response.ok) {
+          throw new Error(t('files.load_files_failed', {msg: response.status + ' ' + response.statusText}));
+        }
+
+        const page = await response.json();
+        if (!Array.isArray(page)) throw new Error('Invalid file-list response');
+        files.push(...page);
+
+        const hasMore = response.headers.get('X-InkMOD-Has-More') === '1';
+        if (!hasMore || page.length === 0) break;
+        offset += page.length;
+
+        // Safety guard against a corrupt server cursor.
+        if (offset > 4096) throw new Error('Too many file-list entries');
       }
-      files = await response.json();
     } catch (e) {
-      console.error(e);
-      fileTable.innerHTML = '<div class="no-files">An error occurred while loading the files</div>';
+      console.error('[Files] load failed:', e);
+      const message = e && e.name === 'AbortError'
+        ? 'File list request timed out'
+        : 'An error occurred while loading the files';
+      fileTable.innerHTML = '<div class="no-files">' + message + '</div>';
       return;
     }
 
@@ -2657,12 +2686,57 @@ async function processImage(data, imageState = 0, imagePath = '') {
  * the wild. Match any of them instead of requiring a literal dot.
  */
 function isFb2ZipName(name) {
-  const n = (name || '').toLowerCase();
-  return n.endsWith('.zip') && /fb2$/.test(n.slice(0, -4));
+  const n = (name || '').toLowerCase().trim();
+  if (!n.endsWith('.zip')) return false;
+
+  // Accept normal names:
+  //   Book.fb2.zip
+  //   Book_fb2.zip
+  // and browser/Windows duplicate names:
+  //   Book.fb2 (1).zip
+  //   Book.fb2 (12).zip
+  const stem = n.slice(0, -4).trim();
+  return /(?:^|[._ -])fb2(?:\s*\(\d+\))?$/.test(stem);
+}
+
+function canonicalFb2ZipUploadName(name) {
+  const original = String(name || '');
+  const withoutZip = original.replace(/\.zip$/i, '').trim();
+
+  // If the archive name already contains a trailing FB2 marker, including
+  // duplicate-download suffixes like ".fb2 (1)", collapse it to ".fb2".
+  if (/(?:^|[._ -])fb2(?:\s*\(\d+\))?$/i.test(withoutZip)) {
+    return withoutZip
+      .replace(/\s*\(\d+\)\s*$/i, '')
+      .replace(/([._ -])fb2$/i, '.fb2') + '.zip';
+  }
+
+  // Generic Book.zip whose CONTENT was detected as FB2.
+  return withoutZip + '.fb2.zip';
 }
 function isFb2Name(name) {
   const n = (name || '').toLowerCase();
   return n.endsWith('.fb2') || isFb2ZipName(n);
+}
+
+/**
+ * Upload-time FB2 detection. A ZIP does not have to be named *.fb2.zip:
+ * many libraries distribute names such as "Book.zip". Inspect the archive
+ * directory and treat it as an FB2 book when it actually contains a .fb2.
+ * Ordinary ZIP files stay ordinary files.
+ */
+async function isFb2UploadFile(file) {
+  const name = (file && file.name || '').toLowerCase();
+  if (name.endsWith('.fb2')) return true;
+  if (!name.endsWith('.zip')) return false;
+  if (isFb2ZipName(name)) return true;
+
+  try {
+    const zip = await JSZip.loadAsync(file);
+    return Object.keys(zip.files).some(path => !zip.files[path].dir && path.toLowerCase().endsWith('.fb2'));
+  } catch (_) {
+    return false;
+  }
 }
 
 /** Standalone image files (not embedded in an EPUB/FB2) eligible for the
@@ -2830,10 +2904,10 @@ async function optimizeRemainingFb2Images(fb2Text, alreadyOptimizedId, progressC
   return result + fb2Text.slice(cursor);
 }
 
-async function convertFb2File(file, progressCallback) {
+async function convertFb2File(file, progressCallback, optimizeAllImages = true) {
   const startTime = Date.now();
   const originalSize = file.size;
-  const isZip = isFb2ZipName(file.name);
+  const isZip = /\.zip$/i.test(file.name);
 
   clearLog();
   showLog();
@@ -2895,15 +2969,13 @@ async function convertFb2File(file, progressCallback) {
 
   const { img, width: origW, height: origH, url } = loaded;
 
-  if (origW <= MAX_WIDTH && origH <= MAX_HEIGHT) {
-    URL.revokeObjectURL(url);
-    logSkip(file.name, `cover already fits (${origW}×${origH})`);
-    logSummary(originalSize, originalSize, (Date.now() - startTime) / 1000);
-    if (progressCallback) progressCallback(100);
-    return file;
-  }
-
-  const scale = Math.min(MAX_WIDTH / origW, MAX_HEIGHT / origH);
+  // Always pass the FB2 cover through Canvas, even when it already fits.
+  // Besides optional grayscale/quality normalization this converts progressive
+  // JPEG covers to a baseline JPEG that the X3/X4 can decode at full detail.
+  // This specifically fixes covers such as 470×720 progressive JPEGs which
+  // otherwise decode on-device only as a tiny 1/8 DC preview.
+  const fitsScreen = origW <= MAX_WIDTH && origH <= MAX_HEIGHT;
+  const scale = fitsScreen ? 1 : Math.min(MAX_WIDTH / origW, MAX_HEIGHT / origH);
   const newW = Math.round(origW * scale);
   const newH = Math.round(origH * scale);
 
@@ -2929,7 +3001,15 @@ async function convertFb2File(file, progressCallback) {
     .replace(/>[\s\S]*<\/binary>/i, `>${newBase64}</binary>`);
 
   let newFb2Text = fb2Text.slice(0, binary.index) + newBinaryTag + fb2Text.slice(binary.index + binary.length);
-  newFb2Text = await optimizeRemainingFb2Images(newFb2Text, coverId, progressCallback);
+
+  // The cover is always normalized because progressive JPEG covers are only
+  // decodable at reduced detail by the device JPEG path. Other illustrations
+  // are still optimized only when the user enabled the normal Optimization
+  // checkbox, so automatic cover safety does not unexpectedly rewrite the
+  // rest of the book.
+  if (optimizeAllImages) {
+    newFb2Text = await optimizeRemainingFb2Images(newFb2Text, coverId, progressCallback);
+  }
 
   let newFile;
   if (isZip) {
@@ -2944,6 +3024,7 @@ async function convertFb2File(file, progressCallback) {
 
   logImage(`cover (${coverId})`, origW, origH, (binary.contentType.split('/')[1] || 'img'),
            Math.round(binary.base64.length * 0.75), newW, newH, newBlob.size, false, 0, null, 0);
+  if (fitsScreen) log(`Cover normalized: ${origW}×${origH} → baseline JPEG`, 'success', 'DONE');
   log(t('files.cover_opt_complete'), 'success', 'DONE');
   logSummary(originalSize, newFile.size, (Date.now() - startTime) / 1000);
 
@@ -4738,8 +4819,19 @@ function uploadFile() {
     // Check if file is an EPUB/FB2/standalone image and conversion is enabled
     const lowerFileName = file.name.toLowerCase();
     const isEpub = lowerFileName.endsWith('.epub');
-    const isFb2 = isFb2Name(lowerFileName);
+    const isFb2 = await isFb2UploadFile(file);
     const isImage = isImageName(lowerFileName);
+
+    // A generic Book.zip that actually contains FB2 must arrive on the
+    // device with an FB2-recognisable extension too. Content detection alone
+    // is not enough: the firmware file browser intentionally does not treat
+    // every arbitrary .zip as a book. Rename only the detected FB2 archives.
+    if (isFb2 && lowerFileName.endsWith('.zip')) {
+      const fb2ZipName = canonicalFb2ZipUploadName(file.name);
+      if (fb2ZipName !== file.name) {
+        file = new File([file], fb2ZipName, { type: file.type || 'application/zip' });
+      }
+    }
     // fb2ToEpubEnabled must work on its own here: the checkbox is reachable
     // and checkable in the UI without first checking convertEnabled (the
     // "Оптимизация" parent), so requiring both silently no-ops the whole
@@ -4747,7 +4839,16 @@ function uploadFile() {
     // just uploads unconverted with no error or indication anything was
     // skipped.
     const convertFb2ToRealEpub = isFb2 && fb2ToEpubEnabled;
-    const needsConversion = (isEpub || isFb2 || isImage) && convertEnabled || convertFb2ToRealEpub;
+
+    // Every FB2 upload gets a lightweight cover-normalization pass. This is
+    // required for progressive JPEG cover compatibility on X3/X4. The normal
+    // Optimization checkbox still controls EPUB/images and the OTHER FB2
+    // illustrations.
+    const normalizeFb2Cover = isFb2 && !convertFb2ToRealEpub;
+    const needsConversion =
+      ((isEpub || isImage) && convertEnabled) ||
+      (isFb2 && (convertEnabled || normalizeFb2Cover)) ||
+      convertFb2ToRealEpub;
     let conversionSucceeded = false;
     let conversionFailed = false;  // Track if conversion actually failed
     let convOriginalSize = 0;      // Picked-file size; 0 unless conversion succeeded
@@ -4843,8 +4944,8 @@ function uploadFile() {
             });
           } else if (isFb2) {
             converted = await convertFb2File(file, (percent) => {
-              progressFill.style.width = (percent * 0.5) + '%'; // Conversion takes first 50%
-            });
+              progressFill.style.width = (percent * 0.5) + '%'; // Preparation takes first 50%
+            }, convertEnabled);
           } else if (isEpub) {
             converted = await convertEpubFile(file, (percent) => {
               // Pass current quality setting to converter

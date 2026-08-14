@@ -14,9 +14,6 @@
   Open-source custom firmware for Xteink X4 and Xteink X3
 </p>
 
-
-# inkMOD — Custom Firmware for Xteink X4 / X3
-
 **inkMOD** is an open-source custom firmware for **Xteink X4 and Xteink X3** e-readers with native **FB2, FB2.ZIP and EPUB** support, Russian and Ukrainian localization, dictionaries, improved typography, sleep covers, reading statistics, web file management and browser-side book optimization.
 
 The project focuses on extending the capabilities of the Xteink X4/X3 while keeping the firmware fast and stable on memory-constrained hardware.

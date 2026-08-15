@@ -5,7 +5,8 @@
 
 namespace Dictionary {
 
-constexpr char ROOT_PATH[] = "/Dictionaries";
+constexpr char ROOT_PATH[] = "/.dictionaries";
+constexpr char LEGACY_ROOT_PATH[] = "/Dictionaries";
 constexpr uint8_t MAX_DICTIONARIES = 8;
 constexpr size_t MAX_DICTIONARY_NAME_BYTES = 64;
 constexpr size_t MAX_DICTIONARY_PATH_BYTES = 192;

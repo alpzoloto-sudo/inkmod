@@ -104,6 +104,12 @@ String normalizeWebPath(const String& inputPath) {
 }
 
 bool isProtectedPath(const String& path) {
+  // Managed system folders are hidden from listings but their dedicated web
+  // tools must still be able to upload files while "show hidden" is disabled.
+  if (path == "/.dictionaries" || path.startsWith("/.dictionaries/") || path == "/.screenshots" ||
+      path.startsWith("/.screenshots/")) {
+    return false;
+  }
   // Check every segment of the path, not just the last one.
   // This prevents access to e.g. /.hidden/somefile or /System Volume Information/foo
   int start = 0;

@@ -2900,6 +2900,21 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       heap = MemoryBudget::snapshot();
       memoryPolicy = reader::selectReaderMemoryPolicy(heap.freeHeap, heap.maxAllocHeap);
     }
+    if (memoryPolicy.mode == reader::ReaderMemoryMode::Unavailable) {
+      // A release build can reach this point with a temporarily fragmented
+      // heap even though the same chapter fits after a clean boot. Reclaim all
+      // rebuildable glyph data once before showing a blocking memory error.
+      if (auto* fcm = renderer.getFontCacheManager()) {
+        fcm->clearCache();
+      }
+      if (renderer.isSdCardFont(readerFontId)) {
+        renderer.releaseSdCardFontForLowMemory(readerFontId);
+      }
+      delay(1);
+      yield();
+      heap = MemoryBudget::snapshot();
+      memoryPolicy = reader::selectReaderMemoryPolicy(heap.freeHeap, heap.maxAllocHeap);
+    }
 
     bool loadedSection = false;
     bool usedFallbackFont = false;

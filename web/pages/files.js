@@ -5620,7 +5620,7 @@ function retryAllFailedUploads() {
   // dictionary.idx (sorted fixed-size hash records) and dictionary.dat
   // (headword/article payloads). The ESP32 only validates headers and performs
   // a binary search, avoiding expensive first-open parsing on the reader.
-  const DICTIONARY_ROOT = '/Dictionaries';
+  const DICTIONARY_ROOT = '/.dictionaries';
   const DICTIONARY_INDEX_HEADER_SIZE = 16;
   const DICTIONARY_DATA_HEADER_SIZE = 12;
   const DICTIONARY_INDEX_RECORD_SIZE = 16;

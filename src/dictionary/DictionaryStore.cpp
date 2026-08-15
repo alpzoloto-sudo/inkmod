@@ -241,59 +241,72 @@ size_t Store::normalizeWord(const char* input, char* output, const size_t output
 
 bool Store::scan() {
   count_ = 0;
-  FsFile root = Storage.open(ROOT_PATH);
-  if (!root || !root.isDirectory()) {
-    root.close();
-    LOG_DBG("DICT", "Dictionary root not found: %s", ROOT_PATH);
-    return false;
-  }
-
+  const char* roots[] = {ROOT_PATH, LEGACY_ROOT_PATH};
   char folderName[MAX_DICTIONARY_NAME_BYTES];
-  while (count_ < MAX_DICTIONARIES) {
-    FsFile item = root.openNextFile();
-    if (!item) break;
-    if (!item.isDirectory()) {
+  for (const char* rootPath : roots) {
+    FsFile root = Storage.open(rootPath);
+    if (!root || !root.isDirectory()) {
+      root.close();
+      LOG_DBG("DICT", "Dictionary root not found: %s", rootPath);
+      continue;
+    }
+
+    while (count_ < MAX_DICTIONARIES) {
+      FsFile item = root.openNextFile();
+      if (!item) break;
+      if (!item.isDirectory()) {
+        item.close();
+        continue;
+      }
+      item.getName(folderName, sizeof(folderName));
       item.close();
-      continue;
+      if (folderName[0] == '\0' || folderName[0] == '.' || folderName[0] == '_') continue;
+
+      bool duplicate = false;
+      for (uint8_t i = 0; i < count_; ++i) {
+        if (strcmp(entries_[i].name, folderName) == 0) {
+          duplicate = true;
+          break;
+        }
+      }
+      if (duplicate) continue;
+
+      CatalogEntry candidate;
+      snprintf(candidate.name, sizeof(candidate.name), "%s", folderName);
+      snprintf(candidate.path, sizeof(candidate.path), "%s/%s", rootPath, folderName);
+
+      char indexPath[MAX_DICTIONARY_PATH_BYTES + 32];
+      char dataPath[MAX_DICTIONARY_PATH_BYTES + 32];
+      snprintf(indexPath, sizeof(indexPath), "%s/%s", candidate.path, INDEX_FILE_NAME);
+      snprintf(dataPath, sizeof(dataPath), "%s/%s", candidate.path, DATA_FILE_NAME);
+      if (!Storage.exists(indexPath) || !Storage.exists(dataPath)) continue;
+
+      FsFile indexFile;
+      if (!Storage.openFileForRead("DICT", indexPath, indexFile)) continue;
+      uint16_t indexVersion = 0;
+      uint16_t indexRecordSize = 0;
+      const bool valid = validateIndexHeader(indexFile, candidate.entryCount, indexVersion, indexRecordSize);
+      indexFile.close();
+      if (!valid || candidate.entryCount == 0) {
+        LOG_ERR("DICT", "Ignoring invalid prepared dictionary: %s", candidate.path);
+        continue;
+      }
+
+      FsFile dataFile;
+      if (!Storage.openFileForRead("DICT", dataPath, dataFile)) continue;
+      uint32_t dataEntryCount = 0;
+      uint16_t dataVersion = 0;
+      const bool dataValid = validateDataHeader(dataFile, dataEntryCount, dataVersion);
+      dataFile.close();
+      if (!dataValid || dataVersion != indexVersion || dataEntryCount != candidate.entryCount) {
+        LOG_ERR("DICT", "Ignoring dictionary with mismatched data: %s", candidate.path);
+        continue;
+      }
+      entries_[count_++] = candidate;
     }
-    item.getName(folderName, sizeof(folderName));
-    item.close();
-    if (folderName[0] == '\0' || folderName[0] == '.' || folderName[0] == '_') continue;
-
-    CatalogEntry candidate;
-    snprintf(candidate.name, sizeof(candidate.name), "%s", folderName);
-    snprintf(candidate.path, sizeof(candidate.path), "%s/%s", ROOT_PATH, folderName);
-
-    char indexPath[MAX_DICTIONARY_PATH_BYTES + 32];
-    char dataPath[MAX_DICTIONARY_PATH_BYTES + 32];
-    snprintf(indexPath, sizeof(indexPath), "%s/%s", candidate.path, INDEX_FILE_NAME);
-    snprintf(dataPath, sizeof(dataPath), "%s/%s", candidate.path, DATA_FILE_NAME);
-    if (!Storage.exists(indexPath) || !Storage.exists(dataPath)) continue;
-
-    FsFile indexFile;
-    if (!Storage.openFileForRead("DICT", indexPath, indexFile)) continue;
-    uint16_t indexVersion = 0;
-    uint16_t indexRecordSize = 0;
-    const bool valid = validateIndexHeader(indexFile, candidate.entryCount, indexVersion, indexRecordSize);
-    indexFile.close();
-    if (!valid || candidate.entryCount == 0) {
-      LOG_ERR("DICT", "Ignoring invalid prepared dictionary: %s", candidate.path);
-      continue;
-    }
-
-    FsFile dataFile;
-    if (!Storage.openFileForRead("DICT", dataPath, dataFile)) continue;
-    uint32_t dataEntryCount = 0;
-    uint16_t dataVersion = 0;
-    const bool dataValid = validateDataHeader(dataFile, dataEntryCount, dataVersion);
-    dataFile.close();
-    if (!dataValid || dataVersion != indexVersion || dataEntryCount != candidate.entryCount) {
-      LOG_ERR("DICT", "Ignoring dictionary with mismatched data: %s", candidate.path);
-      continue;
-    }
-    entries_[count_++] = candidate;
+    root.close();
+    if (count_ >= MAX_DICTIONARIES) break;
   }
-  root.close();
   LOG_INF("DICT", "Prepared dictionaries found: %u", count_);
   return count_ > 0;
 }

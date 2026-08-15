@@ -67,6 +67,7 @@ class LegacyGridDiagnosticsActivity final : public Activity {
   int overlaySelection = 0;
   bool gameOver = false;
   bool chillModeEnabled = true;
+  bool fullRefreshPending = false;
   OverlayMode overlay = OverlayMode::None;
   uint8_t phraseIndex = 0;
   uint32_t highScore = 0;

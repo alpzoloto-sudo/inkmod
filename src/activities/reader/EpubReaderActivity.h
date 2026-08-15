@@ -144,6 +144,7 @@ class EpubReaderActivity final : public Activity {
   void showChapterLoadingPopup();
   void openFileTransfer();
   void openAutoPageTurnIntervalPicker(bool ignoreInitialConfirmRelease = false);
+  void returnToReaderMenu();
   void resetReadingPaceData();
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
   void jumpToPercent(int percent);
@@ -155,6 +156,11 @@ class EpubReaderActivity final : public Activity {
   bool executeShortPowerButtonAction();
   bool executeLongPowerButtonAction();
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
+
+  // Set only when a child screen was entered through the book menu. This keeps
+  // the existing behaviour of the same activities when launched by a shortcut.
+  bool returnToReaderMenuOnBack = false;
+  bool readerMenuRequested = false;
   void applyOrientation(uint8_t orientation);
   void executeLongPressMenuAction();
   void pageTurn(bool isForwardTurn, const char* source = "unknown");

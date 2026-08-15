@@ -1748,7 +1748,12 @@ void HomeActivity::openSearchResultPath(const std::string& fullPath) {
     GUI.fillPopupProgress(renderer, popupRect, 0);
 
     Fb2 fb2Converter(fullPath, cacheBasePath);
-    if (fb2Converter.load([this, popupRect](int percent) { GUI.fillPopupProgress(renderer, popupRect, percent); })) {
+    const std::string preparedPackage = fb2Converter.getCachePath() + "/package.epub";
+    const std::string preparedMarker = fb2Converter.getCachePath() + "/.browser_prepared_epub";
+    if (Storage.exists(preparedPackage.c_str()) && Storage.exists(preparedMarker.c_str())) {
+      LOG_INF("FB2", "Opening browser-prepared package for original: %s", fullPath.c_str());
+      onSelectBook(preparedPackage);
+    } else if (fb2Converter.load([this, popupRect](int percent) { GUI.fillPopupProgress(renderer, popupRect, percent); })) {
       onSelectBook(fb2Converter.getPackagePath());
     } else {
       LOG_ERR("FB2", "Failed to load FB2 file: %s", fullPath.c_str());

@@ -596,7 +596,7 @@ void ChapterHtmlSlimParser::emitBufferedTableAsParagraphs(BufferedTable& table) 
   // measured against how much text it cost per page (the actual, direct
   // keeps paragraphs separated without wasting as much vertical space.)
   if (extraParagraphSpacing) {
-    currentPageNextY += lineHeight / 4;
+    currentPageNextY += (lineHeight * extraParagraphSpacing) / 4;
   }
 }
 
@@ -799,7 +799,7 @@ void ChapterHtmlSlimParser::emitBufferedTableAsFragments(BufferedTable& table) {
   // measured against how much text it cost per page (the actual, direct
   // keeps paragraphs separated without wasting as much vertical space.)
   if (extraParagraphSpacing) {
-    currentPageNextY += lineHeight / 4;
+    currentPageNextY += (lineHeight * extraParagraphSpacing) / 4;
   }
 }
 
@@ -1168,18 +1168,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
           const auto heapBeforeImage = MemoryBudget::snapshot();
           LOG_DBG("EHP", "Heap before image extraction: free=%u maxAlloc=%u src=%s", heapBeforeImage.freeHeap,
                   heapBeforeImage.maxAllocHeap, src.c_str());
-          if (!self->lowMemoryImageFallback && !MemoryBudget::hasHeapForEpubInlineImage("EHP", src.c_str())) {
-            self->lowMemoryImageFallback = true;
-          }
-
-          if (self->lowMemoryImageFallback) {
-            // Keep the image's layout position meaningful instead of silently
-            // deleting it. A compact, deterministic in-book joke tells the
-            // reader that this specific illustration was omitted because the
-            // X3/X4 ran out of safe working RAM.
-            alt = lowMemoryImagePlaceholder(src);
-            lowMemoryPlaceholderText = true;
-          } else {
+          {
             // Resolve the image path relative to the HTML file
             std::string resolvedPath = FsHelpers::normalisePath(FsHelpers::decodeUriEscapes(self->contentBase + src));
 
@@ -1216,13 +1205,6 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(cachedImagePath);
                 if (decoder && decoder->getDimensions(cachedImagePath, dims)) {
                   LOG_DBG("EHP", "Image dimensions: %dx%d", dims.width, dims.height);
-
-                  if (!MemoryBudget::hasHeapForEpubInlineImage("EHP", cachedImagePath.c_str())) {
-                    self->lowMemoryImageFallback = true;
-                    Storage.remove(cachedImagePath.c_str());
-                    self->skipCurrentElement();
-                    return;
-                  }
 
                   int displayWidth = 0;
                   int displayHeight = 0;
@@ -1459,14 +1441,6 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 }
               } else {
                 Storage.remove(cachedImagePath.c_str());
-                const uint32_t postFailureFreeHeap = ESP.getFreeHeap();
-                const uint32_t postFailureMaxAllocHeap = ESP.getMaxAllocHeap();
-                if (!self->lowMemoryImageFallback &&
-                    !MemoryBudget::hasHeapForEpubInlineImage("EHP", cachedImagePath.c_str())) {
-                  self->lowMemoryImageFallback = true;
-                  LOG_ERR("EHP", "Disabling remaining image extraction after failure (%u free, %u max alloc)",
-                          postFailureFreeHeap, postFailureMaxAllocHeap);
-                }
                 LOG_ERR("EHP", "Failed to extract image");
               }
             }  // isFormatSupported
@@ -2523,6 +2497,6 @@ void ChapterHtmlSlimParser::makePages() {
   // measured against how much text it cost per page (the actual, direct
   // keeps paragraphs separated without wasting as much vertical space.)
   if (extraParagraphSpacing) {
-    currentPageNextY += lineHeight / 4;
+    currentPageNextY += (lineHeight * extraParagraphSpacing) / 4;
   }
 }

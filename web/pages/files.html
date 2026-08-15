@@ -48,6 +48,10 @@
       <div class="picker-columns" id="pickerColumns">
         <div class="convert-options" id="convertOptions" style="display:none;">
           <div class="convert-row">
+            <label class="convert-checkbox" id="prepareBookRow">
+              <input type="checkbox" id="prepareBookBeforeUpload" checked onchange="updateUploadBtnLabel()">
+              <span data-i18n="files.prepare_book_checkbox">⚡ Prepare for fast opening</span>
+            </label>
             <label class="convert-checkbox">
               <input type="checkbox" id="convertBeforeUpload" onchange="toggleConvertOptions()">
               <span data-i18n="files.optimize_checkbox">Optimize EPUB/FB2/Images</span>

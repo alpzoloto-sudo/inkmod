@@ -64,6 +64,14 @@ public:
     const std::string& name() const { return name_; }
     const std::vector<Fb2Attr>& attrs() const { return attrs_; }
     const std::string& text() const { return text_; }
+    size_t textSize() const { return textSize_; }
+
+    // Index scans need the actual text only for metadata, annotations,
+    // stylesheets and section titles. For ordinary book paragraphs they only
+    // need the decoded byte count. Disabling capture avoids hundreds of
+    // thousands of push_back() calls while preserving token boundaries and
+    // exact XML byte offsets. Rendering keeps the default capture=true.
+    void setCaptureText(bool capture) { captureText_ = capture; }
 
     const char* attr(const char* n) const {
         for (auto& a : attrs_) if (a.name == n) return a.value.c_str();
@@ -214,15 +222,54 @@ private:
     Fb2Token readText() {
         tokenStart_ = curAbsPos();
         text_.clear();
+        textSize_ = 0;
+
+        if (!captureText_) {
+            // Fast scan-only path. Most FB2 bytes are ordinary paragraph
+            // text, so consume whole spans from the already-filled XML
+            // buffer instead of calling peekByte()/getByte()/push_back() for
+            // every byte. Stop only at markup ('<'), an entity ('&'), the
+            // decoded token-size limit, or EOF.
+            while (textSize_ < bufCap_) {
+                if (bufPos_ >= bufLen_ && !refill()) break;
+                const size_t remaining = bufCap_ - textSize_;
+                const size_t available = std::min(bufLen_ - bufPos_, remaining);
+                const uint8_t* begin = buf_.data() + bufPos_;
+                const uint8_t* special = begin;
+                const uint8_t* end = begin + available;
+                // A single pointer pass is faster on ESP32-C3 than two
+                // memchr() calls, which scan every short text run twice.
+                while (special < end && *special != '<' && *special != '&') ++special;
+
+                if (special == end) {
+                    bufPos_ += available;
+                    textSize_ += available;
+                    continue;
+                }
+
+                const size_t plainBytes = static_cast<size_t>(special - begin);
+                bufPos_ += plainBytes;
+                textSize_ += plainBytes;
+                if (textSize_ >= bufCap_) break;
+                if (*special == '<') break;  // leave markup for readMarkup()
+
+                // Consume '&'; the helper consumes the entity body and ';'.
+                bufPos_++;
+                textSize_ += consumeEntityDecodedLength();
+            }
+            return textSize_ == 0 ? next() : Fb2Token::Text;
+        }
+
         // Grab a bounded chunk so a multi-hundred-KB paragraph never becomes
         // one giant std::string; caller re-enters next() for more chunks.
-        while (text_.size() < bufCap_) {
+        while (textSize_ < bufCap_) {
             int c = peekByte();
             if (c < 0 || c == '<') break;
             getByte();
             appendDecoded(text_, c);
+            textSize_ = text_.size();
         }
-        return text_.empty() ? next() : Fb2Token::Text;
+        return textSize_ == 0 ? next() : Fb2Token::Text;
     }
 
     // Reads (a chunk of) raw CDATA content, verbatim / not entity-decoded,
@@ -233,6 +280,7 @@ private:
     Fb2Token readCDataChunk() {
         tokenStart_ = curAbsPos();
         text_.clear();
+        textSize_ = 0;
         for (;;) {
             int c = getByte();
             if (c < 0) { inCData_ = false; break; } // truncated file: best effort
@@ -251,10 +299,12 @@ private:
                 text_.push_back(static_cast<char>(c));
             }
             if (text_.size() >= bufCap_) {
+                textSize_ = text_.size();
                 inCData_ = true; // more content beyond this chunk; resume on next next()
                 return Fb2Token::Text;
             }
         }
+        textSize_ = text_.size();
         return text_.empty() ? next() : Fb2Token::Text;
     }
 
@@ -334,6 +384,33 @@ private:
         }
         // any other unknown named entity: drop silently
     }
+
+    // Same entity semantics as appendDecoded(), but returns only the number
+    // of resulting UTF-8 bytes. Called by the allocation-free scan path after
+    // the leading '&' has already been consumed.
+    size_t consumeEntityDecodedLength() {
+        std::string ent;
+        int c;
+        while ((c = peekByte()) >= 0 && c != ';' && ent.size() < 12) {
+            ent.push_back(static_cast<char>(c));
+            getByte();
+        }
+        if (peekByte() == ';') getByte();
+
+        if (ent == "lt" || ent == "gt" || ent == "amp" || ent == "quot" || ent == "apos") return 1;
+        uint32_t cp = 0;
+        if (!ent.empty() && ent[0] == '#') {
+            cp = static_cast<uint32_t>((ent.size() > 1 && (ent[1] == 'x' || ent[1] == 'X'))
+                                           ? std::strtol(ent.c_str() + 2, nullptr, 16)
+                                           : std::strtol(ent.c_str() + 1, nullptr, 10));
+        } else {
+            cp = namedEntityCodepoint(ent);
+        }
+        if (cp <= 0x7F) return cp == 0 ? 0 : 1;
+        if (cp <= 0x7FF) return 2;
+        if (cp <= 0xFFFF) return 3;
+        return 4;
+    }
     // Returns the Unicode codepoint for a small set of common named
     // entities beyond the 5 XML-predefined ones, or 0 if unrecognized.
     static uint32_t namedEntityCodepoint(const std::string& ent) {
@@ -390,4 +467,6 @@ private:
     std::vector<Fb2Attr> attrs_;
     std::string text_;
     std::string pendingSelfCloseName_;
+    size_t textSize_ = 0;
+    bool captureText_ = true;
 };

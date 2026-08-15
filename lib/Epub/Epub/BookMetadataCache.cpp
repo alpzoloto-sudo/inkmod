@@ -26,6 +26,11 @@ bool BookMetadataCache::beginWrite() {
   buildMode = true;
   spineCount = 0;
   tocCount = 0;
+  tempWriteFailed = false;
+  spineWriteBuffer.clear();
+  tocWriteBuffer.clear();
+  spineWriteBuffer.reserve(4096);
+  tocWriteBuffer.reserve(4096);
   LOG_DBG("BMC", "Entering write mode");
   return true;
 }
@@ -38,6 +43,10 @@ bool BookMetadataCache::beginContentOpfPass() {
 }
 
 bool BookMetadataCache::endContentOpfPass() {
+  if (!flushTempBuffer(spineFile, spineWriteBuffer)) {
+    spineFile.close();
+    return false;
+  }
   // Explicit close() required: member variable persists beyond function scope
   spineFile.close();
   return true;
@@ -82,6 +91,11 @@ bool BookMetadataCache::beginTocPass() {
 }
 
 bool BookMetadataCache::endTocPass() {
+  if (!flushTempBuffer(tocFile, tocWriteBuffer)) {
+    tocFile.close();
+    spineFile.close();
+    return false;
+  }
   // Explicit close() required: member variables persist beyond function scope
   tocFile.close();
   spineFile.close();
@@ -99,6 +113,11 @@ bool BookMetadataCache::endWrite() {
     return false;
   }
 
+  if (tempWriteFailed) {
+    buildMode = false;
+    LOG_ERR("BMC", "Temporary metadata write failed");
+    return false;
+  }
   buildMode = false;
   LOG_DBG("BMC", "Wrote %d spine, %d TOC entries", spineCount, tocCount);
   return true;
@@ -106,6 +125,7 @@ bool BookMetadataCache::endWrite() {
 
 bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMetadata& metadata,
                                      const bool unpackedPackage, const BuildProgressFn& onProgress) {
+  const uint32_t buildStarted = millis();
   // Build metadata into a temporary file first. A power loss or OOM during
   // first-open must never replace a known-good book.bin with a truncated one.
   const std::string finalBookPath = cachePath + bookBinFile;
@@ -129,6 +149,17 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
     return false;
   }
 
+  // Reuse the already allocated 4 KiB spine buffer for the final sequential
+  // book.bin stream. Release the TOC buffer first so peak heap does not grow.
+  // The on-disk layout remains byte-for-byte identical; only SD write
+  // granularity changes from many 1-4 byte writes to block writes.
+  tocWriteBuffer.clear();
+  tocWriteBuffer.shrink_to_fit();
+  spineWriteBuffer.clear();
+  if (spineWriteBuffer.capacity() == 0) spineWriteBuffer.reserve(4096);
+  tempWriteFailed = false;
+  auto& outputBuffer = spineWriteBuffer;
+
   constexpr uint32_t headerASize = sizeof(BOOK_CACHE_MAGIC) + sizeof(BOOK_CACHE_VERSION) +
                                    /* LUT Offset */ sizeof(uint32_t) + sizeof(spineCount) + sizeof(tocCount);
   const uint32_t metadataSize = metadata.title.size() + metadata.author.size() + metadata.language.size() +
@@ -137,25 +168,36 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
   const uint32_t lutSize = sizeof(uint32_t) * spineCount + sizeof(uint32_t) * tocCount;
   const uint32_t lutOffset = headerASize + metadataSize;
 
-  // Header A
-  serialization::writePod(bookFile, BOOK_CACHE_MAGIC);
-  serialization::writePod(bookFile, BOOK_CACHE_VERSION);
-  serialization::writePod(bookFile, lutOffset);
-  serialization::writePod(bookFile, spineCount);
-  serialization::writePod(bookFile, tocCount);
-  // Metadata
-  serialization::writeString(bookFile, metadata.title);
-  serialization::writeString(bookFile, metadata.author);
-  serialization::writeString(bookFile, metadata.language);
-  serialization::writeString(bookFile, metadata.coverItemHref);
-  serialization::writeString(bookFile, metadata.textReferenceHref);
+  const uint32_t lutStarted = millis();
+  // Header A and metadata
+  if (!appendTempBytes(bookFile, outputBuffer, &BOOK_CACHE_MAGIC, sizeof(BOOK_CACHE_MAGIC)) ||
+      !appendTempBytes(bookFile, outputBuffer, &BOOK_CACHE_VERSION, sizeof(BOOK_CACHE_VERSION)) ||
+      !appendTempBytes(bookFile, outputBuffer, &lutOffset, sizeof(lutOffset)) ||
+      !appendTempBytes(bookFile, outputBuffer, &spineCount, sizeof(spineCount)) ||
+      !appendTempBytes(bookFile, outputBuffer, &tocCount, sizeof(tocCount)) ||
+      !writeTempString(bookFile, outputBuffer, metadata.title) ||
+      !writeTempString(bookFile, outputBuffer, metadata.author) ||
+      !writeTempString(bookFile, outputBuffer, metadata.language) ||
+      !writeTempString(bookFile, outputBuffer, metadata.coverItemHref) ||
+      !writeTempString(bookFile, outputBuffer, metadata.textReferenceHref)) {
+    bookFile.close();
+    spineFile.close();
+    tocFile.close();
+    return false;
+  }
 
   // Loop through spine entries, writing LUT positions
   spineFile.seek(0);
   for (int i = 0; i < spineCount; i++) {
     uint32_t pos = spineFile.position();
     auto spineEntry = readSpineEntry(spineFile);
-    serialization::writePod(bookFile, pos + lutOffset + lutSize);
+    const uint32_t entryOffset = pos + lutOffset + lutSize;
+    if (!appendTempBytes(bookFile, outputBuffer, &entryOffset, sizeof(entryOffset))) {
+      bookFile.close();
+      spineFile.close();
+      tocFile.close();
+      return false;
+    }
   }
 
   // Loop through toc entries, writing LUT positions
@@ -163,8 +205,16 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
   for (int i = 0; i < tocCount; i++) {
     uint32_t pos = tocFile.position();
     auto tocEntry = readTocEntry(tocFile);
-    serialization::writePod(bookFile, pos + lutOffset + lutSize + static_cast<uint32_t>(spineFile.position()));
+    const uint32_t entryOffset =
+        pos + lutOffset + lutSize + static_cast<uint32_t>(spineFile.position());
+    if (!appendTempBytes(bookFile, outputBuffer, &entryOffset, sizeof(entryOffset))) {
+      bookFile.close();
+      spineFile.close();
+      tocFile.close();
+      return false;
+    }
   }
+  LOG_INF("BMC-PROF", "book.bin header+LUT: %lums", millis() - lutStarted);
 
   // LUTs complete
   // Loop through spines from spine file matching up TOC indexes, calculating cumulative size and writing to book.bin
@@ -192,6 +242,18 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
                            Storage.exists((epubPath.substr(0, epubPath.size() - kPackageSuffixLen) +
                                            Fb2::SOURCE_MARKER_FILE)
                                               .c_str());
+
+  std::deque<uint32_t> fb2ApproxSizes;
+  if (isFb2Origin) {
+    const unsigned long batchStarted = millis();
+    const std::string fb2CachePath = epubPath.substr(0, epubPath.size() - kPackageSuffixLen);
+    if (Fb2::loadApproxChapterSizes(fb2CachePath, fb2ApproxSizes)) {
+      LOG_INF("BMC", "Loaded %u FB2 chapter sizes in one pass (%lums)",
+              static_cast<unsigned>(fb2ApproxSizes.size()), millis() - batchStarted);
+    } else {
+      LOG_ERR("BMC", "Could not load batched FB2 chapter sizes; using compatibility fallback");
+    }
+  }
 
   // FB2-converted books are written as a plain unpacked directory (not a zip
   // container), so there is no zip central directory to read sizes from.
@@ -248,6 +310,7 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
     }
   }
 
+  const uint32_t spineBuildStarted = millis();
   uint32_t cumSize = 0;
   spineFile.seek(0);
   int lastSpineTocIndex = -1;
@@ -269,7 +332,10 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
     if (isFb2Origin) {
       // FB2 chapters are generated on demand, so probing every future
       // chapter file only produces an SD error and delays the loading popup.
-      itemSize = Fb2::getApproxChapterSize(epubPath.substr(0, epubPath.size() - kPackageSuffixLen), i);
+      itemSize = static_cast<size_t>(i < static_cast<int>(fb2ApproxSizes.size())
+                                         ? fb2ApproxSizes[i]
+                                         : Fb2::getApproxChapterSize(
+                                               epubPath.substr(0, epubPath.size() - kPackageSuffixLen), i));
       if (itemSize == 0) {
         // Image-only or deliberately empty FB2 sections have no text-byte
         // estimate. They are valid on-demand chapters, not a metadata-cache
@@ -329,21 +395,47 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
     cumSize += itemSize;
     spineEntry.cumulativeSize = cumSize;
 
-    // Write out spine data to book.bin
-    writeSpineEntry(bookFile, spineEntry);
+    // Write out spine data to book.bin through the sequential block buffer.
+    if (!writeTempString(bookFile, outputBuffer, spineEntry.href) ||
+        !appendTempBytes(bookFile, outputBuffer, &spineEntry.cumulativeSize, sizeof(spineEntry.cumulativeSize)) ||
+        !appendTempBytes(bookFile, outputBuffer, &spineEntry.tocIndex, sizeof(spineEntry.tocIndex))) {
+      zip.close();
+      bookFile.close();
+      spineFile.close();
+      tocFile.close();
+      return false;
+    }
     if (onProgress) {
       onProgress(static_cast<uint16_t>(i + 1), spineCount);
     }
   }
+  LOG_INF("BMC-PROF", "book.bin spine entries: %lums", millis() - spineBuildStarted);
   // Close opened zip file
   zip.close();
 
   // Loop through toc entries from toc file writing to book.bin
+  const uint32_t tocBuildStarted = millis();
   tocFile.seek(0);
   for (int i = 0; i < tocCount; i++) {
     auto tocEntry = readTocEntry(tocFile);
-    writeTocEntry(bookFile, tocEntry);
+    if (!writeTempString(bookFile, outputBuffer, tocEntry.title) ||
+        !writeTempString(bookFile, outputBuffer, tocEntry.href) ||
+        !writeTempString(bookFile, outputBuffer, tocEntry.anchor) ||
+        !appendTempBytes(bookFile, outputBuffer, &tocEntry.level, sizeof(tocEntry.level)) ||
+        !appendTempBytes(bookFile, outputBuffer, &tocEntry.spineIndex, sizeof(tocEntry.spineIndex))) {
+      bookFile.close();
+      spineFile.close();
+      tocFile.close();
+      return false;
+    }
   }
+  if (!flushTempBuffer(bookFile, outputBuffer)) {
+    bookFile.close();
+    spineFile.close();
+    tocFile.close();
+    return false;
+  }
+  LOG_INF("BMC-PROF", "book.bin TOC+flush: %lums", millis() - tocBuildStarted);
 
   // Explicit close() required: member variables persist beyond function scope
   bookFile.flush();
@@ -370,6 +462,7 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
   if (Storage.exists(backupBookPath.c_str())) Storage.remove(backupBookPath.c_str());
 
   LOG_DBG("BMC", "Successfully built book.bin");
+  LOG_INF("BMC-PROF", "book.bin complete: %lums", millis() - buildStarted);
   return true;
 }
 
@@ -411,6 +504,45 @@ uint32_t BookMetadataCache::writeTocEntry(HalFile& file, const TocEntry& entry) 
   return pos;
 }
 
+bool BookMetadataCache::flushTempBuffer(HalFile& file, std::vector<uint8_t>& buffer) {
+  if (tempWriteFailed) return false;
+  if (buffer.empty()) return true;
+  if (file.write(buffer.data(), buffer.size()) != buffer.size()) {
+    tempWriteFailed = true;
+    return false;
+  }
+  buffer.clear();
+  return true;
+}
+
+bool BookMetadataCache::appendTempBytes(HalFile& file, std::vector<uint8_t>& buffer, const void* data,
+                                        const size_t length) {
+  if (tempWriteFailed) return false;
+  const auto* bytes = static_cast<const uint8_t*>(data);
+  if (buffer.capacity() == 0) {
+    if (file.write(bytes, length) != length) {
+      tempWriteFailed = true;
+      return false;
+    }
+    return true;
+  }
+  size_t offset = 0;
+  while (offset < length) {
+    if (buffer.size() == buffer.capacity() && !flushTempBuffer(file, buffer)) return false;
+    const size_t room = buffer.capacity() - buffer.size();
+    const size_t chunk = std::min(room, length - offset);
+    buffer.insert(buffer.end(), bytes + offset, bytes + offset + chunk);
+    offset += chunk;
+  }
+  return true;
+}
+
+bool BookMetadataCache::writeTempString(HalFile& file, std::vector<uint8_t>& buffer, const std::string& value) {
+  const uint32_t length = static_cast<uint32_t>(value.size());
+  return appendTempBytes(file, buffer, &length, sizeof(length)) &&
+         (length == 0 || appendTempBytes(file, buffer, value.data(), length));
+}
+
 // Note: for the LUT to be accurate, this **MUST** be called for all spine items before `addTocEntry` is ever called
 // this is because in this function we're marking positions of the items
 void BookMetadataCache::createSpineEntry(const std::string& href) {
@@ -419,8 +551,14 @@ void BookMetadataCache::createSpineEntry(const std::string& href) {
     return;
   }
 
-  const SpineEntry entry(href, 0, -1);
-  writeSpineEntry(spineFile, entry);
+  const uint32_t cumulativeSize = 0;
+  const int16_t tocIndex = -1;
+  if (!writeTempString(spineFile, spineWriteBuffer, href) ||
+      !appendTempBytes(spineFile, spineWriteBuffer, &cumulativeSize, sizeof(cumulativeSize)) ||
+      !appendTempBytes(spineFile, spineWriteBuffer, &tocIndex, sizeof(tocIndex))) {
+    LOG_ERR("BMC", "Failed to buffer spine entry");
+    return;
+  }
   spineCount++;
 }
 
@@ -465,8 +603,13 @@ void BookMetadataCache::createTocEntry(const std::string& title, const std::stri
     }
   }
 
-  const TocEntry entry(title, href, anchor, level, spineIndex);
-  writeTocEntry(tocFile, entry);
+  if (!writeTempString(tocFile, tocWriteBuffer, title) || !writeTempString(tocFile, tocWriteBuffer, href) ||
+      !writeTempString(tocFile, tocWriteBuffer, anchor) ||
+      !appendTempBytes(tocFile, tocWriteBuffer, &level, sizeof(level)) ||
+      !appendTempBytes(tocFile, tocWriteBuffer, &spineIndex, sizeof(spineIndex))) {
+    LOG_ERR("BMC", "Failed to buffer TOC entry");
+    return;
+  }
   tocCount++;
 }
 

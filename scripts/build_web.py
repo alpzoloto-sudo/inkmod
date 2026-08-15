@@ -123,3 +123,9 @@ print(f"{'jszip_minJs':18} {orig:>7}B -> {comp:>6}B gz")
 i18n_js = read(JS_OUT, "i18n.js")
 orig, comp = emit_gzip(os.path.join(JS_OUT, "i18nJs.generated.h"), "i18nJs", i18n_js)
 print(f"{'i18nJs':18} {orig:>7}B -> {comp:>6}B gz")
+
+# Dedicated heavy-book worker. Keeping it separate lets EPUB ZIP parsing run
+# off the browser UI thread and gives it its own short-lived heap.
+bookprep_worker = read(WEB, "assets", "bookprep-worker.js")
+orig, comp = emit_gzip(os.path.join(JS_OUT, "bookprepWorkerJs.generated.h"), "bookprepWorkerJs", bookprep_worker)
+print(f"{'bookprepWorkerJs':18} {orig:>7}B -> {comp:>6}B gz")

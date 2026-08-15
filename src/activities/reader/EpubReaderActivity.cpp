@@ -118,21 +118,26 @@ SectionMemoryConfig sectionMemoryConfig(const reader::ReaderMemoryMode mode, con
             SETTINGS.guideReadingEnabled != 0};
   }
   if (mode == reader::ReaderMemoryMode::Safe) {
+    // Safe mode may disable optional reading effects, but it must preserve the
+    // publisher's layout and illustrations. A low-memory retry must never turn
+    // a correctly formatted EPUB into a plain left-aligned text edition.
     return {mode,
             SAFE_SECTION_CACHE_SUFFIX,
             readerFontId,
             SETTINGS.hyphenationEnabled != 0,
-            false,
-            InkMODSettings::IMAGES_SUPPRESS,
+            SETTINGS.embeddedStyle != 0,
+            SETTINGS.imageRendering,
             false,
             false};
   }
+  // Survival mode switches to the cheaper built-in font and drops optional
+  // reading effects/hyphenation, while still preserving book CSS and images.
   return {reader::ReaderMemoryMode::Survival,
           SURVIVAL_SECTION_CACHE_SUFFIX,
           fallbackFontId,
           false,
-          false,
-          InkMODSettings::IMAGES_SUPPRESS,
+          SETTINGS.embeddedStyle != 0,
+          SETTINGS.imageRendering,
           false,
           false};
 }
@@ -1205,7 +1210,8 @@ void EpubReaderActivity::loop() {
   }
 
   // Long-press Confirm: execute the configured reader action without opening the menu
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+  if (readerMenuRequested || mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    readerMenuRequested = false;
     if (longPressMenuHandled) {
       longPressMenuHandled = false;
       return;
@@ -1305,6 +1311,7 @@ void EpubReaderActivity::loop() {
                              }
                              resumeReadingPaceTimer("reader_menu_return");
                              if (!result.isCancelled) {
+                               returnToReaderMenuOnBack = true;
                                onReaderMenuConfirm(static_cast<EpubReaderMenuActivity::MenuAction>(menu.action));
                              }
                            });
@@ -1702,6 +1709,13 @@ void EpubReaderActivity::jumpToPercent(int percent) {
   armReadingPaceWarmup("percent_jump");
 }
 
+void EpubReaderActivity::returnToReaderMenu() {
+  if (!returnToReaderMenuOnBack) return;
+  returnToReaderMenuOnBack = false;
+  readerMenuRequested = true;
+  requestUpdate();
+}
+
 void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action) {
   switch (action) {
     case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER: {
@@ -1712,6 +1726,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           std::make_unique<EpubReaderChapterSelectionActivity>(renderer, mappedInput, epub, path, spineIdx),
           [this](const ActivityResult& result) {
             if (!result.isCancelled) {
+              returnToReaderMenuOnBack = false;
               const auto& chapterResult = std::get<ChapterResult>(result.data);
               RenderLock lock(*this);
 
@@ -1729,6 +1744,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
               pauseReadingPaceTimer("chapter_jump");
             } else {
               resumeReadingPaceTimer("chapter_selection_cancel");
+              returnToReaderMenu();
             }
           });
       break;
@@ -1738,10 +1754,12 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       startActivityForResult(std::make_unique<EpubReaderFootnotesActivity>(renderer, mappedInput, currentPageFootnotes),
                              [this](const ActivityResult& result) {
                                if (!result.isCancelled) {
+                                 returnToReaderMenuOnBack = false;
                                  const auto& footnoteResult = std::get<FootnoteResult>(result.data);
                                  navigateToHref(footnoteResult.href, true);
                                } else {
                                  resumeReadingPaceTimer("footnotes_cancel");
+                                 returnToReaderMenu();
                                }
                                requestUpdate();
                              });
@@ -1787,6 +1805,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
         longPowerButtonHandled = false;
 
         resumeReadingPaceTimer("dictionary_return");
+        returnToReaderMenu();
         requestUpdate();
       });
       break;
@@ -1804,9 +1823,11 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           std::make_unique<EpubReaderPercentSelectionActivity>(renderer, mappedInput, initialPercent),
           [this](const ActivityResult& result) {
             if (!result.isCancelled) {
+              returnToReaderMenuOnBack = false;
               jumpToPercent(std::get<PercentResult>(result.data).percent);
             } else {
               resumeReadingPaceTimer("percent_selection_cancel");
+              returnToReaderMenu();
             }
           });
       break;
@@ -1832,7 +1853,10 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
             pauseReadingPaceTimer("qr_display");
             startActivityForResult(
                 std::make_unique<QrDisplayActivity>(renderer, mappedInput, fullText),
-                [this](const ActivityResult& result) { resumeReadingPaceTimer("qr_display_return"); });
+                [this](const ActivityResult&) {
+                  resumeReadingPaceTimer("qr_display_return");
+                  returnToReaderMenu();
+                });
             break;
           }
         }
@@ -1870,6 +1894,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
                                  }
                                }
                                resumeReadingPaceTimer("delete_stats_return");
+                               if (result.isCancelled) returnToReaderMenu();
                                requestUpdate();
                              });
       break;
@@ -1882,6 +1907,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           [this](const ActivityResult& result) {
             if (result.isCancelled) {
               resumeReadingPaceTimer("delete_cache_cancel");
+              returnToReaderMenu();
               requestUpdate();
               return;
             }
@@ -1913,6 +1939,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       break;
     }
     case EpubReaderMenuActivity::MenuAction::RESET_READING_PACE: {
+      returnToReaderMenuOnBack = false;
       resetReadingPaceData();
       drawToast(renderer, tr(STR_READING_PACE_RESET));
       delay(1000);
@@ -1920,6 +1947,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       break;
     }
     case EpubReaderMenuActivity::MenuAction::SCREENSHOT: {
+      returnToReaderMenuOnBack = false;
       {
         RenderLock lock(*this);
         pendingScreenshot = true;
@@ -1964,6 +1992,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
                 pendingReadFolderMove = false;
               }
               resumeReadingPaceTimer("book_stats_return");
+              returnToReaderMenu();
               requestUpdate();
             });
       } else {
@@ -1983,12 +2012,14 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
                 pendingReadFolderMove = false;
               }
               resumeReadingPaceTimer("book_stats_return");
+              returnToReaderMenu();
               requestUpdate();
             });
       }
       break;
     }
     case EpubReaderMenuActivity::MenuAction::TOGGLE_COMPLETED: {
+      returnToReaderMenuOnBack = false;
       const bool markCompleted = !stats.isCompleted;
       setBookCompleted(markCompleted);
       showCompletedFeedback(markCompleted);
@@ -2048,6 +2079,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       break;
     }
     case EpubReaderMenuActivity::MenuAction::BOOKMARK_TOGGLE: {
+      returnToReaderMenuOnBack = false;
       if (!section || section->pageCount == 0) break;
       const uint16_t spine = static_cast<uint16_t>(currentSpineIndex);
       const float progress = static_cast<float>(section->currentPage) / static_cast<float>(section->pageCount);
@@ -2087,6 +2119,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           std::make_unique<EpubReaderBookmarkListActivity>(renderer, mappedInput, BOOKMARKS.getBookmarks()),
           [this](const ActivityResult& result) {
             if (!result.isCancelled) {
+              returnToReaderMenuOnBack = false;
               const auto& bm = std::get<BookmarkResult>(result.data);
               RenderLock lock(*this);
               currentSpineIndex = bm.spineIndex;
@@ -2098,6 +2131,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
               pauseReadingPaceTimer("bookmark_jump");
             } else {
               resumeReadingPaceTimer("bookmark_list_cancel");
+              returnToReaderMenu();
             }
             requestUpdate();
           });
@@ -2114,6 +2148,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
               BOOKMARKS.clearAll();
             }
             resumeReadingPaceTimer(result.isCancelled ? "delete_bookmarks_cancel" : "delete_bookmarks_return");
+            if (result.isCancelled) returnToReaderMenu();
             requestUpdate();
           });
       break;
@@ -2162,6 +2197,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
               }
             }
             resumeReadingPaceTimer("clipping_select_return");
+            if (result.isCancelled) returnToReaderMenu();
             requestUpdate();
           });
       break;
@@ -2172,6 +2208,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           std::make_unique<ClippingListActivity>(renderer, mappedInput, clippings),
           [this](const ActivityResult& result) {
             if (!result.isCancelled) {
+              returnToReaderMenuOnBack = false;
               if (const auto* jump = std::get_if<ClippingJumpResult>(&result.data)) {
                 RenderLock lock(*this);
                 currentSpineIndex = jump->spineIndex;
@@ -2183,6 +2220,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
               }
             } else {
               resumeReadingPaceTimer("clipping_list_cancel");
+              returnToReaderMenu();
             }
             requestUpdate();
           });
@@ -2241,9 +2279,11 @@ void EpubReaderActivity::openAutoPageTurnIntervalPicker(const bool ignoreInitial
           /*allowPowerAsConfirm=*/true, ignoreInitialConfirmRelease),
       [this](const ActivityResult& result) {
         if (!result.isCancelled) {
+          returnToReaderMenuOnBack = false;
           setAutoPageTurnIntervalSeconds(static_cast<uint16_t>(std::get<IntervalResult>(result.data).value));
         } else {
           resumeReadingPaceTimer("auto_turn_interval_cancel");
+          returnToReaderMenu();
         }
         requestUpdate();
       });
@@ -2899,17 +2939,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         usedFallbackFont = true;
       }
     }
-    // Safe/survival caches are valid finished layouts, not incomplete normal
-    // caches. Reuse them even when today's heap is healthier; upgrading visual
-    // quality never justifies blocking a book that can already open instantly.
-    if (!loadedSection) {
-      loadedSection = loadSectionWithConfig(
-          sectionMemoryConfig(reader::ReaderMemoryMode::Safe, readerFontId, fallbackFontId));
-    }
-    if (!loadedSection) {
-      loadedSection = loadSectionWithConfig(
-          sectionMemoryConfig(reader::ReaderMemoryMode::Survival, readerFontId, fallbackFontId));
-    }
+    // Never reuse degraded Safe/Survival caches as the preferred representation.
+    // A well-formed EPUB must always get a chance to rebuild at full quality.
+    // Old low-memory caches may have been created with illustrations omitted.
 
     if (!loadedSection) {
       if (memoryPolicy.mode == reader::ReaderMemoryMode::Unavailable) {
@@ -2928,7 +2960,10 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       bool layoutAbortedForLowMemory = false;
       bool cancelled = false;
       bool buildSucceeded = false;
-      reader::ReaderMemoryMode buildMode = memoryPolicy.mode;
+      // Always attempt the publisher-quality layout first. Memory policy may
+      // choose how we recover after a real allocation/layout failure, but it
+      // must never pre-emptively downgrade a healthy EPUB.
+      reader::ReaderMemoryMode buildMode = reader::ReaderMemoryMode::Normal;
       bool normalFallbackAttempted = false;
 
       while (buildMode != reader::ReaderMemoryMode::Unavailable) {
@@ -2998,6 +3033,57 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         section.reset();
         return;
       }
+      if (!buildSucceeded && layoutAbortedForLowMemory) {
+        // A first-pass low-memory failure is often transient: the parser/font
+        // caches used by the failed attempt are released only after its objects
+        // unwind. Reclaim every rebuildable font cache here and retry the same
+        // chapter once, transparently, instead of throwing the reader back out
+        // and making the user open the book a second time.
+        section.reset();
+        if (auto* fcm = renderer.getFontCacheManager()) {
+          fcm->clearCache();
+        }
+        if (renderer.isSdCardFont(readerFontId)) {
+          renderer.releaseSdCardFontForLowMemory(readerFontId);
+        }
+        delay(1);
+        yield();
+
+        const auto recovered = MemoryBudget::snapshot();
+        LOG_INF("ERS", "Retrying spine %d after emergency cache reclaim (free=%u maxAlloc=%u)",
+                currentSpineIndex, recovered.freeHeap, recovered.maxAllocHeap);
+
+        // Use the built-in font for the emergency retry because it requires no
+        // SD-font caches, but keep publisher CSS and all images. This is a
+        // quality-preserving memory fallback, not a stripped-down book mode.
+        SectionMemoryConfig retryConfig =
+            sectionMemoryConfig(reader::ReaderMemoryMode::Survival, readerFontId, fallbackFontId);
+        section = makeUniqueNoThrow<Section>(epub, currentSpineIndex, renderer, retryConfig.suffix);
+        if (section) {
+          bool retryImagesSuppressed = false;
+          bool retryLowMemory = false;
+          bool retryCancelled = false;
+          buildSucceeded = section->createSectionFile(
+              retryConfig.fontId, SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
+              SETTINGS.forceParagraphIndents, SETTINGS.paragraphAlignment, viewportWidth, viewportHeight,
+              retryConfig.hyphenationEnabled, retryConfig.embeddedStyle, retryConfig.imageRendering,
+              retryConfig.bionicReadingEnabled, retryConfig.guideReadingEnabled, popupFn,
+              &retryImagesSuppressed, &retryLowMemory, &work.token(), &retryCancelled);
+          if (buildSucceeded) {
+            activeSectionFontId = retryConfig.fontId;
+            activeSectionUsesFallbackFont = retryConfig.fontId != readerFontId;
+            activeMemoryMode = retryConfig.mode;
+            usedFallbackFont = activeSectionUsesFallbackFont;
+            imagesWereSuppressed = imagesWereSuppressed || retryImagesSuppressed;
+            layoutAbortedForLowMemory = false;
+            cancelled = retryCancelled;
+          } else {
+            layoutAbortedForLowMemory = retryLowMemory;
+            section.reset();
+          }
+        }
+      }
+
       if (!buildSucceeded) {
         section.reset();
         if (layoutAbortedForLowMemory) {
@@ -3051,6 +3137,14 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // the book had already been laid out. For split EPUBs the status bar already
     // knows how to accumulate page counts from caches that actually exist, and
     // unopened fragments are prepared lazily as the reader reaches them.
+    // FB2 fragments must be paginated as one logical chapter before its first
+    // page is shown. Otherwise the denominator contains only fragments whose
+    // caches happen to exist and grows while reading (1/3 -> 4/6 -> ...).
+    // Image dimensions are now read from lightweight PNG/JPEG headers and
+    // image decoding is streamed/deferred, so preparing sibling text layouts
+    // no longer requires keeping a full image decoder alive for every chunk.
+    // Keep this FB2-only: pre-paginating oversized split EPUB XHTML would undo
+    // the EPUB lazy-opening design.
     if (epub->isFb2Package()) {
       int logicalStart = currentSpineIndex;
       int logicalEnd = currentSpineIndex;

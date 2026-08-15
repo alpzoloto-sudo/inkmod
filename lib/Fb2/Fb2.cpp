@@ -21,6 +21,91 @@
 
 namespace {
 
+// Measures how much of scan() is actual storage I/O versus XML/token work.
+// It delegates directly to the existing reader and does not allocate or copy
+// any additional book data.
+class ProfiledByteReader final : public IByteReader {
+ public:
+  explicit ProfiledByteReader(IByteReader& source) : source_(source) {}
+
+  size_t read(void* buf, size_t len) override {
+    const uint32_t started = millis();
+    const size_t got = source_.read(buf, len);
+    readTimeMs_ += millis() - started;
+    readCalls_++;
+    bytesRead_ += got;
+    return got;
+  }
+  bool seek(uint64_t pos) override {
+    const uint32_t started = millis();
+    const bool ok = source_.seek(pos);
+    seekTimeMs_ += millis() - started;
+    seekCalls_++;
+    return ok;
+  }
+  uint64_t tell() const override { return source_.tell(); }
+  uint64_t size() const override { return source_.size(); }
+
+  uint32_t readCalls() const { return readCalls_; }
+  uint32_t seekCalls() const { return seekCalls_; }
+  uint32_t ioTimeMs() const { return readTimeMs_ + seekTimeMs_; }
+  uint64_t bytesRead() const { return bytesRead_; }
+
+ private:
+  IByteReader& source_;
+  uint32_t readCalls_ = 0;
+  uint32_t seekCalls_ = 0;
+  uint32_t readTimeMs_ = 0;
+  uint32_t seekTimeMs_ = 0;
+  uint64_t bytesRead_ = 0;
+};
+
+// Coalesce the many tiny generated-index/XML writes into 4 KiB SD writes.
+// If allocation fails, transparently fall back to direct writes.
+class BufferedFileWriter final : public Print {
+ public:
+  explicit BufferedFileWriter(HalFile& file, size_t capacity = 4096)
+      : file_(file), capacity_(capacity), buffer_(new (std::nothrow) uint8_t[capacity]) {}
+  ~BufferedFileWriter() override { flushBuffer(); }
+  size_t write(uint8_t value) override { return write(&value, 1); }
+  size_t write(const uint8_t* data, size_t length) override {
+    if (failed_) return 0;
+    if (!buffer_) {
+      const size_t written = file_.write(data, length);
+      failed_ = written != length;
+      return written;
+    }
+    size_t accepted = 0;
+    while (accepted < length) {
+      if (used_ == capacity_ && !flushBuffer()) return accepted;
+      const size_t chunk = std::min(length - accepted, capacity_ - used_);
+      memcpy(buffer_.get() + used_, data + accepted, chunk);
+      used_ += chunk;
+      accepted += chunk;
+    }
+    return accepted;
+  }
+  bool finish() { return flushBuffer() && !failed_; }
+
+ private:
+  bool flushBuffer() {
+    if (failed_) return false;
+    if (used_ == 0) return true;
+    const size_t written = file_.write(buffer_.get(), used_);
+    if (written != used_) {
+      failed_ = true;
+      return false;
+    }
+    used_ = 0;
+    return true;
+  }
+  HalFile& file_;
+  size_t capacity_;
+  std::unique_ptr<uint8_t[]> buffer_;
+  size_t used_ = 0;
+  bool failed_ = false;
+};
+
 // v6 ZIP fused-scan pipe -------------------------------------------------
 // ESP32-C3 is single-core, so this does not magically make inflate + XML
 // parsing parallel CPU work. The win is that scan() consumes decompressed
@@ -84,7 +169,7 @@ void fb2ZipScanTask(void* arg) {
 }
 
 
-constexpr uint8_t PACKAGE_VERSION = 12;  // incremental text-chunk records added to FB2 section index
+constexpr uint8_t PACKAGE_VERSION = 13;  // 40 KiB virtual text chunks; invalidates old 20 KiB package indexes
 // A single FB2 <section> with more inline images than this gets split into
 // several virtual chapters while its SD-card index is written, so a chapter
 // that's actually opened never needs to extract more than this many images
@@ -102,7 +187,12 @@ constexpr uint32_t MAX_IMAGES_PER_CHAPTER = 2;
 // margins and viewport and is only known later in ChapterHtmlSlimParser.
 // ~20 KiB normally lands in the 5-10 page range on X3/X4, so first-open work
 // is bounded without creating hundreds of tiny spine items.
-constexpr uint32_t TARGET_TEXT_BYTES_PER_CHAPTER = 20 * 1024;
+// 20 KiB produced 2220 virtual spine items for a real 48 MiB FB2. Each item
+// adds index/OPF/cache work and made package creation take over two minutes.
+// Section rendering itself is streaming, so 40 KiB remains bounded while
+// roughly halving virtual-item overhead. Do not raise this to 64 KiB until
+// real-device heap traces confirm enough margin on image/style-heavy sections.
+constexpr uint32_t TARGET_TEXT_BYTES_PER_CHAPTER = 40 * 1024;
 
 uint32_t virtualChapterCount(const Fb2SectionIndexEntry& section) {
   if (section.imageRefCount > 0) {
@@ -236,7 +326,7 @@ bool writeStaticFile(const std::string& path, const char* contents) {
 // of misreading whatever bytes happen to follow as if they were valid
 // records - which, worst case, could walk off the end of the file or hand
 // back garbage a caller trusts.
-void writeCacheHeader(HalFile& out) {
+void writeCacheHeader(Print& out) {
   out.write(CACHE_MAGIC, CACHE_MAGIC_LEN);
   const uint8_t version = PACKAGE_VERSION;
   out.write(&version, sizeof(version));
@@ -1419,6 +1509,7 @@ const Fb2::ImageInfoPublic* Fb2::findImage(const std::string& id) const {
 }
 
 bool Fb2::convertToPackage(const ProgressFn& onProgress) {
+  const unsigned long packageProfileStarted = millis();
   // Cache directory was already wiped fresh and recreated in load(), before
   // prepareSource() wrote a possibly-transcoded source copy into it.
   setupCacheDir();
@@ -1439,7 +1530,8 @@ bool Fb2::convertToPackage(const ProgressFn& onProgress) {
   } else {
     HalFile source;
     if (!Storage.openFileForRead("FB2", sourcePath, source)) return fail();
-    FsFileReader reader(source);
+    FsFileReader rawReader(source);
+    ProfiledByteReader reader(rawReader);
     Fb2Parser parser;
     const unsigned long scanStarted = millis();
     LOG_INF("FB2-PROF", "scan start mem: free=%u max=%u",
@@ -1451,7 +1543,21 @@ bool Fb2::convertToPackage(const ProgressFn& onProgress) {
       return fail();
     }
     source.close();
-    LOG_INF("FB2-PROF", "scan: %lums", millis() - scanStarted);
+    const uint32_t scanElapsed = millis() - scanStarted;
+    const uint32_t scanCpuMs = scanElapsed >= reader.ioTimeMs() ? scanElapsed - reader.ioTimeMs() : 0;
+    LOG_INF("FB2-PROF", "scan: %lums", static_cast<unsigned long>(scanElapsed));
+    LOG_INF("FB2-PROF", "scan io: %lums calls=%u seeks=%u",
+            static_cast<unsigned long>(reader.ioTimeMs()),
+            static_cast<unsigned>(reader.readCalls()),
+            static_cast<unsigned>(reader.seekCalls()));
+    LOG_INF("FB2-PROF", "scan bytes=%llu xml/cpu=%lums",
+            static_cast<unsigned long long>(reader.bytesRead()),
+            static_cast<unsigned long>(scanCpuMs));
+    LOG_INF("FB2-PROF", "scan tokens=%u textTokens=%u textBytes=%llu binaryTextBytes=%llu",
+            static_cast<unsigned>(scan.tokenCount),
+            static_cast<unsigned>(scan.textTokenCount),
+            static_cast<unsigned long long>(scan.textPayloadBytes),
+            static_cast<unsigned long long>(scan.binaryTextBytes));
     LOG_INF("FB2-PROF", "scan end mem: free=%u max=%u sections=%u binaries=%u pool=%u",
             static_cast<unsigned>(ESP.getFreeHeap()),
             static_cast<unsigned>(ESP.getMaxAllocHeap()),
@@ -1460,6 +1566,8 @@ bool Fb2::convertToPackage(const ProgressFn& onProgress) {
             static_cast<unsigned>(scan.stringPool.size()));
   }
   if (onProgress) onProgress(40);
+
+  unsigned long phaseStarted = millis();
 
   title = scan.metadata.title;
   author = scan.metadata.author;
@@ -1484,16 +1592,20 @@ bool Fb2::convertToPackage(const ProgressFn& onProgress) {
     annotation.close();
     if (!annotationOk) return fail();
   }
+  LOG_INF("FB2-PROF", "package metadata+annotation: %lums", millis() - phaseStarted);
 
+  phaseStarted = millis();
   {
     const bool imagesOk = persistImageIndex(scan);
     if (!imagesOk) return fail();
   }
+  LOG_INF("FB2-PROF", "package image index: %lums", millis() - phaseStarted);
 
   // The scan result already owns every binary id. Persist its offsets first,
   // then transfer those strings into the long-lived image list instead of
   // copying them. On illustration-heavy FB2s, keeping both copies alive is
   // enough to exhaust the C3 heap before the first chapter can be opened.
+  phaseStarted = millis();
   images.clear();
   for (auto& binary : scan.binaries) {
     const std::string mediaType = normalizeImageMediaType(binary.contentType);
@@ -1505,6 +1617,7 @@ bool Fb2::convertToPackage(const ProgressFn& onProgress) {
     images.push_back(std::move(image));
   }
   std::deque<Fb2BinaryIndexEntry>().swap(scan.binaries);
+  LOG_INF("FB2-PROF", "package image catalog: %lums", millis() - phaseStarted);
   if (onProgress) onProgress(70);
 
   // Persist the section index (level, innerStartOffset, id, title, image
@@ -1517,11 +1630,13 @@ bool Fb2::convertToPackage(const ProgressFn& onProgress) {
   // Offsets, parent/body indices are scan()-only bookkeeping and aren't
   // persisted. One record is written per *virtual* chapter, not per FB2
   // <section> - see splitSectionsForImageLoad().
+  phaseStarted = millis();
   chapterCount = 0;
   {
     HalFile sectionsOut;
     if (!Storage.openFileForWrite("FB2", cachePath + SECTIONS_INDEX_FILE, sectionsOut)) return fail();
-    writeCacheHeader(sectionsOut);
+    BufferedFileWriter bufferedSections(sectionsOut);
+    writeCacheHeader(bufferedSections);
     for (const auto& section : scan.sections) {
       const uint32_t sliceCount = virtualChapterCount(section);
       const bool imageSliced = section.imageRefCount > 0;
@@ -1557,22 +1672,27 @@ bool Fb2::convertToPackage(const ProgressFn& onProgress) {
           approxBytes = std::min<uint32_t>(remaining, TARGET_TEXT_BYTES_PER_CHAPTER);
         }
 
-        sectionsOut.write(&level, sizeof(level));
-        sectionsOut.write(&innerStartOffset, sizeof(innerStartOffset));
-        sectionsOut.write(&idLen, sizeof(idLen));
-        if (idLen) sectionsOut.write(sectionId.data(), idLen);
-        sectionsOut.write(&titleLen, sizeof(titleLen));
-        if (titleLen) sectionsOut.write(title.data(), titleLen);
-        sectionsOut.write(&approxBytes, sizeof(approxBytes));
-        sectionsOut.write(&imageRangeStart, sizeof(imageRangeStart));
-        sectionsOut.write(&imageRangeEnd, sizeof(imageRangeEnd));
-        sectionsOut.write(&textRangeStart, sizeof(textRangeStart));
-        sectionsOut.write(&textRangeEnd, sizeof(textRangeEnd));
+        bufferedSections.write(reinterpret_cast<const uint8_t*>(&level), sizeof(level));
+        bufferedSections.write(reinterpret_cast<const uint8_t*>(&innerStartOffset), sizeof(innerStartOffset));
+        bufferedSections.write(reinterpret_cast<const uint8_t*>(&idLen), sizeof(idLen));
+        if (idLen) bufferedSections.write(reinterpret_cast<const uint8_t*>(sectionId.data()), idLen);
+        bufferedSections.write(reinterpret_cast<const uint8_t*>(&titleLen), sizeof(titleLen));
+        if (titleLen) bufferedSections.write(reinterpret_cast<const uint8_t*>(title.data()), titleLen);
+        bufferedSections.write(reinterpret_cast<const uint8_t*>(&approxBytes), sizeof(approxBytes));
+        bufferedSections.write(reinterpret_cast<const uint8_t*>(&imageRangeStart), sizeof(imageRangeStart));
+        bufferedSections.write(reinterpret_cast<const uint8_t*>(&imageRangeEnd), sizeof(imageRangeEnd));
+        bufferedSections.write(reinterpret_cast<const uint8_t*>(&textRangeStart), sizeof(textRangeStart));
+        bufferedSections.write(reinterpret_cast<const uint8_t*>(&textRangeEnd), sizeof(textRangeEnd));
         ++chapterCount;
       }
     }
+    if (!bufferedSections.finish()) {
+      sectionsOut.close();
+      return fail();
+    }
     sectionsOut.close();
   }
+  LOG_INF("FB2-PROF", "package section index: %lums (chapters=%d)", millis() - phaseStarted, chapterCount);
 
   if (chapterCount <= 0 || chapterCount > UINT16_MAX) {
     LOG_ERR("FB2", "FB2 has no readable chapters: %s", filepath.c_str());
@@ -1582,15 +1702,36 @@ bool Fb2::convertToPackage(const ProgressFn& onProgress) {
   // The marker file renderChapterOnDemand()/Epub::readItemContentsToStream()
   // key off of: its presence is what says "this package's chapters aren't
   // real files, render them from this FB2 source instead."
+  phaseStarted = millis();
   if (!writeStaticFile(cachePath + SOURCE_MARKER_FILE, sourcePath.c_str())) return fail();
   if (!writeStaticFile(cachePath + ORIGINAL_PATH_MARKER_FILE, filepath.c_str())) return fail();
+  LOG_INF("FB2-PROF", "package marker files: %lums", millis() - phaseStarted);
 
-  if (!writeContainerFile() || !writeStyleFile() || !writeOpfFile() || !writeNcxFile(scan))
-    return fail();
+  phaseStarted = millis();
+  if (!writeContainerFile()) return fail();
+  LOG_INF("FB2-PROF", "package container: %lums", millis() - phaseStarted);
+
+  phaseStarted = millis();
+  if (!writeStyleFile()) return fail();
+  LOG_INF("FB2-PROF", "package stylesheet: %lums", millis() - phaseStarted);
+
+  phaseStarted = millis();
+  if (!writeOpfFile()) return fail();
+  LOG_INF("FB2-PROF", "package OPF: %lums", millis() - phaseStarted);
+
+  phaseStarted = millis();
+  if (!writeNcxFile(scan)) return fail();
+  LOG_INF("FB2-PROF", "package NCX: %lums", millis() - phaseStarted);
   if (onProgress) onProgress(95);
 
+  phaseStarted = millis();
   saveMetadataCache();
+  LOG_INF("FB2-PROF", "package metadata cache: %lums", millis() - phaseStarted);
+
+  phaseStarted = millis();
   saveCacheSignature();
+  LOG_INF("FB2-PROF", "package signature: %lums", millis() - phaseStarted);
+  LOG_INF("FB2-PROF", "package detailed total: %lums", millis() - packageProfileStarted);
   return true;
 }
 
@@ -1601,7 +1742,8 @@ bool Fb2::persistImageIndex(const Fb2ScanResult& scan) {
   // first time it's actually about to be rendered.
   HalFile imagesOut;
   if (!Storage.openFileForWrite("FB2", cachePath + IMAGES_INDEX_FILE, imagesOut)) return false;
-  writeCacheHeader(imagesOut);
+  BufferedFileWriter bufferedImages(imagesOut);
+  writeCacheHeader(bufferedImages);
   size_t imageIndex = 0;
   for (const auto& binary : scan.binaries) {
     const std::string mediaType = normalizeImageMediaType(binary.contentType);
@@ -1610,12 +1752,16 @@ bool Fb2::persistImageIndex(const Fb2ScanResult& scan) {
         "image_" + std::to_string(imageIndex++) + (mediaType == "image/png" ? ".png" : ".jpg");
     const uint16_t idLen = static_cast<uint16_t>(std::min(binary.id.size(), static_cast<size_t>(4096)));
     const uint16_t nameLen = static_cast<uint16_t>(std::min(filename.size(), static_cast<size_t>(4096)));
-    imagesOut.write(&idLen, sizeof(idLen));
-    if (idLen) imagesOut.write(binary.id.data(), idLen);
-    imagesOut.write(&nameLen, sizeof(nameLen));
-    if (nameLen) imagesOut.write(filename.data(), nameLen);
-    imagesOut.write(&binary.payloadStartOffset, sizeof(binary.payloadStartOffset));
-    imagesOut.write(&binary.payloadEndOffset, sizeof(binary.payloadEndOffset));
+    bufferedImages.write(reinterpret_cast<const uint8_t*>(&idLen), sizeof(idLen));
+    if (idLen) bufferedImages.write(reinterpret_cast<const uint8_t*>(binary.id.data()), idLen);
+    bufferedImages.write(reinterpret_cast<const uint8_t*>(&nameLen), sizeof(nameLen));
+    if (nameLen) bufferedImages.write(reinterpret_cast<const uint8_t*>(filename.data()), nameLen);
+    bufferedImages.write(reinterpret_cast<const uint8_t*>(&binary.payloadStartOffset), sizeof(binary.payloadStartOffset));
+    bufferedImages.write(reinterpret_cast<const uint8_t*>(&binary.payloadEndOffset), sizeof(binary.payloadEndOffset));
+  }
+  if (!bufferedImages.finish()) {
+    imagesOut.close();
+    return false;
   }
   imagesOut.close();
   return true;
@@ -1794,6 +1940,39 @@ uint32_t Fb2::getApproxChapterSize(const std::string& packageCachePath, int chap
   }
   sectionsIn.close();
   return result;
+}
+
+// static
+bool Fb2::loadApproxChapterSizes(const std::string& packageCachePath, std::deque<uint32_t>& outSizes) {
+  outSizes.clear();
+  HalFile sectionsIn;
+  if (!Storage.openFileForRead("FB2", packageCachePath + SECTIONS_INDEX_FILE, sectionsIn)) return false;
+  if (!readAndCheckCacheHeader(sectionsIn)) {
+    sectionsIn.close();
+    return false;
+  }
+
+  while (sectionsIn.available()) {
+    uint8_t level = 0;
+    uint32_t innerStartOffset = 0;
+    uint16_t idLen = 0, titleLen = 0;
+    uint32_t approxTextBytes = 0;
+    if (sectionsIn.read(&level, sizeof(level)) != sizeof(level) ||
+        sectionsIn.read(&innerStartOffset, sizeof(innerStartOffset)) != sizeof(innerStartOffset) ||
+        sectionsIn.read(&idLen, sizeof(idLen)) != sizeof(idLen)) break;
+    if (idLen && !skipCacheBytes(sectionsIn, idLen)) break;
+    if (sectionsIn.read(&titleLen, sizeof(titleLen)) != sizeof(titleLen)) break;
+    if (titleLen && !skipCacheBytes(sectionsIn, titleLen)) break;
+    if (sectionsIn.read(&approxTextBytes, sizeof(approxTextBytes)) != sizeof(approxTextBytes)) break;
+    uint32_t imageRangeStart = 0, imageRangeEnd = 0, textRangeStart = 0, textRangeEnd = 0;
+    if (sectionsIn.read(&imageRangeStart, sizeof(imageRangeStart)) != sizeof(imageRangeStart) ||
+        sectionsIn.read(&imageRangeEnd, sizeof(imageRangeEnd)) != sizeof(imageRangeEnd) ||
+        sectionsIn.read(&textRangeStart, sizeof(textRangeStart)) != sizeof(textRangeStart) ||
+        sectionsIn.read(&textRangeEnd, sizeof(textRangeEnd)) != sizeof(textRangeEnd)) break;
+    outSizes.push_back(approxTextBytes);
+  }
+  sectionsIn.close();
+  return !outSizes.empty();
 }
 
 

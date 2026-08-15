@@ -119,7 +119,8 @@ std::string Epub::cachePathForFilePath(const std::string& filepath, const std::s
     // parentDir. Checking the wrong location always returns false, which
     // silently disables this whole special case.
     if (parentDir.compare(0, prefix.size(), prefix) == 0 &&
-        Storage.exists((filepath + "/META-INF/container.xml").c_str())) {
+        (Storage.exists((filepath + "/META-INF/container.xml").c_str()) ||
+         Storage.exists((parentDir + "/.browser_prepared_epub").c_str()))) {
       return parentDir;
     }
   }
@@ -641,7 +642,7 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss, const Prog
     LOG_ERR("EBP", "Could not end writing content.opf pass");
     return false;
   }
-  LOG_DBG("EBP", "OPF pass completed in %lu ms", millis() - opfStart);
+  LOG_INF("EBP-PROF", "OPF pass completed in %lu ms", millis() - opfStart);
   reportProgress(15);
 
   // TOC Pass - try EPUB 3 nav first, fall back to NCX
@@ -674,7 +675,7 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss, const Prog
     LOG_ERR("EBP", "Could not end writing toc pass");
     return false;
   }
-  LOG_DBG("EBP", "TOC pass completed in %lu ms", millis() - tocStart);
+  LOG_INF("EBP-PROF", "TOC pass completed in %lu ms", millis() - tocStart);
   reportProgress(30);
 
   // Close the cache files
@@ -686,16 +687,24 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss, const Prog
 
   // Build final book.bin
   const uint32_t buildStart = millis();
+  // The E-Ink progress repaint costs about 640 ms on X4. The metadata loop
+  // used to trigger one every 5%, so display work dominated the now-fast
+  // buffered book.bin build. Keep only two in-loop milestones (65%/95%);
+  // 35% was already drawn immediately above.
+  int nextBuildProgress = 30;
   if (!bookMetadataCache->buildBookBin(filepath, bookMetadata, unpackedPackage,
                                        [&](const uint16_t completed, const uint16_t total) {
                                          const int buildPercent = total == 0 ? 95 : (completed * 60) / total;
-                                         reportProgress(35 + buildPercent);
+                                         if (completed == total || buildPercent >= nextBuildProgress) {
+                                           reportProgress(35 + buildPercent);
+                                           while (nextBuildProgress <= buildPercent) nextBuildProgress += 30;
+                                         }
                                        })) {
     LOG_ERR("EBP", "Could not update mappings and sizes");
     return false;
   }
-  LOG_DBG("EBP", "buildBookBin completed in %lu ms", millis() - buildStart);
-  LOG_DBG("EBP", "Total indexing completed in %lu ms", millis() - indexingStart);
+  LOG_INF("EBP-PROF", "buildBookBin completed in %lu ms", millis() - buildStart);
+  LOG_INF("EBP-PROF", "Total metadata indexing completed in %lu ms", millis() - indexingStart);
 
   if (!bookMetadataCache->cleanupTmpFiles()) {
     LOG_DBG("EBP", "Could not cleanup tmp files - ignoring");

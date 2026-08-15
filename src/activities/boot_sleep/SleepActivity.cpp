@@ -1254,12 +1254,9 @@ void SleepActivity::renderCalendarSleepScreenLandscape() const {
 }
 
 void SleepActivity::renderLastScreenSleepScreen() const {
-  const auto pageHeight = renderer.getScreenHeight();
-  if (ReaderUtils::readerDarkModeEnabled()) {
-    renderer.drawImageInverted(MoonIcon, 0, pageHeight - MOONICON_HEIGHT, MOONICON_WIDTH, MOONICON_HEIGHT);
-  } else {
-    renderer.drawImage(MoonIcon, 0, pageHeight - MOONICON_HEIGHT, MOONICON_WIDTH, MOONICON_HEIGHT);
-  }
+  // Quick Resume intentionally leaves the page/wallpaper untouched. The old
+  // moon bitmap had an opaque rectangle around it on grayscale backgrounds.
+  // No marker is preferable to damaging the user's sleep image.
   renderer.displayBuffer(HalDisplay::HALF_REFRESH);
 }
 

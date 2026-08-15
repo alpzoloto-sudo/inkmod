@@ -367,8 +367,10 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     add(SettingInfo::Enum(StrId::STR_IMAGES, &InkMODSettings::imageRendering,
                           {StrId::STR_IMAGES_DISPLAY, StrId::STR_IMAGES_PLACEHOLDER, StrId::STR_IMAGES_SUPPRESS},
                           "imageRendering", StrId::STR_CAT_READER));
-    add(SettingInfo::Toggle(StrId::STR_EXTRA_SPACING, &InkMODSettings::extraParagraphSpacing,
-                            "extraParagraphSpacing", StrId::STR_CAT_READER));
+    add(SettingInfo::Enum(StrId::STR_EXTRA_SPACING, &InkMODSettings::extraParagraphSpacing,
+                          {StrId::STR_NONE_OPT, StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE},
+                          "extraParagraphSpacing", StrId::STR_CAT_READER)
+            .withEnumRawValues({0, 1, 2, 3}));
     add(SettingInfo::Enum(StrId::STR_READER_CLOCK_POSITION, &InkMODSettings::readerClockAtBottom,
                           {StrId::STR_TOP, StrId::STR_BOTTOM}, "readerClockAtBottom", StrId::STR_CAT_READER));
     add(SettingInfo::Toggle(StrId::STR_FORCE_PARAGRAPH_INDENTS, &InkMODSettings::forceParagraphIndents,
@@ -771,7 +773,6 @@ inline std::vector<SettingInfo> buildReaderFontSettingsList(const std::vector<Se
   settings.reserve(5);
   addSettingByName(settings, allSettings, StrId::STR_FONT_FAMILY);
   addSettingByName(settings, allSettings, StrId::STR_FONT_SIZE);
-  addSettingByName(settings, allSettings, StrId::STR_LINE_SPACING);
   addSettingByName(settings, allSettings, StrId::STR_TEXT_AA);
   return settings;
 }
@@ -780,6 +781,7 @@ inline std::vector<SettingInfo> buildReaderPageLayoutSettingsList(const std::vec
   std::vector<SettingInfo> settings;
   settings.reserve(6);
   addSettingByName(settings, allSettings, StrId::STR_ORIENTATION);
+  addSettingByName(settings, allSettings, StrId::STR_LINE_SPACING);
   addSettingByName(settings, allSettings, StrId::STR_SCREEN_MARGIN);
   addSettingByName(settings, allSettings, StrId::STR_PARA_ALIGNMENT);
   addSettingByName(settings, allSettings, StrId::STR_HYPHENATION);
@@ -923,8 +925,6 @@ inline std::vector<SettingInfo> buildSystemSettingsParentList(const std::vector<
   systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_BOOT_OTHER_SLOT, SettingAction::SwitchOtaSlot));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_SUPPORT_INKMOD, SettingAction::SupportInkMOD));
   return systemSettings;
 }

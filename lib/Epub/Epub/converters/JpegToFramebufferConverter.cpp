@@ -353,30 +353,42 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
 }  // namespace
 
 bool JpegToFramebufferConverter::getDimensionsStatic(const std::string& imagePath, ImageDimensions& out) {
-  if (!MemoryBudget::hasHeapForImageDecoder("JPG", "JPEG", JPEG_DECODER_APPROX_SIZE)) {
+  // Scan JPEG markers with a tiny fixed buffer. JPEGDEC costs ~20 KB and is
+  // only needed later when the image page is actually rendered.
+  FsFile file;
+  if (!Storage.openFileForRead("JPG", imagePath, file)) return false;
+  uint8_t marker[4];
+  if (file.read(marker, 2) != 2 || marker[0] != 0xFF || marker[1] != 0xD8) {
+    file.close();
     return false;
   }
-
-  JPEGDEC* jpeg = new (std::nothrow) JPEGDEC();
-  if (!jpeg) {
-    LOG_ERR("JPG", "Failed to allocate JPEG decoder for dimensions");
-    return false;
+  while (file.available()) {
+    uint8_t byte = 0;
+    do {
+      if (file.read(&byte, 1) != 1) { file.close(); return false; }
+    } while (byte != 0xFF);
+    do {
+      if (file.read(&byte, 1) != 1) { file.close(); return false; }
+    } while (byte == 0xFF);
+    if (byte == 0xD8 || byte == 0x01 || (byte >= 0xD0 && byte <= 0xD9)) continue;
+    if (file.read(marker, 2) != 2) break;
+    const uint16_t length = (static_cast<uint16_t>(marker[0]) << 8) | marker[1];
+    if (length < 2) break;
+    const bool isSof = (byte >= 0xC0 && byte <= 0xC3) || (byte >= 0xC5 && byte <= 0xC7) ||
+                       (byte >= 0xC9 && byte <= 0xCB) || (byte >= 0xCD && byte <= 0xCF);
+    if (isSof) {
+      uint8_t sof[5];
+      if (length < 7 || file.read(sof, sizeof(sof)) != static_cast<int>(sizeof(sof))) break;
+      out.height = (static_cast<int>(sof[1]) << 8) | sof[2];
+      out.width = (static_cast<int>(sof[3]) << 8) | sof[4];
+      file.close();
+      return out.width > 0 && out.height > 0;
+    }
+    if (!file.seekCur(length - 2)) break;
   }
-
-  int rc = jpeg->open(imagePath.c_str(), jpegOpen, jpegClose, jpegRead, jpegSeek, nullptr);
-  if (rc != 1) {
-    LOG_ERR("JPG", "Failed to open JPEG for dimensions (err=%d): %s", jpeg->getLastError(), imagePath.c_str());
-    delete jpeg;
-    return false;
-  }
-
-  out.width = jpeg->getWidth();
-  out.height = jpeg->getHeight();
-  LOG_DBG("JPG", "Image dimensions: %dx%d", out.width, out.height);
-
-  jpeg->close();
-  delete jpeg;
-  return true;
+  file.close();
+  LOG_ERR("JPG", "JPEG dimensions marker not found: %s", imagePath.c_str());
+  return false;
 }
 
 bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath, GfxRenderer& renderer,

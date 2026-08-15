@@ -206,10 +206,10 @@ bool Fb2Parser::scan(IByteReader& reader, Fb2ScanResult& out, size_t xmlBufferSi
     // chapter titles. The pool never grows past that limit.
     out.stringPool.reserve(reader.size() >= 8ULL * 1024 * 1024 ? kSectionStringPoolReserve : 8 * 1024);
 
-    // Keep the proven 4 KiB tokenizer buffer. v3's 16 KiB + large reserves
-    // caused OOM on real X4.
+    // 8 KiB halves SD read calls on large plain FB2 files without returning
+    // to v3's unsafe 16 KiB buffer. Fused ZIP explicitly requests 2 KiB.
     const size_t safeXmlBufferSize =
-        std::max<size_t>(1024, std::min<size_t>(4096, xmlBufferSize));
+        std::max<size_t>(1024, std::min<size_t>(8192, xmlBufferSize));
     Fb2XmlReader xml(reader, safeXmlBufferSize);
 
     bool inDescription = false;
@@ -236,9 +236,20 @@ bool Fb2Parser::scan(IByteReader& reader, Fb2ScanResult& out, size_t xmlBufferSi
     std::vector<int> sectionStack;
 
     for (;;) {
+        // Most of a large FB2 is ordinary paragraph text. During indexing we
+        // only count those decoded bytes; materialize strings solely where
+        // metadata/TOC/CSS actually consumes them.
+        xml.setCaptureText(activeTarget != nullptr || inStylesheet || inAnnotation || inTitle);
         Fb2Token tok = xml.next();
         if (tok == Fb2Token::Eof) break;
         if (tok == Fb2Token::Error) return false;
+
+        out.tokenCount++;
+        if (tok == Fb2Token::Text) {
+            out.textTokenCount++;
+            out.textPayloadBytes += xml.textSize();
+            if (inBinaryTag) out.binaryTextBytes += xml.textSize();
+        }
 
         const std::string& name = xml.name();
 
@@ -329,7 +340,7 @@ bool Fb2Parser::scan(IByteReader& reader, Fb2ScanResult& out, size_t xmlBufferSi
                 // decodeBinary() later via byte offsets, never buffered here.
             } else if (currentBodyIndex >= 0 && !sectionStack.empty()) {
                 out.sections[sectionStack.back()].approxTextBytes +=
-                    static_cast<uint32_t>(xml.text().size());
+                    static_cast<uint32_t>(xml.textSize());
             }
         }
 

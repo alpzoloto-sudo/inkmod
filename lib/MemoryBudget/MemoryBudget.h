@@ -18,8 +18,13 @@ struct HeapRequirement {
   uint32_t minMaxAlloc;
 };
 
-constexpr uint32_t EPUB_INLINE_IMAGE_MIN_FREE = 96U * 1024U;
-constexpr uint32_t EPUB_INLINE_IMAGE_MIN_MAX_ALLOC = 56U * 1024U;
+// Keep the pre-extraction gate aligned with the PNG decoder's real budget.
+// PNGdec is ~44 KB and the converter already enforces a separate 48 KB
+// decoder headroom immediately before allocation.  The old 96/56 KB gate
+// rejected valid chapters at ~94 KB free even though the real decoder guard
+// would safely allow them, causing the reader to abort and eject the user.
+constexpr uint32_t EPUB_INLINE_IMAGE_MIN_FREE = 92U * 1024U;
+constexpr uint32_t EPUB_INLINE_IMAGE_MIN_MAX_ALLOC = 44U * 1024U;
 // JPEGDEC needs about 20 KB plus its 48 KB safety margin. Requiring the
 // PNG-sized 96 KB budget here needlessly suppresses otherwise safe JPEGs.
 constexpr uint32_t EPUB_INLINE_JPEG_MIN_FREE = 72U * 1024U;

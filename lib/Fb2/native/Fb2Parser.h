@@ -41,7 +41,7 @@ public:
     // Missing individual metadata fields are not an error - FB2 files are
     // frequently missing <document-info>, <lang>, a cover, etc.
     bool scan(IByteReader& reader, Fb2ScanResult& outResult,
-              size_t xmlBufferSize = 4096);
+              size_t xmlBufferSize = 8192);
 
     // sectionIndex must be an index into the vector scan() filled in.
     bool renderSection(IByteReader& reader,

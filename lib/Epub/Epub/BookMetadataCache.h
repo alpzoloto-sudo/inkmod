@@ -6,6 +6,7 @@
 #include <deque>
 #include <functional>
 #include <string>
+#include <vector>
 
 class BookMetadataCache {
  public:
@@ -55,6 +56,11 @@ class BookMetadataCache {
   // Temp file handles during build
   HalFile spineFile;
   HalFile tocFile;
+  // OPF/TOC parsers emit many tiny fields. Buffer their temporary sequential
+  // files to avoid taking the SD/storage lock for every 1-4 byte write.
+  std::vector<uint8_t> spineWriteBuffer;
+  std::vector<uint8_t> tocWriteBuffer;
+  bool tempWriteFailed = false;
 
   // Index for fast href→spineIndex lookup (used only for large EPUBs)
   struct SpineHrefIndexEntry {
@@ -79,6 +85,9 @@ class BookMetadataCache {
 
   uint32_t writeSpineEntry(HalFile& file, const SpineEntry& entry) const;
   uint32_t writeTocEntry(HalFile& file, const TocEntry& entry) const;
+  bool appendTempBytes(HalFile& file, std::vector<uint8_t>& buffer, const void* data, size_t length);
+  bool flushTempBuffer(HalFile& file, std::vector<uint8_t>& buffer);
+  bool writeTempString(HalFile& file, std::vector<uint8_t>& buffer, const std::string& value);
   SpineEntry readSpineEntry(HalFile& file) const;
   TocEntry readTocEntry(HalFile& file) const;
 

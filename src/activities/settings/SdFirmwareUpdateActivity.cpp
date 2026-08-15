@@ -7,6 +7,8 @@
 #include <Logging.h>
 #include <esp_ota_ops.h>
 
+#include <algorithm>
+
 #include "MappedInputManager.h"
 #include "activities/home/FileBrowserActivity.h"
 #include "activities/util/ConfirmationActivity.h"
@@ -236,7 +238,17 @@ void SdFirmwareUpdateActivity::render(RenderLock&&) {
     renderer.drawCenteredText(UI_10_FONT_ID, y, tr(STR_FIRMWARE_UPDATE_DO_NOT_POWER_OFF));
   } else if (state == State::SUCCESS) {
     renderer.drawCenteredText(UI_10_FONT_ID, top, tr(STR_UPDATE_COMPLETE), true, EpdFontFamily::BOLD);
-    renderer.drawCenteredText(UI_10_FONT_ID, top + lineHeight + metrics.verticalSpacing, tr(STR_RESTARTING_HINT));
+    // Keep a little more room than the generic content padding. Some translated
+    // restart hints contain long words and used to be centred partly off-screen.
+    const int safeSidePadding = std::max(metrics.contentSidePadding, 28);
+    const int textWidth = pageWidth - safeSidePadding * 2;
+    const auto lines = renderer.wrappedText(UI_10_FONT_ID, tr(STR_RESTARTING_HINT), textWidth, 3);
+    int y = top + lineHeight + metrics.verticalSpacing;
+    for (const auto& line : lines) {
+      const auto safeLine = renderer.truncatedText(UI_10_FONT_ID, line.c_str(), textWidth);
+      renderer.drawCenteredText(UI_10_FONT_ID, y, safeLine.c_str());
+      y += lineHeight + 2;
+    }
   } else if (state == State::FAILED) {
     renderer.drawCenteredText(UI_10_FONT_ID, top, tr(STR_UPDATE_FAILED), true, EpdFontFamily::BOLD);
     if (!errorMessage.empty()) {

@@ -99,6 +99,11 @@ class Fb2 {
   // a real EPUB's own occasional missing-item case.
   static uint32_t getApproxChapterSize(const std::string& packageCachePath, int chapterIndex);
 
+  // Read every persisted approximate chapter size in one sequential pass.
+  // BookMetadataCache uses this instead of reopening and rescanning the
+  // variable-length section index once for every spine item.
+  static bool loadApproxChapterSizes(const std::string& packageCachePath, std::deque<uint32_t>& outSizes);
+
   // Return the contiguous virtual-spine range that belongs to the same
   // original FB2 <section> as chapterIndex. Large sections are split into
   // several virtual chapters for RAM safety; all slices share innerStartOffset.

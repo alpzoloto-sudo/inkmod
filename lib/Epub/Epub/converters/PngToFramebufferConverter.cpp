@@ -247,30 +247,32 @@ int pngDrawCallback(PNGDRAW* pDraw) {
 }  // namespace
 
 bool PngToFramebufferConverter::getDimensionsStatic(const std::string& imagePath, ImageDimensions& out) {
-  if (!MemoryBudget::hasHeapForImageDecoder("PNG", "PNG", PNG_DECODER_APPROX_SIZE)) {
+  // Width and height are stored directly in the fixed PNG signature + IHDR
+  // header.  Do not instantiate PNGdec (~44 KB) while the chapter model and
+  // CSS parser are live merely to read these eight bytes.
+  FsFile file;
+  if (!Storage.openFileForRead("PNG", imagePath, file)) return false;
+
+  uint8_t header[24];
+  const int bytesRead = file.read(header, sizeof(header));
+  file.close();
+  static constexpr uint8_t signature[8] = {137, 80, 78, 71, 13, 10, 26, 10};
+  if (bytesRead != static_cast<int>(sizeof(header)) || memcmp(header, signature, sizeof(signature)) != 0 ||
+      memcmp(header + 12, "IHDR", 4) != 0) {
+    LOG_ERR("PNG", "Invalid or truncated PNG header: %s", imagePath.c_str());
     return false;
   }
 
-  PNG* png = new (std::nothrow) PNG();
-  if (!png) {
-    LOG_ERR("PNG", "Failed to allocate PNG decoder for dimensions");
+  const uint32_t width = (static_cast<uint32_t>(header[16]) << 24) | (static_cast<uint32_t>(header[17]) << 16) |
+                         (static_cast<uint32_t>(header[18]) << 8) | header[19];
+  const uint32_t height = (static_cast<uint32_t>(header[20]) << 24) | (static_cast<uint32_t>(header[21]) << 16) |
+                          (static_cast<uint32_t>(header[22]) << 8) | header[23];
+  if (width == 0 || height == 0 || width > 32767 || height > 32767) {
+    LOG_ERR("PNG", "Invalid PNG dimensions: %ux%u", width, height);
     return false;
   }
-
-  int rc = png->open(imagePath.c_str(), pngOpenWithHandle, pngCloseWithHandle, pngReadWithHandle, pngSeekWithHandle,
-                     nullptr);
-
-  if (rc != 0) {
-    LOG_ERR("PNG", "Failed to open PNG for dimensions: %d", rc);
-    delete png;
-    return false;
-  }
-
-  out.width = png->getWidth();
-  out.height = png->getHeight();
-
-  png->close();
-  delete png;
+  out.width = static_cast<int>(width);
+  out.height = static_cast<int>(height);
   return true;
 }
 

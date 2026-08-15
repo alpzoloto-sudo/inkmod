@@ -90,7 +90,6 @@ inline esp_sleep_wakeup_cause_t esp_sleep_get_wakeup_cause() { return ESP_SLEEP_
 #include "simulator/SimulatorSmokeTest.h"
 #endif
 #include "SdCardFontSystem.h"
-#include "images/LoadingIcon.h"
 #include "util/ButtonNavigator.h"
 #include "util/ScreenshotUtil.h"
 
@@ -422,8 +421,18 @@ bool handleGlobalPowerButtonAction(const InkMODSettings::SHORT_PWRBTN action) {
       return true;
     case InkMODSettings::SHORT_PWRBTN::FORCE_REFRESH: {
       LOG_DBG("MAIN", "Manual screen refresh triggered");
-      RenderLock lock;
-      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+      const bool repaintReaderGrayscale = activityManager.isCurrentReaderActivity();
+      {
+        RenderLock lock;
+        renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+      }
+      // HALF_REFRESH sends the current 1-bit framebuffer and clears ghosting,
+      // but it does not rebuild the reader's later grayscale/AA passes. Ask
+      // only an actually visible reader to run its normal render pipeline
+      // once more. Menus and the file browser keep their old one-pass action.
+      if (repaintReaderGrayscale) {
+        activityManager.requestUpdate();
+      }
       return true;
     }
     case InkMODSettings::SHORT_PWRBTN::SCREENSHOT: {
@@ -859,14 +868,10 @@ void setup() {
       APP_STATE.showBootScreen = true;
       APP_STATE.saveToFile();
       if (loadSleepFrameBuffer()) {
-        // Frame restored: swap the sleep moon for the loading icon.
-        const auto pageHeight = renderer.getScreenHeight();
-        if (SETTINGS.readerDarkMode != 0) {
-          renderer.drawImageInverted(LoadingIcon, 0, pageHeight - LOADINGICON_HEIGHT, LOADINGICON_WIDTH,
-                                     LOADINGICON_HEIGHT);
-        } else {
-          renderer.drawImage(LoadingIcon, 0, pageHeight - LOADINGICON_HEIGHT, LOADINGICON_WIDTH, LOADINGICON_HEIGHT);
-        }
+        // Restore the pre-sleep reader framebuffer to the panel, but do not
+        // draw any Quick Resume marker.  The refresh is required so the sleep
+        // wallpaper is replaced immediately; omitting it leaves the sleep
+        // image visible until a later unrelated redraw.
         renderer.displayBuffer(HalDisplay::HALF_REFRESH);
       } else {
         activityManager.goToBoot();  // frame file missing, fall back to the splash

@@ -324,6 +324,7 @@
     document.getElementById('progress-fill').style.width = '0%';
     document.getElementById('progress-fill').style.backgroundColor = '#27ae60';
     document.getElementById('convertBeforeUpload').checked = false;
+    document.getElementById('prepareBookBeforeUpload').checked = true;
     document.getElementById('convertInfo').style.display = 'none';
     document.getElementById('convertWarning').style.display = 'none';
     document.getElementById('fb2ToEpubCheckbox').checked = false;
@@ -365,11 +366,17 @@
 
   function updateUploadBtnLabel() {
     const optimizeChecked = document.getElementById('convertBeforeUpload').checked;
+    const prepareEl = document.getElementById('prepareBookBeforeUpload');
+    const prepareRow = document.getElementById('prepareBookRow');
+    const prepareChecked = !!(prepareEl && prepareEl.checked && prepareRow && prepareRow.style.display !== 'none');
     const fb2El = document.getElementById('fb2ToEpubCheckbox');
     const fb2Checked = !!(fb2El && fb2El.checked);
     const uploadBtn = document.getElementById('uploadBtn');
     if (optimizeChecked) {
       uploadBtn.textContent = 'Optimize & Upload';
+      uploadBtn.classList.add('optimize');
+    } else if (prepareChecked) {
+      uploadBtn.textContent = 'Prepare & Upload';
       uploadBtn.classList.add('optimize');
     } else if (fb2Checked) {
       uploadBtn.textContent = 'Convert & Upload';
@@ -1291,12 +1298,20 @@
     // device screen the same way EPUB/FB2 covers do.
     const hasConvertible = Array.from(files).some(f => {
       const n = f.name.toLowerCase();
-      return n.endsWith('.epub') || isFb2Name(n) || isImageName(n);
+      return n.endsWith('.epub') || isFb2Name(n) || n.endsWith('.zip') || isImageName(n);
     });
     const hasFb2 = Array.from(files).some(f => {
       const n = f.name.toLowerCase();
       return isFb2Name(n);
     });
+    const hasBook = Array.from(files).some(f => {
+      const n = f.name.toLowerCase();
+      // Generic ZIP remains eligible because content detection happens
+      // asynchronously later (it may contain either EPUB or FB2).
+      return n.endsWith('.epub') || isFb2Name(n) || n.endsWith('.zip');
+    });
+    const prepareBookRow = document.getElementById('prepareBookRow');
+    if (prepareBookRow) prepareBookRow.style.display = hasBook ? 'flex' : 'none';
     const fb2ToEpubRow = document.getElementById('fb2ToEpubRow');
     if (files.length > 0 && hasFb2) {
       fb2ToEpubRow.style.display = 'flex';
@@ -1314,7 +1329,8 @@
       // explicitly turn it off for a lossless copy.
       const hasLargeConvertible = Array.from(files).some(f => {
         const n = f.name.toLowerCase();
-        return f.size >= 5 * 1024 * 1024 && (n.endsWith('.epub') || isFb2Name(n) || isImageName(n));
+        return f.size >= 5 * 1024 * 1024 &&
+          (n.endsWith('.epub') || isFb2Name(n) || n.endsWith('.zip') || isImageName(n));
       });
       const convertCheckbox = document.getElementById('convertBeforeUpload');
       if (hasLargeConvertible && convertCheckbox && !convertCheckbox.checked) {
@@ -2737,6 +2753,25 @@ async function isFb2UploadFile(file) {
   } catch (_) {
     return false;
   }
+}
+
+// Accept both a real EPUB renamed to .zip and an outer archive containing one
+// .epub file. Ordinary ZIPs are returned unchanged.
+async function extractEpubFromUpload(file) {
+  const name = (file && file.name || '').toLowerCase();
+  if (name.endsWith('.epub') || !name.endsWith('.zip')) return file;
+  try {
+    const zip = await JSZip.loadAsync(file);
+    if (zip.file('META-INF/container.xml')) {
+      return new File([file], file.name.replace(/\.zip$/i, '.epub'), { type: 'application/epub+zip' });
+    }
+    const nested = Object.keys(zip.files).find(path => !zip.files[path].dir && path.toLowerCase().endsWith('.epub'));
+    if (nested) {
+      const blob = await zip.file(nested).async('blob');
+      return new File([blob], nested.split('/').pop(), { type: 'application/epub+zip' });
+    }
+  } catch (_) { /* not a readable ZIP */ }
+  return file;
 }
 
 /** Standalone image files (not embedded in an EPUB/FB2) eligible for the
@@ -4712,10 +4747,225 @@ function uploadFileHTTP(file, onProgress, onComplete, onError, targetPath) {
   });
 }
 
+function uploadInternalBookArtifact(endpoint, file, remoteBookPath, extraQuery = '') {
+  return new Promise((resolve, reject) => {
+    const formData = new FormData();
+    formData.append('file', file, 'book.bin');
+    const xhr = new XMLHttpRequest();
+    currentUploadXhr = xhr;
+    xhr.open('POST', endpoint + '?bookPath=' + encodeURIComponent(remoteBookPath) + extraQuery, true);
+    xhr.onload = () => {
+      currentUploadXhr = null;
+      if (xhr.status === 200) resolve();
+      else reject(new Error(xhr.responseText || `Cache upload failed (${xhr.status})`));
+    };
+    xhr.onerror = () => {
+      currentUploadXhr = null;
+      reject(new Error('Prepared cache network error'));
+    };
+    xhr.onabort = () => {
+      currentUploadXhr = null;
+      reject(new Error('Upload aborted'));
+    };
+    xhr.send(formData);
+  });
+}
+
+function uploadPreparedBookCache(file, remoteBookPath, fb2Mode = false) {
+  return uploadInternalBookArtifact('/api/books/cache', file, remoteBookPath, fb2Mode ? '&fb2=1' : '');
+}
+
+function uploadPreparedFb2Package(file, remoteBookPath) {
+  return uploadInternalBookArtifact('/api/books/fb2-package', file, remoteBookPath);
+}
+
+// Build the firmware's native BookMetadataCache in the browser. It is sent to
+// the protected cache-install endpoint, never stored beside the user's book.
+let bookPrepRequestId = 0;
+function readEpubStructureInWorker(file, progressCallback) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker('/js/bookprep-worker.js');
+    const id = ++bookPrepRequestId;
+    worker.onmessage = event => {
+      const message = event.data || {};
+      if (message.id !== id) return;
+      if (typeof message.progress === 'number') progressCallback && progressCallback(message.progress);
+      if (message.error) {
+        worker.terminate();
+        reject(new Error(message.error));
+      } else if (message.result) {
+        worker.terminate();
+        resolve(message.result);
+      }
+    };
+    worker.onerror = event => {
+      worker.terminate();
+      reject(new Error(event.message || 'Book preparation worker failed'));
+    };
+    worker.postMessage({ id, file });
+  });
+}
+
+async function buildBrowserBookCache(epubFile, progressCallback) {
+  const prepared = await readEpubStructureInWorker(epubFile, progressCallback);
+  const parser = new DOMParser();
+  const clean = value => (value || '').replace(/\s+/g, ' ').trim();
+  const localName = node => (node.localName || node.nodeName.split(':').pop()).toLowerCase();
+  const children = (node, name) => Array.from(node.getElementsByTagName('*')).filter(n => localName(n) === name);
+  const normalise = path => {
+    const out = [];
+    String(path || '').replace(/\\/g, '/').split('/').forEach(part => {
+      if (!part || part === '.') return;
+      if (part === '..') out.pop(); else out.push(part);
+    });
+    return out.join('/');
+  };
+  const dirname = path => path.includes('/') ? path.slice(0, path.lastIndexOf('/') + 1) : '';
+  const decodeHref = href => {
+    try { return decodeURIComponent(href); } catch (_) { return href; }
+  };
+  const xmlEntry = path => {
+    const wanted = normalise(path);
+    let xml = '';
+    if (wanted === 'META-INF/container.xml') xml = prepared.containerXml;
+    else if (wanted === prepared.opfPath) xml = prepared.opfXml;
+    else if (wanted === prepared.navPath) xml = prepared.navXml;
+    else if (wanted === prepared.ncxPath) xml = prepared.ncxXml;
+    if (!xml) throw new Error('Missing EPUB entry: ' + path);
+    return parser.parseFromString(xml, 'application/xml');
+  };
+
+  progressCallback && progressCallback(5);
+  const container = xmlEntry('META-INF/container.xml');
+  const rootfile = children(container, 'rootfile')[0];
+  if (!rootfile) throw new Error('EPUB container has no rootfile');
+  const opfPath = normalise(rootfile.getAttribute('full-path'));
+  const opfBase = dirname(opfPath);
+  const opf = xmlEntry(opfPath);
+  const firstText = name => {
+    const node = children(opf, name)[0];
+    return node ? clean(node.textContent) : '';
+  };
+
+  const manifest = new Map();
+  children(opf, 'item').forEach(item => {
+    const id = item.getAttribute('id') || '';
+    const href = normalise(opfBase + decodeHref(item.getAttribute('href') || ''));
+    manifest.set(id, {
+      id, href,
+      mediaType: item.getAttribute('media-type') || '',
+      properties: item.getAttribute('properties') || ''
+    });
+  });
+
+  const spineNode = children(opf, 'spine')[0];
+  const spines = [];
+  if (spineNode) {
+    Array.from(spineNode.children).filter(n => localName(n) === 'itemref').forEach(ref => {
+      const item = manifest.get(ref.getAttribute('idref') || '');
+      if (item && item.href) spines.push({ href: item.href, cumulativeSize: 0, tocIndex: -1 });
+    });
+  }
+  if (!spines.length) throw new Error('EPUB has no readable spine');
+
+  let coverHref = '';
+  const coverMeta = children(opf, 'meta').find(n => (n.getAttribute('name') || '').toLowerCase() === 'cover');
+  if (coverMeta) {
+    const cover = manifest.get(coverMeta.getAttribute('content') || '');
+    if (cover && cover.mediaType.startsWith('image/')) coverHref = cover.href;
+  }
+  if (!coverHref) {
+    const cover = Array.from(manifest.values()).find(i => i.properties.split(/\s+/).includes('cover-image'));
+    if (cover) coverHref = cover.href;
+  }
+
+  const toc = [];
+  const addToc = (title, rawTarget, base, level) => {
+    if (!rawTarget) return;
+    const hash = rawTarget.indexOf('#');
+    const rawPath = hash < 0 ? rawTarget : rawTarget.slice(0, hash);
+    const href = normalise(base + decodeHref(rawPath));
+    const anchor = hash < 0 ? '' : decodeHref(rawTarget.slice(hash + 1));
+    const spineIndex = spines.findIndex(s => s.href === href);
+    toc.push({ title: clean(title), href, anchor, level: Math.max(0, Math.min(255, level)), spineIndex });
+  };
+
+  const navItem = Array.from(manifest.values()).find(i => i.properties.split(/\s+/).includes('nav'));
+  if (navItem && prepared.navXml && normalise(navItem.href) === prepared.navPath) {
+    const nav = xmlEntry(navItem.href);
+    const navRoot = children(nav, 'nav').find(n =>
+      (n.getAttribute('epub:type') || n.getAttribute('type') || '').split(/\s+/).includes('toc')) || children(nav, 'nav')[0];
+    if (navRoot) {
+      const walkOl = (ol, depth) => Array.from(ol.children).filter(n => localName(n) === 'li').forEach(li => {
+        const a = Array.from(li.children).find(n => localName(n) === 'a');
+        if (a) addToc(a.textContent, a.getAttribute('href'), dirname(navItem.href), depth);
+        Array.from(li.children).filter(n => localName(n) === 'ol').forEach(child => walkOl(child, depth + 1));
+      });
+      Array.from(navRoot.children).filter(n => localName(n) === 'ol').forEach(ol => walkOl(ol, 1));
+    }
+  } else {
+    const ncxId = spineNode ? spineNode.getAttribute('toc') : '';
+    const ncxItem = manifest.get(ncxId) || Array.from(manifest.values()).find(i => i.mediaType === 'application/x-dtbncx+xml');
+    if (ncxItem && prepared.ncxXml && normalise(ncxItem.href) === prepared.ncxPath) {
+      const ncx = xmlEntry(ncxItem.href);
+      const walkPoint = (point, depth) => {
+        const label = children(point, 'navlabel')[0];
+        const content = Array.from(point.children).find(n => localName(n) === 'content');
+        if (content) addToc(label ? label.textContent : '', content.getAttribute('src'), dirname(ncxItem.href), depth);
+        Array.from(point.children).filter(n => localName(n) === 'navpoint').forEach(p => walkPoint(p, depth + 1));
+      };
+      const map = children(ncx, 'navmap')[0];
+      if (map) Array.from(map.children).filter(n => localName(n) === 'navpoint').forEach(p => walkPoint(p, 1));
+    }
+  }
+
+  let cumulative = 0;
+  spines.forEach((spine, index) => {
+    const size = Number(prepared.entrySizes[normalise(spine.href)]) || 0;
+    cumulative = Math.min(0xffffffff, cumulative + size);
+    spine.cumulativeSize = cumulative;
+    const direct = toc.findIndex(t => t.spineIndex === index);
+    spine.tocIndex = direct >= 0 ? direct : (index ? spines[index - 1].tocIndex : -1);
+  });
+
+  progressCallback && progressCallback(70);
+  const enc = new TextEncoder();
+  const bytes = [];
+  const u8 = n => bytes.push(n & 255);
+  const u16 = n => { u8(n); u8(n >>> 8); };
+  const i16 = n => u16(n < 0 ? 0x10000 + n : n);
+  const u32 = n => { u8(n); u8(n >>> 8); u8(n >>> 16); u8(n >>> 24); };
+  const strBytes = value => enc.encode(value || '');
+  const putString = value => { const b = strBytes(value); u32(b.length); for (const v of b) u8(v); };
+  const metadata = {
+    title: firstText('title') || epubFile.name.replace(/\.epub$/i, ''),
+    author: firstText('creator'), language: firstText('language') || 'und',
+    cover: coverHref, textRef: ''
+  };
+  const metadataSize = [metadata.title, metadata.author, metadata.language, metadata.cover, metadata.textRef]
+    .reduce((sum, s) => sum + 4 + strBytes(s).length, 0);
+  const lutOffset = 13 + metadataSize;
+  const spineEntrySizes = spines.map(s => 4 + strBytes(s.href).length + 4 + 2);
+  const tocEntrySizes = toc.map(t => 4 + strBytes(t.title).length + 4 + strBytes(t.href).length + 4 + strBytes(t.anchor).length + 1 + 2);
+  const lutSize = (spines.length + toc.length) * 4;
+
+  u32(0x425843ff); u8(7); u32(lutOffset); u16(spines.length); u16(toc.length);
+  putString(metadata.title); putString(metadata.author); putString(metadata.language); putString(metadata.cover); putString(metadata.textRef);
+  let offset = lutOffset + lutSize;
+  spineEntrySizes.forEach(size => { u32(offset); offset += size; });
+  tocEntrySizes.forEach(size => { u32(offset); offset += size; });
+  spines.forEach(s => { putString(s.href); u32(s.cumulativeSize); i16(s.tocIndex); });
+  toc.forEach(t => { putString(t.title); putString(t.href); putString(t.anchor); u8(t.level); i16(t.spineIndex); });
+  progressCallback && progressCallback(100);
+  return new File([new Uint8Array(bytes)], 'book.bin', { type: 'application/octet-stream' });
+}
+
 function uploadFile() {
   const fileInput = document.getElementById('fileInput');
   const files = Array.from(fileInput.files);
   const convertEnabled = document.getElementById('convertBeforeUpload').checked;
+  const prepareBookEl = document.getElementById('prepareBookBeforeUpload');
+  const prepareBookEnabled = !!(prepareBookEl && prepareBookEl.checked);
   const fb2ToEpubEl = document.getElementById('fb2ToEpubCheckbox');
   const fb2ToEpubEnabled = !!(fb2ToEpubEl && fb2ToEpubEl.checked);
   folderExistsCache = new Set(); // fresh per batch — subfolders may have changed since the last upload
@@ -4816,6 +5066,8 @@ function uploadFile() {
     // Re-enable transition after a brief delay
     setTimeout(() => progressFill.classList.remove('no-transition'), 50);
 
+    // Content-detect EPUB ZIPs before extension-based routing.
+    file = await extractEpubFromUpload(file);
     // Check if file is an EPUB/FB2/standalone image and conversion is enabled
     const lowerFileName = file.name.toLowerCase();
     const isEpub = lowerFileName.endsWith('.epub');
@@ -4832,12 +5084,10 @@ function uploadFile() {
         file = new File([file], fb2ZipName, { type: file.type || 'application/zip' });
       }
     }
-    // fb2ToEpubEnabled must work on its own here: the checkbox is reachable
-    // and checkable in the UI without first checking convertEnabled (the
-    // "Оптимизация" parent), so requiring both silently no-ops the whole
-    // conversion for anyone who only ticks "Convert FB2 → EPUB" - the file
-    // just uploads unconverted with no error or indication anything was
-    // skipped.
+    // Web uploads prepare FB2 completely in the browser. Converting it to a
+    // normal EPUB lets the browser also build the final native metadata cache;
+    // books copied directly to SD keep the original FB2 lazy-open path.
+    const prepareNativeFb2 = isFb2 && prepareBookEnabled && !fb2ToEpubEnabled;
     const convertFb2ToRealEpub = isFb2 && fb2ToEpubEnabled;
 
     // Every FB2 upload gets a lightweight cover-normalization pass. This is
@@ -4848,9 +5098,11 @@ function uploadFile() {
     const needsConversion =
       ((isEpub || isImage) && convertEnabled) ||
       (isFb2 && (convertEnabled || normalizeFb2Cover)) ||
-      convertFb2ToRealEpub;
+      convertFb2ToRealEpub || prepareNativeFb2;
     let conversionSucceeded = false;
     let conversionFailed = false;  // Track if conversion actually failed
+    let preparedCompanion = null;
+    let preparedFb2Package = null;
     let convOriginalSize = 0;      // Picked-file size; 0 unless conversion succeeded
     let convNewSize = 0;           // Generated blob size; 0 unless conversion succeeded
 
@@ -4938,7 +5190,7 @@ function uploadFile() {
         try {
           let converted;
           let imageResult = null;
-          if (convertFb2ToRealEpub) {
+          if (convertFb2ToRealEpub || prepareNativeFb2) {
             converted = await convertFb2ToEpub(file, (percent) => {
               progressFill.style.width = (percent * 0.5) + '%'; // Conversion takes first 50%
             });
@@ -4967,7 +5219,12 @@ function uploadFile() {
           // A real FB2→EPUB conversion also gets a renamed .epub filename.
           // convertImageFile resolves with {blob, resized, width, height} — only
           // rename/rewrap when it actually re-encoded the image.
-          if (convertFb2ToRealEpub) {
+          if (prepareNativeFb2) {
+            const preparedName = file.name.replace(/[._-]?fb2\.zip$/i, '.epub').replace(/\.fb2$/i, '.epub');
+            preparedFb2Package = new File([converted], preparedName, { type: 'application/epub+zip' });
+            // Deliberately keep `file` as the original FB2/FB2.ZIP. The EPUB
+            // derivative is uploaded only to the hidden cache endpoint.
+          } else if (convertFb2ToRealEpub) {
             const newName = file.name.replace(/[._-]?fb2\.zip$/i, '.epub').replace(/\.fb2$/i, '.epub');
             file = new File([converted], newName, { type: 'application/epub+zip' });
           } else if (isFb2) {
@@ -5015,11 +5272,39 @@ function uploadFile() {
         await ensureRemoteFolderPath(targetPath);
       }
 
+      // Always prepare EPUB metadata, independently of image optimization.
+      // Failure is non-fatal: upload the book and let the existing device-side
+      // first-open path build its cache.
+      const cacheSourceFile = preparedFb2Package ||
+        (file.name.toLowerCase().endsWith('.epub') ? file : null);
+      if (prepareBookEnabled && cacheSourceFile) {
+        try {
+          progressText.textContent = `Preparing cache ${file.name}...`;
+          preparedCompanion = await buildBrowserBookCache(cacheSourceFile, percent => {
+            progressFill.style.width = Math.min(48, Math.round(percent * 0.48)) + '%';
+          });
+        } catch (cacheError) {
+          preparedCompanion = null;
+          console.warn('[Book cache] Browser preparation failed:', cacheError);
+          log(`Browser cache skipped: ${cacheError.message}; device fallback remains available`, 'warning', 'INFO');
+        }
+      }
+
       if (useWebSocket) {
         await uploadFileWebSocket(file, onProgress, null, null, targetPath);
       } else {
         await uploadFileHTTP(file, onProgress, null, null, targetPath);
       }
+
+      if (preparedCompanion) {
+        progressText.textContent = `Uploading prepared cache for ${file.name}...`;
+        const remoteBookPath = joinRemotePath(targetPath, file.name);
+        if (preparedFb2Package) {
+          await uploadPreparedFb2Package(preparedFb2Package, remoteBookPath);
+        }
+        await uploadPreparedBookCache(preparedCompanion, remoteBookPath, !!preparedFb2Package);
+      }
+
       // Ensure progress bar shows 100% before moving to next file
       progressFill.style.width = '100%';
       progressText.textContent = `Upload complete: ${file.name}`;

@@ -823,7 +823,12 @@ void FileBrowserActivity::loop() {
           GUI.fillPopupProgress(renderer, popupRect, 0);
 
           Fb2 fb2Converter(fullPath, cacheBasePath);
-          if (fb2Converter.load([this, popupRect](int percent) { GUI.fillPopupProgress(renderer, popupRect, percent); })) {
+          const std::string preparedPackage = fb2Converter.getCachePath() + "/package.epub";
+          const std::string preparedMarker = fb2Converter.getCachePath() + "/.browser_prepared_epub";
+          if (Storage.exists(preparedPackage.c_str()) && Storage.exists(preparedMarker.c_str())) {
+            LOG_INF("FB2", "Opening browser-prepared package for original: %s", fullPath.c_str());
+            onSelectBook(preparedPackage);
+          } else if (fb2Converter.load([this, popupRect](int percent) { GUI.fillPopupProgress(renderer, popupRect, percent); })) {
             // Передаем сгенерированный EPUB-пакет в стандартный обработчик открытия книг.
             // Он сам запустит нужный ридер и подхватит все функции (закладки, прогресс и т.д.)
             onSelectBook(fb2Converter.getPackagePath());

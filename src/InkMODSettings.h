@@ -357,6 +357,7 @@ class InkMODSettings {
   // e.g. so the Calendar sleep screen still has a date to show. 0 = never synced.
   uint32_t clockLastSyncedEpoch = 0;
   // Text rendering settings
+  // 0=off, 1=small (legacy ON / current default), 2=medium, 3=large
   uint8_t extraParagraphSpacing = 1;
   uint8_t forceParagraphIndents = 0;
   uint8_t textAntiAliasing = 1;

@@ -103,6 +103,14 @@ struct Fb2ScanResult {
     // heap does not get fragmented by hundreds of tiny title allocations.
     std::string stringPool;
 
+    // Lightweight first-open profiler counters. They are not persisted and
+    // add no per-token allocation; the caller uses them to separate normal
+    // document XML from large base64 <binary> payloads.
+    uint32_t tokenCount = 0;
+    uint32_t textTokenCount = 0;
+    uint64_t textPayloadBytes = 0;
+    uint64_t binaryTextBytes = 0;
+
     std::string_view sectionId(const Fb2SectionIndexEntry& section) const {
         if (section.idPoolOffset == UINT32_MAX || section.idLength == 0 ||
             section.idPoolOffset + section.idLength > stringPool.size()) {

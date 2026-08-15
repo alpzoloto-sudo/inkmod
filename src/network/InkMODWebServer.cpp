@@ -5,6 +5,7 @@
 #include <ArduinoJsonStringCompat.h>
 #endif
 #include <Epub.h>
+#include <Fb2.h>
 #include <FsHelpers.h>
 #include <HalGPIO.h>
 #include <HalStorage.h>
@@ -34,6 +35,7 @@
 #include "html/StyleCss.generated.h"
 #include "html/js/jszip_minJs.generated.h"
 #include "html/js/i18nJs.generated.h"
+#include "html/js/bookprepWorkerJs.generated.h"
 #include "util/BookCacheUtils.h"
 #include "util/StringUtils.h"
 
@@ -186,6 +188,11 @@ void InkMODWebServer::begin() {
   server->on("/wallpapers", HTTP_GET, [this] { handleWallpapersPage(); });
   server->on("/js/jszip.min.js", HTTP_GET, [this] { handleJszip(); });
   server->on("/js/i18n.js", HTTP_GET, [this] { handleI18nJs(); });
+  server->on("/js/bookprep-worker.js", HTTP_GET, [this] {
+    server->sendHeader("Content-Encoding", "gzip");
+    server->sendHeader("Cache-Control", "public, max-age=31536000");
+    server->send_P(200, "application/javascript", bookprepWorkerJs, bookprepWorkerJsCompressedSize);
+  });
   server->on("/style.css", HTTP_GET, [this] { handleStyleCss(); });
   server->on("/logo.png", HTTP_GET, [this] { handleLogo(); });
 
@@ -195,6 +202,12 @@ void InkMODWebServer::begin() {
 
   // Upload endpoint with special handling for multipart form data
   server->on("/upload", HTTP_POST, [this] { handleUploadPost(upload); }, [this] { handleUpload(upload); });
+  // Browser-generated native metadata goes straight to the hidden cache,
+  // never beside the user's books as hundreds of visible .inkprep files.
+  server->on("/api/books/cache", HTTP_POST, [this] { handleUploadPost(bookCacheUpload); },
+             [this] { handleUpload(bookCacheUpload, true); });
+  server->on("/api/books/fb2-package", HTTP_POST, [this] { handleUploadPost(fb2PackageUpload); },
+             [this] { handleUpload(fb2PackageUpload, false, true); });
 
   // Create folder endpoint
   server->on("/mkdir", HTTP_POST, [this] { handleCreateFolder(); });
@@ -720,7 +733,8 @@ static bool flushUploadBuffer(InkMODWebServer::UploadState& state) {
   return true;
 }
 
-void InkMODWebServer::handleUpload(UploadState& state) const {
+void InkMODWebServer::handleUpload(UploadState& state, const bool preparedBookCache,
+                                   const bool preparedFb2Package) const {
   static size_t lastLoggedSize = 0;
 
   // Reset watchdog at start of every upload callback - HTTP parsing can be slow
@@ -738,7 +752,10 @@ void InkMODWebServer::handleUpload(UploadState& state) const {
     // Reset watchdog - this is the critical 1% crash point
     esp_task_wdt_reset();
 
-    state.fileName = StringUtils::sanitizeFilename(upload.filename.c_str()).c_str();
+    state.file.close();
+    state.fileName = preparedBookCache ? "book.bin.tmp"
+                                       : preparedFb2Package ? "package.epub.tmp"
+                                                            : StringUtils::sanitizeFilename(upload.filename.c_str()).c_str();
     state.size = 0;
     state.success = false;
     state.error = "";
@@ -751,7 +768,29 @@ void InkMODWebServer::handleUpload(UploadState& state) const {
     // Get upload path from query parameter (defaults to root if not specified)
     // Note: We use query parameter instead of form data because multipart form
     // fields aren't available until after file upload completes
-    if (server->hasArg("path")) {
+    if (preparedBookCache || preparedFb2Package) {
+      if (!server->hasArg("bookPath")) {
+        state.error = "Missing bookPath";
+        return;
+      }
+      const String bookPath = normalizeWebPath(server->arg("bookPath"));
+      String lowerBookPath = bookPath;
+      lowerBookPath.toLowerCase();
+      const bool fb2Mode = preparedFb2Package || (preparedBookCache && server->arg("fb2") == "1");
+      const bool extensionOk = fb2Mode ? (lowerBookPath.endsWith(".fb2") || lowerBookPath.endsWith(".zip"))
+                                       : lowerBookPath.endsWith(".epub");
+      if (isProtectedPath(bookPath) || !extensionOk || !Storage.exists(bookPath.c_str())) {
+        state.error = "Invalid or missing book path";
+        return;
+      }
+      if (fb2Mode) {
+        Fb2 fb2(bookPath.c_str(), "/.inkmod");
+        state.path = fb2.getCachePath().c_str();
+      } else {
+        state.path = Epub::cachePathForFilePath(bookPath.c_str(), "/.inkmod").c_str();
+      }
+      Storage.mkdir(state.path.c_str(), true);
+    } else if (server->hasArg("path")) {
       state.path = normalizeWebPath(server->arg("path"));
     } else {
       state.path = "/";
@@ -765,7 +804,7 @@ void InkMODWebServer::handleUpload(UploadState& state) const {
     if (!filePath.endsWith("/")) filePath += "/";
     filePath += state.fileName;
 
-    if (isProtectedPath(filePath)) {
+    if (!preparedBookCache && !preparedFb2Package && isProtectedPath(filePath)) {
       state.error = "Access denied to protected path";
       LOG_DBG("WEB", "[UPLOAD] FAILED: Access denied to protected path: %s", filePath.c_str());
       return;
@@ -844,11 +883,48 @@ void InkMODWebServer::handleUpload(UploadState& state) const {
         LOG_DBG("WEB", "[UPLOAD] Diagnostics: %d writes, total write time: %lu ms (%.1f%%)", writeCount, totalWriteTime,
                 writePercent);
 
-        // Clear epub cache to prevent stale metadata issues when overwriting files
         String filePath = state.path;
         if (!filePath.endsWith("/")) filePath += "/";
         filePath += state.fileName;
-        clearBookCachePreservingUserState(filePath.c_str());
+        if (preparedBookCache) {
+          // Validate the native header before promotion: 0x425843FF + v7.
+          HalFile check;
+          uint8_t header[5] = {};
+          const bool valid = Storage.openFileForRead("WEB", filePath, check) &&
+                             check.read(header, sizeof(header)) == sizeof(header) &&
+                             header[0] == 0xFF && header[1] == 0x43 && header[2] == 0x58 &&
+                             header[3] == 0x42 && header[4] == 7;
+          check.close();
+          const String finalPath = state.path + "/book.bin";
+          if (!valid || (Storage.exists(finalPath.c_str()) && !Storage.remove(finalPath.c_str())) ||
+              !Storage.rename(filePath.c_str(), finalPath.c_str())) {
+            Storage.remove(filePath.c_str());
+            state.success = false;
+            state.error = "Prepared cache validation/install failed";
+          } else {
+            LOG_INF("WEB", "Installed browser-prepared cache: %s", finalPath.c_str());
+            // Do not decode the cover while the web server and upload buffers
+            // still occupy RAM. HomeActivity already creates the required theme
+            // thumbnail lazily from package.epub after the server has stopped.
+          }
+        } else if (preparedFb2Package) {
+          const String finalPath = state.path + "/package.epub";
+          const String markerPath = state.path + "/.browser_prepared_epub";
+          if ((Storage.exists(finalPath.c_str()) && !Storage.remove(finalPath.c_str())) ||
+              !Storage.rename(filePath.c_str(), finalPath.c_str()) ||
+              !Storage.writeFile(markerPath.c_str(), "1")) {
+            Storage.remove(filePath.c_str());
+            Storage.remove(finalPath.c_str());
+            Storage.remove(markerPath.c_str());
+            state.success = false;
+            state.error = "Prepared FB2 package install failed";
+          } else {
+            LOG_INF("WEB", "Installed browser-prepared FB2 package: %s", finalPath.c_str());
+          }
+        } else {
+          // Clear epub cache to prevent stale metadata issues when overwriting files
+          clearBookCachePreservingUserState(filePath.c_str());
+        }
       }
     }
   } else if (upload.status == UPLOAD_FILE_ABORTED) {

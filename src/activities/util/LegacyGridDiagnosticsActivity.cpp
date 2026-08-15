@@ -103,6 +103,10 @@ void LegacyGridDiagnosticsActivity::onExit() {
   } else {
     saveGame();
   }
+  // Leave the e-ink panel clean after the game; otherwise the board remains
+  // visible as heavy ghosting behind the reader UI.
+  renderer.clearScreen();
+  renderer.displayBuffer(HalDisplay::FULL_REFRESH);
   Activity::onExit();
 }
 
@@ -154,7 +158,8 @@ void LegacyGridDiagnosticsActivity::render(RenderLock&&) {
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  renderer.displayBuffer();
+  renderer.displayBuffer(fullRefreshPending ? HalDisplay::FULL_REFRESH : HalDisplay::FAST_REFRESH);
+  fullRefreshPending = false;
 }
 
 void LegacyGridDiagnosticsActivity::startNewGame(const bool clearSave) {
@@ -190,6 +195,7 @@ void LegacyGridDiagnosticsActivity::spawnPiece() {
   if (!canPlace(currentPiece)) {
     if (score > highScore) { highScore = score; saveBestScore(); }
     gameOver = true;
+    fullRefreshPending = true;
     overlay = OverlayMode::GameOver;
     overlaySelection = 0;
     clearSavedGame();
@@ -372,6 +378,7 @@ void LegacyGridDiagnosticsActivity::lockPiece() {
     linesCleared += cleared;
     level = 1 + linesCleared / 10;
     nextPhrase();
+    fullRefreshPending = true;
   }
   spawnPiece();
   requestUpdate();

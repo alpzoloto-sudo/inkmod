@@ -114,6 +114,9 @@ class ActivityManager {
 
   bool preventAutoSleep() const;
   bool isReaderActivity() const;
+  // Unlike isReaderActivity(), this checks only the activity currently on
+  // screen and ignores a reader parked underneath a modal/menu activity.
+  bool isCurrentReaderActivity() const;
   bool canSnapshotForSleepOverlay() const;
   bool skipLoopDelay() const;
   std::string getCurrentBookPath() const;

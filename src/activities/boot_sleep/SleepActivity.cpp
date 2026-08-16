@@ -744,7 +744,7 @@ void SleepActivity::renderReadingStatsSleepScreen() const {
     progressPercent = RecentBookProgress::loadPercent(recentBookForPath(path));
   }
 
-  if (!halClock.isAvailable()) {
+  if (SETTINGS.clockDisabled || !halClock.isAvailable()) {
     const GlobalReadingStats deviceStats = GlobalReadingStats::load();
     const bool hasSyncedStats = GlobalReadingStats::hasSyncedStats();
     const GlobalReadingStats allDevicesStats =

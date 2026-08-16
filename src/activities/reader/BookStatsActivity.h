@@ -4,6 +4,7 @@
 
 #include <string>
 
+#include "InkMODSettings.h"
 #include "../Activity.h"
 #include "BookReadingStats.h"
 #include "GlobalReadingStats.h"
@@ -25,8 +26,10 @@ class BookStatsActivity final : public Activity {
   int selectedEditField = 0;
   bool didChangeStats = false;
 
-  bool hasEditableBook() const { return !bookCachePath.empty() && halClock.isAvailable(); }
-  bool usesNoRtcSingleScreenLayout() const { return !halClock.isAvailable(); }
+  bool hasEditableBook() const {
+    return !bookCachePath.empty() && !SETTINGS.clockDisabled && halClock.isAvailable();
+  }
+  bool usesNoRtcSingleScreenLayout() const { return SETTINGS.clockDisabled || !halClock.isAvailable(); }
   void refreshAllDevicesStats();
   void saveStats();
   void cycleEditField();

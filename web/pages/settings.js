@@ -290,8 +290,6 @@ let allSettings = [];
     btn.textContent = t('settings.save');
   }
 
-  loadSettings();
-
   // --- Wi-Fi Network Management ---
   // Renders an editable list of saved Wi-Fi networks using /api/wifi endpoints.
   // Password fields are never pre-filled; when left blank during edit, existing
@@ -527,5 +525,34 @@ let allSettings = [];
     }
   }
 
-  loadWifiNetworks();
-  loadOpdsServers();
+  // The ESP32 web server is intentionally single-request-at-a-time. Starting
+  // settings, Wi-Fi credentials and OPDS requests concurrently can exhaust the
+  // small AP-mode TCP queue and make the device appear frozen. Load them in a
+  // deterministic sequence; STA mode benefits from the same behaviour.
+  async function initialiseSettingsPage() {
+    let accessPointMode = false;
+    try {
+      const statusResponse = await fetch('/api/status');
+      if (statusResponse.ok) {
+        const status = await statusResponse.json();
+        accessPointMode = status.mode === 'AP';
+      }
+    } catch (e) {
+      console.warn('Unable to detect network mode:', e);
+    }
+
+    await loadSettings();
+    // The ESP32-C3 has much less free heap while it owns the access point,
+    // captive DNS, HTTP and WebSocket servers. Avoid two nonessential API
+    // round-trips there; saved-network and OPDS editing remains available
+    // when the reader joins normal Wi-Fi.
+    if (accessPointMode) {
+      document.getElementById('wifi-container').innerHTML = '';
+      document.getElementById('opds-container').innerHTML = '';
+      return;
+    }
+    await loadWifiNetworks();
+    await loadOpdsServers();
+  }
+
+  initialiseSettingsPage();

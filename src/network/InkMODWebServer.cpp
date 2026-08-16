@@ -964,7 +964,14 @@ void InkMODWebServer::handleCreateFolder() const {
     return;
   }
 
-  const String folderName = StringUtils::sanitizeFilename(server->arg("name").c_str()).c_str();
+  const String requestedName = server->arg("name");
+  // sanitizeFilename() intentionally strips leading dots from ordinary user
+  // names. These two roots are managed by InkMOD's web tools, though, and
+  // must keep their leading dot (otherwise dictionary preparation creates an
+  // empty /dictionaries next to the real /.dictionaries store).
+  const bool managedHiddenFolder = requestedName == ".dictionaries" || requestedName == ".screenshots";
+  const String folderName =
+      managedHiddenFolder ? requestedName : StringUtils::sanitizeFilename(requestedName.c_str()).c_str();
 
   // Validate folder name
   if (folderName.isEmpty() || folderName == "book") {
@@ -1057,14 +1064,10 @@ void InkMODWebServer::handleRename() const {
 
   HalFile file = Storage.open(itemPath.c_str());
   if (!file) {
-    server->send(500, "text/plain", "Failed to open file");
+    server->send(500, "text/plain", "Failed to open item");
     return;
   }
-  if (file.isDirectory()) {
-    file.close();
-    server->send(400, "text/plain", "Only files can be renamed");
-    return;
-  }
+  const bool isDirectory = file.isDirectory();
 
   if (Storage.exists(newPath.c_str())) {
     file.close();
@@ -1072,16 +1075,19 @@ void InkMODWebServer::handleRename() const {
     return;
   }
 
-  clearBookCache(itemPath.c_str());
+  if (!isDirectory) {
+    clearBookCache(itemPath.c_str());
+  }
   const bool success = file.rename(newPath.c_str());
   file.close();
 
   if (success) {
-    LOG_DBG("WEB", "Renamed file: %s -> %s", itemPath.c_str(), newPath.c_str());
+    LOG_DBG("WEB", "Renamed %s: %s -> %s", isDirectory ? "folder" : "file", itemPath.c_str(), newPath.c_str());
     server->send(200, "text/plain", "Renamed successfully");
   } else {
-    LOG_ERR("WEB", "Failed to rename file: %s -> %s", itemPath.c_str(), newPath.c_str());
-    server->send(500, "text/plain", "Failed to rename file");
+    LOG_ERR("WEB", "Failed to rename %s: %s -> %s", isDirectory ? "folder" : "file", itemPath.c_str(),
+            newPath.c_str());
+    server->send(500, "text/plain", "Failed to rename item");
   }
 }
 
@@ -1318,16 +1324,82 @@ void InkMODWebServer::handleGetSettings() const {
   // Pass the SD font registry so the fontFamily setting's enumStringValues
   // includes SD-resident families — otherwise the web API only exposes the
   // three built-in fonts.
-  const auto& settings = getSettingsList(&sdFontSystem.registry());
-
-  server->setContentLength(CONTENT_LENGTH_UNKNOWN);
-  server->send(200, "application/json", "");
-  server->sendContent("[");
+  // SoftAP + DNS + HTTP + WebSocket leave substantially less heap than STA.
+  // Expanding every SD font family into the web settings enum in AP mode can
+  // fragment/exhaust that heap and make the whole reader appear frozen. The
+  // built-in font choices are sufficient for this constrained mode; STA keeps
+  // exposing the full registry as before.
+  const auto settings = getSettingsList(apMode ? nullptr : &sdFontSystem.registry());
 
   char output[512];
   constexpr size_t outputSize = sizeof(output);
-  bool seenFirst = false;
   JsonDocument doc;
+
+  // ESP32 WebServer's chunked transfer occasionally produces a truncated
+  // chunk while SoftAP/captive DNS are active (Chrome reports
+  // ERR_INVALID_CHUNKED_ENCODING). Compute the exact JSON length in a cheap
+  // first pass, then stream the same small records with Content-Length. This
+  // keeps peak RAM low without relying on chunked encoding.
+  size_t responseLength = 2;  // '[' + ']'
+  size_t responseItems = 0;
+  for (const auto& s : settings) {
+    if (!s.key) continue;
+
+    doc.clear();
+    doc["key"] = s.key;
+    doc["name"] = I18N.get(s.nameId);
+    doc["category"] = I18N.get(s.category);
+
+    switch (s.type) {
+      case SettingType::TOGGLE:
+        doc["type"] = "toggle";
+        if (s.valuePtr) doc["value"] = static_cast<int>(SETTINGS.*(s.valuePtr));
+        break;
+      case SettingType::ENUM: {
+        doc["type"] = "enum";
+        if (s.valuePtr) {
+          doc["value"] = static_cast<int>(enumDisplayIndexForRawValue(s, SETTINGS.*(s.valuePtr)));
+        } else if (s.valueGetter) {
+          doc["value"] = static_cast<int>(s.valueGetter());
+        }
+        JsonArray options = doc["options"].to<JsonArray>();
+        if (!s.enumStringValues.empty()) {
+          for (const auto& opt : s.enumStringValues) options.add(opt);
+        } else {
+          for (const auto& opt : s.enumValues) options.add(I18N.get(opt));
+        }
+        break;
+      }
+      case SettingType::VALUE:
+        doc["type"] = "value";
+        if (s.valuePtr) doc["value"] = static_cast<int>(SETTINGS.*(s.valuePtr));
+        doc["min"] = s.valueRange.min;
+        doc["max"] = s.valueRange.max;
+        doc["step"] = s.valueRange.step;
+        break;
+      case SettingType::STRING:
+        doc["type"] = "string";
+        if (s.stringGetter) {
+          doc["value"] = s.stringGetter();
+        } else if (s.stringMaxLen > 0) {
+          doc["value"] = reinterpret_cast<const char*>(&SETTINGS) + s.stringOffset;
+        }
+        break;
+      default:
+        continue;
+    }
+
+    const size_t itemLength = measureJson(doc);
+    if (itemLength >= outputSize) continue;
+    responseLength += itemLength + (responseItems > 0 ? 1 : 0);
+    responseItems++;
+  }
+
+  server->setContentLength(responseLength);
+  server->send(200, "application/json", "");
+  server->sendContent("[");
+
+  bool seenFirst = false;
 
   for (const auto& s : settings) {
     if (!s.key) continue;  // Skip ACTION-only entries
@@ -1402,7 +1474,6 @@ void InkMODWebServer::handleGetSettings() const {
   }
 
   server->sendContent("]");
-  server->sendContent("");
   LOG_DBG("WEB", "Served settings API");
 }
 

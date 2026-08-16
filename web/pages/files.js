@@ -213,7 +213,10 @@
           fileTableContent += `<td><span class="file-icon">📁</span><a href="/files?path=${encodeURIComponent(folderPath)}" class="folder-link">${escapeHtml(file.name)}</a></td>`;
           fileTableContent += '<td><span class="folder-badge">FOLDER</span></td>';
           fileTableContent += '<td>-</td>';
-          fileTableContent += `<td class="actions-col"><div class="action-icon-group"><button class="delete-btn" onclick="openDeleteModal('${file.name.replaceAll("'", "\\'")}', '${folderPath.replaceAll("'", "\\'")}', true)" title="${escapeHtml(t('files.title_delete_folder'))}">🗑️</button></div></td>`;
+          fileTableContent += `<td class="actions-col"><div class="action-icon-group">`;
+          fileTableContent += `<button class="rename-btn" onclick="openRenameModal('${file.name.replaceAll("'", "\\'")}', '${folderPath.replaceAll("'", "\\'")}', true)" title="${escapeHtml(t('files.rename_btn'))}">✏️</button>`;
+          fileTableContent += `<button class="delete-btn" onclick="openDeleteModal('${file.name.replaceAll("'", "\\'")}', '${folderPath.replaceAll("'", "\\'")}', true)" title="${escapeHtml(t('files.title_delete_folder'))}">🗑️</button>`;
+          fileTableContent += `</div></td>`;
           fileTableContent += '</tr>';
         } else {
           let filePath = currentPath;
@@ -234,7 +237,7 @@
           fileTableContent += `<td>${formatFileSize(file.size)}</td>`;
           fileTableContent += `<td class="actions-col"><div class="action-icon-group">`;
           fileTableContent += `<button class="move-btn" onclick="openMoveModal('${file.name.replaceAll("'", "\\'")}', '${filePath.replaceAll("'", "\\'")}' )" title="${escapeHtml(t('files.title_move_file'))}">📂</button>`;
-          fileTableContent += `<button class="rename-btn" onclick="openRenameModal('${file.name.replaceAll("'", "\\'")}', '${filePath.replaceAll("'", "\\'")}' )" title="${escapeHtml(t('files.title_rename_file'))}">✏️</button>`;
+          fileTableContent += `<button class="rename-btn" onclick="openRenameModal('${file.name.replaceAll("'", "\\'")}', '${filePath.replaceAll("'", "\\'")}', false)" title="${escapeHtml(t('files.title_rename_file'))}">✏️</button>`;
           fileTableContent += `<button class="delete-btn" onclick="openDeleteModal('${file.name.replaceAll("'", "\\'")}', '${filePath.replaceAll("'", "\\'")}', false)" title="${escapeHtml(t('files.title_delete_file'))}">🗑️</button>`;
           fileTableContent += `</div></td>`;
           fileTableContent += '</tr>';
@@ -5452,8 +5455,8 @@ function retryAllFailedUploads() {
   }
 
   // Rename functions
-  function openRenameModal(name, path) {
-    document.getElementById('renameItemName').textContent = '📄 ' + name;
+  function openRenameModal(name, path, isFolder) {
+    document.getElementById('renameItemName').textContent = (isFolder ? '📁 ' : '📄 ') + name;
     document.getElementById('renameItemPath').value = path;
     document.getElementById('renameNewName').value = name;
     document.getElementById('renameModal').classList.add('open');

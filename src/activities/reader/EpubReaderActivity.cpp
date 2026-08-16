@@ -2893,6 +2893,14 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     const int fallbackFontId = SETTINGS.getBuiltInReaderFontId();
     const bool canUseFallbackFont = renderer.isSdCardFont(readerFontId) && fallbackFontId != readerFontId;
 
+    // A new chapter no longer needs the decompressed glyph slots accumulated
+    // while drawing the previous one. Reclaim only that rebuildable page-local
+    // data before loading/layout; keep the selected SD font's metrics, kerning
+    // and ligature tables resident so normal page turns stay fast.
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->clearCache();
+    }
+
     auto heap = MemoryBudget::snapshot();
     auto memoryPolicy = reader::selectReaderMemoryPolicy(heap.freeHeap, heap.maxAllocHeap);
     if (memoryPolicy.mode == reader::ReaderMemoryMode::Unavailable && canUseFallbackFont) {
@@ -2944,7 +2952,10 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // of current heap; memory mode only controls a missing-cache rebuild.
     loadedSection = loadSectionWithConfig(
         sectionMemoryConfig(reader::ReaderMemoryMode::Normal, readerFontId, fallbackFontId));
-    if (!loadedSection && canUseFallbackFont) {
+    // A fallback cache is an emergency artifact, not the preferred chapter.
+    // Reuse it only when current memory cannot safely attempt a full-quality
+    // rebuild. Otherwise the selected SD font must get another chance first.
+    if (!loadedSection && canUseFallbackFont && memoryPolicy.mode == reader::ReaderMemoryMode::Unavailable) {
       SectionMemoryConfig fallbackConfig =
           sectionMemoryConfig(reader::ReaderMemoryMode::Normal, readerFontId, fallbackFontId);
       fallbackConfig.suffix = FALLBACK_FONT_SECTION_CACHE_SUFFIX;
@@ -2979,6 +2990,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       // choose how we recover after a real allocation/layout failure, but it
       // must never pre-emptively downgrade a healthy EPUB.
       reader::ReaderMemoryMode buildMode = reader::ReaderMemoryMode::Normal;
+      bool normalFontRecoveryAttempted = false;
       bool normalFallbackAttempted = false;
 
       while (buildMode != reader::ReaderMemoryMode::Unavailable) {
@@ -3031,6 +3043,22 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         }
         section.reset();
         if (cancelled || !layoutAbortedForLowMemory) break;
+
+        if (buildMode == reader::ReaderMemoryMode::Normal && canUseFallbackFont &&
+            !normalFontRecoveryAttempted) {
+          // The first allocation failure may be fragmentation left by the
+          // previous chapter. Drop rebuildable glyph data and retry the exact
+          // same publisher-quality layout with the user's selected font before
+          // considering the built-in fallback font.
+          normalFontRecoveryAttempted = true;
+          if (auto* fcm = renderer.getFontCacheManager()) {
+            fcm->clearCache();
+          }
+          releaseReaderSdFontCachesForLowMemory(renderer, "ERS", "same-font chapter retry");
+          delay(1);
+          yield();
+          continue;
+        }
 
         if (buildMode == reader::ReaderMemoryMode::Normal && canUseFallbackFont && !normalFallbackAttempted) {
           normalFallbackAttempted = true;

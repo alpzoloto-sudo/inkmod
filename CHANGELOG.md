@@ -20,6 +20,10 @@
 - Cover mode/filter stay visible in Sleep Screen settings instead of disappearing when another wallpaper mode is selected.
 
 ### Fixed
+- Fixed the inverted master clock switch in the web settings page.
+- Sleep-screen mode, timeout screen, cover fit and cover filter are now all available in the device settings.
+- Reader screen margins now start at 5; the legacy value 1 is no longer offered.
+- Reading-statistics cards now use rounded corners, and the no-clock device summary has a concise title.
 - Removed the redundant `Back — НЕТ / OK — ДА` text from the easter-egg prompt because the actual button hints are already rendered at the bottom.
 - Removed the experimental idle light-sleep path that could freeze X4 after USB disconnect while keeping safe low-frequency idle behavior.
 

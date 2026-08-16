@@ -26,29 +26,30 @@
 #include "network/OtaBootSwitch.h"
 
 namespace {
-const char* resetReasonRu(const esp_reset_reason_t reason) {
+StrId resetReasonId(const esp_reset_reason_t reason) {
   switch (reason) {
-    case ESP_RST_POWERON: return "Включение питания";
-    case ESP_RST_EXT: return "Внешний сброс";
-    case ESP_RST_SW: return "Программная перезагрузка";
-    case ESP_RST_PANIC: return "Критическая ошибка";
-    case ESP_RST_INT_WDT: return "Сторожевой таймер CPU";
-    case ESP_RST_TASK_WDT: return "Сторожевой таймер задачи";
-    case ESP_RST_WDT: return "Сторожевой таймер";
-    case ESP_RST_DEEPSLEEP: return "Выход из глубокого сна";
-    case ESP_RST_BROWNOUT: return "Просадка питания";
-    case ESP_RST_SDIO: return "Сброс SDIO";
-    case ESP_RST_USB: return "Сброс USB";
-    case ESP_RST_JTAG: return "Сброс JTAG";
-    case ESP_RST_EFUSE: return "Ошибка eFuse";
-    default: return nullptr;
+    case ESP_RST_POWERON: return StrId::STR_DIAG_RESET_POWERON;
+    case ESP_RST_EXT: return StrId::STR_DIAG_RESET_EXTERNAL;
+    case ESP_RST_SW: return StrId::STR_DIAG_RESET_SOFTWARE;
+    case ESP_RST_PANIC: return StrId::STR_DIAG_RESET_PANIC;
+    case ESP_RST_INT_WDT: return StrId::STR_DIAG_RESET_CPU_WDT;
+    case ESP_RST_TASK_WDT: return StrId::STR_DIAG_RESET_TASK_WDT;
+    case ESP_RST_WDT: return StrId::STR_DIAG_RESET_WDT;
+    case ESP_RST_DEEPSLEEP: return StrId::STR_DIAG_RESET_DEEP_SLEEP;
+    case ESP_RST_BROWNOUT: return StrId::STR_DIAG_RESET_BROWNOUT;
+    case ESP_RST_SDIO: return StrId::STR_DIAG_RESET_SDIO;
+    case ESP_RST_USB: return StrId::STR_DIAG_RESET_USB;
+    case ESP_RST_JTAG: return StrId::STR_DIAG_RESET_JTAG;
+    case ESP_RST_EFUSE: return StrId::STR_DIAG_RESET_EFUSE;
+    default: return StrId::STR_NONE_OPT;
   }
 }
 std::string resetReasonDisplay() {
   const esp_reset_reason_t reason = esp_reset_reason();
-  if (const char* name = resetReasonRu(reason)) return std::string(name);
+  const StrId reasonId = resetReasonId(reason);
+  if (reasonId != StrId::STR_NONE_OPT) return std::string(I18N.get(reasonId));
   char buf[40];
-  snprintf(buf, sizeof(buf), "Неизвестно (код %d)", static_cast<int>(reason));
+  snprintf(buf, sizeof(buf), tr(STR_DIAG_RESET_UNKNOWN), static_cast<int>(reason));
   return std::string(buf);
 }
 std::string sinceLastChargeDisplay() {
@@ -60,9 +61,10 @@ std::string sinceLastChargeDisplay() {
   const uint32_t hours = static_cast<uint32_t>((elapsed % 86400ULL) / 3600ULL);
   const uint32_t minutes = static_cast<uint32_t>((elapsed % 3600ULL) / 60ULL);
   char buf[40];
-  if (days) snprintf(buf, sizeof(buf), "%u д %u ч", days, hours);
-  else if (hours) snprintf(buf, sizeof(buf), "%u ч %u мин", hours, minutes);
-  else snprintf(buf, sizeof(buf), "%u мин", minutes);
+  if (days) snprintf(buf, sizeof(buf), "%u %s %u %s", days, tr(STR_DIAG_DAY_SHORT), hours, tr(STR_UNIT_HOUR_SHORT));
+  else if (hours) snprintf(buf, sizeof(buf), "%u %s %u %s", hours, tr(STR_UNIT_HOUR_SHORT), minutes,
+                           tr(STR_UNIT_MIN_SHORT));
+  else snprintf(buf, sizeof(buf), "%u %s", minutes, tr(STR_UNIT_MIN_SHORT));
   return std::string(buf);
 }
 std::string bytesHuman(uint64_t bytes) {
@@ -158,7 +160,8 @@ void SystemDiagnosticsActivity::render(RenderLock&&) {
     y += lineH + metrics.verticalSpacing;
   }
   y += metrics.verticalSpacing;
-  const char* actions[ACTION_COUNT] = {"Принудительная очистка экрана", tr(STR_SD_FIRMWARE_UPDATE), tr(STR_BOOT_OTHER_SLOT)};
+  const char* actions[ACTION_COUNT] = {tr(STR_DIAG_FORCE_SCREEN_CLEAR), tr(STR_SD_FIRMWARE_UPDATE),
+                                       tr(STR_BOOT_OTHER_SLOT)};
   for (int i = 0; i < ACTION_COUNT && y + lineH < pageHeight - metrics.buttonHintsHeight; ++i) {
     if (i == selectedAction) renderer.fillRect(left - 4, y - 2, right - left + 8, lineH + 4, true);
     renderer.drawText(UI_10_FONT_ID, left, y, actions[i], i != selectedAction);

@@ -19,6 +19,7 @@ constexpr int kStatsButtonHintTopGap = 10;
 constexpr int kStandaloneNoRtcMaxTopCardHeightDivisor = 2;
 constexpr int kStandaloneNoRtcMaxVerticalOffset = 32;
 constexpr int kPerBookRtcTopCardMaxExtra = 84;
+constexpr int kStatsCardCornerRadius = 10;
 
 struct StatsLayout {
   int headerHeight;
@@ -267,7 +268,7 @@ void drawStatCell(const GfxRenderer& renderer, const int x, const int w, const i
 
 void drawSectionCard(const GfxRenderer& renderer, const int x, const int y, const int w, const int h, const char* title,
                      const StatsLayout& layout) {
-  renderer.drawRect(x, y, w, h);
+  renderer.drawRoundedRect(x, y, w, h, 1, kStatsCardCornerRadius, true);
   renderer.drawLine(x, y + layout.sectionTitleH, x + w, y + layout.sectionTitleH);
   drawCenteredLabel(renderer, layout.sectionTitleFontId, x, w,
                     y + (layout.sectionTitleH - renderer.getLineHeight(layout.sectionTitleFontId)) / 2, title, true);
@@ -319,7 +320,7 @@ void drawPerBookStatsCard(GfxRenderer& renderer, const int x, const int y, const
                           const std::string& bookTitle, const BookReadingStats& stats, const float progressPercent,
                           const bool hasEstimatedTimeLeft, const uint32_t estimatedTimeLeftSeconds,
                           const StatsLayout& layout) {
-  renderer.drawRect(x, y, w, h);
+  renderer.drawRoundedRect(x, y, w, h, 1, kStatsCardCornerRadius, true);
   renderer.drawLine(x, y + layout.topCardTitleH, x + w, y + layout.topCardTitleH);
   const std::string visibleTitle =
       renderer.truncatedText(UI_10_FONT_ID, bookTitle.c_str(), w - 20, EpdFontFamily::BOLD);
@@ -404,7 +405,7 @@ void drawPerBookStatsCard(GfxRenderer& renderer, const int x, const int y, const
 
 void drawGlobalStatsCard(GfxRenderer& renderer, const int x, const int y, const int w, const int h, const char* title,
                          const GlobalReadingStats& stats, const StatsLayout& layout) {
-  renderer.drawRect(x, y, w, h);
+  renderer.drawRoundedRect(x, y, w, h, 1, kStatsCardCornerRadius, true);
   renderer.drawLine(x, y + layout.topCardTitleH, x + w, y + layout.topCardTitleH);
   const bool showRtcStats = shouldShowRtcBasedStats();
   drawCenteredLabel(renderer, UI_10_FONT_ID, x, w,

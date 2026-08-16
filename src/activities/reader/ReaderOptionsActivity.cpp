@@ -48,12 +48,6 @@ std::string formatSettingValue(const SettingInfo& setting) {
 }
 
 uint8_t valueDisplayIndexForRawValue(const SettingInfo& setting, const uint8_t rawValue) {
-  if (setting.valuePtr == &InkMODSettings::screenMargin) {
-    if (rawValue <= 1) return 0;
-    const uint8_t clamped = std::clamp<uint8_t>(rawValue, 5, 40);
-    return static_cast<uint8_t>(1 + ((clamped - 5 + 2) / 5));
-  }
-
   const uint8_t min = setting.valueRange.min;
   const uint8_t max = setting.valueRange.max;
   const uint8_t step = setting.valueRange.step == 0 ? 1 : setting.valueRange.step;
@@ -63,21 +57,12 @@ uint8_t valueDisplayIndexForRawValue(const SettingInfo& setting, const uint8_t r
 }
 
 uint8_t rawValueForValueDisplayIndex(const SettingInfo& setting, const uint8_t displayIndex) {
-  if (setting.valuePtr == &InkMODSettings::screenMargin) {
-    if (displayIndex == 0) return 1;
-    return static_cast<uint8_t>(std::min<int>(40, 5 + (static_cast<int>(displayIndex) - 1) * 5));
-  }
-
   const uint8_t step = setting.valueRange.step == 0 ? 1 : setting.valueRange.step;
   const uint16_t rawValue = static_cast<uint16_t>(setting.valueRange.min) + static_cast<uint16_t>(displayIndex) * step;
   return static_cast<uint8_t>(std::min<uint16_t>(rawValue, setting.valueRange.max));
 }
 
 uint8_t valueOptionCount(const SettingInfo& setting) {
-  if (setting.valuePtr == &InkMODSettings::screenMargin) {
-    return 9;  // 1, 5, 10, 15, 20, 25, 30, 35, 40
-  }
-
   const uint8_t step = setting.valueRange.step == 0 ? 1 : setting.valueRange.step;
   return static_cast<uint8_t>(((setting.valueRange.max - setting.valueRange.min) / step) + 1);
 }

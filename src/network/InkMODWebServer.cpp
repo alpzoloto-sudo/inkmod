@@ -1353,7 +1353,10 @@ void InkMODWebServer::handleGetSettings() const {
     switch (s.type) {
       case SettingType::TOGGLE:
         doc["type"] = "toggle";
-        if (s.valuePtr) doc["value"] = static_cast<int>(SETTINGS.*(s.valuePtr));
+        if (s.valuePtr) {
+          const bool rawValue = SETTINGS.*(s.valuePtr) != 0;
+          doc["value"] = static_cast<int>(s.invertedToggleDisplay ? !rawValue : rawValue);
+        }
         break;
       case SettingType::ENUM: {
         doc["type"] = "enum";
@@ -1413,7 +1416,8 @@ void InkMODWebServer::handleGetSettings() const {
       case SettingType::TOGGLE: {
         doc["type"] = "toggle";
         if (s.valuePtr) {
-          doc["value"] = static_cast<int>(SETTINGS.*(s.valuePtr));
+          const bool rawValue = SETTINGS.*(s.valuePtr) != 0;
+          doc["value"] = static_cast<int>(s.invertedToggleDisplay ? !rawValue : rawValue);
         }
         break;
       }
@@ -1500,7 +1504,8 @@ void InkMODWebServer::handlePostSettings() {
 
     switch (s.type) {
       case SettingType::TOGGLE: {
-        const int val = doc[s.key].as<int>() ? 1 : 0;
+        const bool displayValue = doc[s.key].as<int>() != 0;
+        const int val = s.invertedToggleDisplay ? !displayValue : displayValue;
         if (s.valuePtr) {
           SETTINGS.*(s.valuePtr) = val;
         }

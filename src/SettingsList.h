@@ -903,13 +903,9 @@ inline std::vector<SettingInfo> buildDisplaySleepSettingsList(const std::vector<
   };
 
   addSleepSetting(StrId::STR_SLEEP_SCREEN, StrId::STR_SLEEP_SCREEN_WALLPAPER);
-  const bool usesCover = SETTINGS.sleepScreen == InkMODSettings::SLEEP_SCREEN_MODE::COVER ||
-                         SETTINGS.sleepScreen == InkMODSettings::SLEEP_SCREEN_MODE::COVER_CUSTOM;
-  if (usesCover) {
-    addSleepSetting(StrId::STR_SLEEP_COVER_MODE, StrId::STR_SLEEP_COVER_MODE_SHORT);
-    addSleepSetting(StrId::STR_SLEEP_COVER_FILTER, StrId::STR_SLEEP_COVER_FILTER_SHORT);
-  }
-  addSleepSetting(StrId::STR_QUICK_RESUME_TIMEOUT, StrId::STR_QUICK_RESUME_TIMEOUT);
+  addSleepSetting(StrId::STR_SLEEP_COVER_MODE, StrId::STR_SLEEP_COVER_MODE_SHORT);
+  addSleepSetting(StrId::STR_SLEEP_COVER_FILTER, StrId::STR_SLEEP_COVER_FILTER_SHORT);
+  addSleepSetting(StrId::STR_TIMEOUT_SLEEP_SCREEN, StrId::STR_TIMEOUT_SLEEP_SCREEN);
 
   return sleepSettings;
 }

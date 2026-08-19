@@ -8,6 +8,36 @@ HalDisplay display;
 
 #define SD_SPI_MISO 7
 
+namespace {
+
+// Xteink production firmware identifies the newer X4 panel as
+// GDEQ0426T82 (QY 4.26), driven by SSD1677. Re-apply the panel vendor's
+// booster soft-start profile after the common SSD1677 initialization.
+// This is intentionally X4-only: the X3 uses a different controller path.
+void applyX4QyPanelCompatibilityProfile() {
+  constexpr uint8_t CMD_BOOSTER_SOFT_START = 0x0C;
+  constexpr uint8_t booster[] = {0xAE, 0xC7, 0xC3, 0xC0, 0x80};
+  const SPISettings panelSpi(10000000, MSBFIRST, SPI_MODE0);
+
+  SPI.beginTransaction(panelSpi);
+  digitalWrite(EPD_DC, LOW);
+  digitalWrite(EPD_CS, LOW);
+  SPI.transfer(CMD_BOOSTER_SOFT_START);
+  digitalWrite(EPD_CS, HIGH);
+
+  digitalWrite(EPD_DC, HIGH);
+  digitalWrite(EPD_CS, LOW);
+  SPI.writeBytes(booster, sizeof(booster));
+  digitalWrite(EPD_CS, HIGH);
+  SPI.endTransaction();
+
+  if (Serial) {
+    Serial.printf("[%lu]   X4 panel profile: GDEQ0426T82/QY SSD1677 compatibility enabled\n", millis());
+  }
+}
+
+}  // namespace
+
 HalDisplay::HalDisplay() : einkDisplay(EPD_SCLK, EPD_MOSI, EPD_CS, EPD_DC, EPD_RST, EPD_BUSY) {}
 
 HalDisplay::~HalDisplay() {}
@@ -21,6 +51,14 @@ void HalDisplay::begin(bool seamless) {
   }
 
   einkDisplay.begin();
+
+  // Newer X4 production revisions use the QY GDEQ0426T82 panel. The common
+  // driver already speaks SSD1677; the only vendor-specific correction needed
+  // here is the current booster profile. EPD transactions themselves are
+  // clamped to the panel-rated 10 MHz in EInkDisplay.h.
+  if (gpio.deviceIsX4()) {
+    applyX4QyPanelCompatibilityProfile();
+  }
 
   if (seamless) {
     // Defuse the SDK's X3 _x3InitialFullSyncsRemaining counter (no-op on X4)

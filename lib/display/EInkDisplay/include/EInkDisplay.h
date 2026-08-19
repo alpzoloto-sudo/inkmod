@@ -2,6 +2,18 @@
 #include <Arduino.h>
 #include <SPI.h>
 
+// Xteink X4 production panels use the Good Display GDEQ0426T82 / SSD1677.
+// The panel reference driver specifies a 10 MHz SPI bus. Some early X4 units
+// tolerated the previous 40 MHz setting, but newer panel revisions can become
+// unreliable at that overclock. Keep the EPD transaction settings clamped to
+// the panel-rated speed while leaving the rest of the shared SPI bus alone.
+class EpdSpiSettings {
+ public:
+  EpdSpiSettings() = default;
+  EpdSpiSettings& operator=(const SPISettings&) { return *this; }
+  operator SPISettings() const { return SPISettings(10000000, MSBFIRST, SPI_MODE0); }
+};
+
 class EInkDisplay {
  public:
   // Constructor with pin configuration
@@ -113,8 +125,9 @@ class EInkDisplay {
   uint8_t* frameBufferActive;
 #endif
 
-  // SPI settings
-  SPISettings spiSettings;
+  // SPI settings dedicated to EPD transactions. The wrapper keeps the X4/X3
+  // display bus at the 10 MHz rate supported by the production panel driver.
+  EpdSpiSettings spiSettings;
 
   // State
   bool isScreenOn;

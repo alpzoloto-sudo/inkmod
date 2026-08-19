@@ -1,0 +1,42 @@
+name: Build X4 QY Binary
+
+on:
+  push:
+    branches:
+      - build/x4-qy-binary
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO and build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -U platformio
+          pip install -r requirements.txt
+
+      - name: Validate release metadata
+        run: python scripts/release_check.py
+
+      - name: Build release firmware
+        run: pio run -e release
+
+      - name: Package firmware binary
+        run: cp .pio/build/release/firmware.bin inkmod-x4-qy-gdeq0426t82.bin
+
+      - name: Upload firmware binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: inkmod-x4-qy-gdeq0426t82
+          path: inkmod-x4-qy-gdeq0426t82.bin
+          if-no-files-found: error

@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - build/x4-qy-binary
+  pull_request:
+    branches:
+      - main
 
 jobs:
   build:

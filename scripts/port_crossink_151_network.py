@@ -39,12 +39,6 @@ def adapt(path: str, text: str) -> str:
     text = text.replace('constexpr char DEVICE_ID[] = "crossink-device";',
                         'constexpr char DEVICE_ID[] = "inkmod-device";')
 
-    # CrossInk's AppVersion.h only provides its build-time version macros.
-    # inkMOD already provides the adapted macros through platformio.ini, and
-    # this repository does not have AppVersion.h. Keeping the include would
-    # make the exact rc3 sources fail before the OTA code is compiled.
-    text = text.replace('#include "AppVersion.h"\n', '')
-
     if path == "src/network/OtaUpdater.cpp":
         # Keep the visible firmware version at 1.1.4 while allowing the OTA test
         # harness to use a private fourth numeric segment (1.1.4.0 -> 1.1.4.1).

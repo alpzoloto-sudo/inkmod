@@ -1,0 +1,61 @@
+name: One-shot publish inkMOD 1.1.5
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout released main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO and build dependencies
+        run: |
+          pip install -U platformio
+          pip install -r requirements.txt
+
+      - name: Validate 1.1.5 release tree
+        run: |
+          grep -q '^version = 1.1.5$' platformio.ini
+          grep -q '^inkmod_version = 1.1.5$' platformio.ini
+          python scripts/release_check.py
+
+      - name: Build production firmware
+        env:
+          INKMOD_RELEASE_VERSION: 1.1.5
+        run: pio run -e release
+
+      - name: Create tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ASSET='.pio/build/release/firmware-release-v1.1.5.bin'
+          test -f "$ASSET"
+          if ! git rev-parse -q --verify refs/tags/v1.1.5 >/dev/null; then
+            git tag v1.1.5
+            git push origin refs/tags/v1.1.5
+          fi
+          if gh release view v1.1.5 >/dev/null 2>&1; then
+            gh release upload v1.1.5 "$ASSET" --clobber
+          else
+            gh release create v1.1.5 "$ASSET" \
+              --title 'inkMOD v1.1.5' \
+              --notes-file RELEASE_NOTES_1.1.5.md
+          fi

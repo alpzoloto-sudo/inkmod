@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   build:
@@ -36,11 +37,30 @@ jobs:
           grep -q 'app1,     app,  ota_1,   0x650000,0x640000' partitions.csv
 
       - name: Build OTA target 1.1.4
-        run: pio run -e ota-target
+        shell: bash
+        run: |
+          mkdir -p dist
+          set -o pipefail
+          pio run -e ota-target 2>&1 | tee dist/ota-target-build.log
+
+      - name: Report compiler failure to test PR
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -f dist/ota-target-build.log ]; then
+            {
+              echo '### OTA 1.1.4 CI compiler tail'
+              echo
+              echo '```text'
+              tail -n 180 dist/ota-target-build.log
+              echo '```'
+            } > dist/failure-comment.md
+            gh pr comment 9 --repo "${{ github.repository }}" --body-file dist/failure-comment.md
+          fi
 
       - name: Stage OTA release asset
         run: |
-          mkdir -p dist
           cp .pio/build/ota-target/firmware.bin dist/firmware-release.bin
           sha256sum dist/firmware-release.bin
 

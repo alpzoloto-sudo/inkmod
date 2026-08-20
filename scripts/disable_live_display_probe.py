@@ -8,23 +8,25 @@ else:
     ROOT = Path.cwd().resolve()
 HAL_DISPLAY_CPP = ROOT / "lib/hal/HalDisplay.cpp"
 
-# Pin the Xteink panel-driver set to the known-good FreeInk SDK snapshot supplied
-# for the 1.1.5 hotfix. Do not mix our locally modified drivers with this set.
+# Pin the Xteink display stack to one immutable FreeInk SDK snapshot. Do not
+# combine controller drivers from this revision with inkMOD's older EpdBus API.
 FREEINK_COMMIT = "ffeaaa271231d865590f8c54ea45ec02b1342d4e"
-RAW_BASE = f"https://raw.githubusercontent.com/Free-Ink/freeink-sdk/{FREEINK_COMMIT}/libs/display/FreeInkDisplay/src/driver"
-DRIVER_DIR = ROOT / "freeink-sdk/libs/display/FreeInkDisplay/src/driver"
+RAW_SRC_BASE = f"https://raw.githubusercontent.com/Free-Ink/freeink-sdk/{FREEINK_COMMIT}/libs/display/FreeInkDisplay/src"
+DISPLAY_SRC = ROOT / "freeink-sdk/libs/display/FreeInkDisplay/src"
 PINNED_FILES = (
-    "PanelDriver.h",
-    "Ssd1677Driver.cpp",
-    "Ssd1677Driver.h",
-    "Uc8179Driver.cpp",
-    "Uc8179Driver.h",
-    "Uc8253X3Driver.cpp",
-    "Uc8253X3Driver.h",
-    "Uc8279Driver.cpp",
-    "Uc8279Driver.h",
-    "Uc8279X4Driver.cpp",
-    "Uc8279X4Driver.h",
+    "driver/PanelDriver.h",
+    "driver/Ssd1677Driver.cpp",
+    "driver/Ssd1677Driver.h",
+    "driver/Uc8179Driver.cpp",
+    "driver/Uc8179Driver.h",
+    "driver/Uc8253X3Driver.cpp",
+    "driver/Uc8253X3Driver.h",
+    "driver/Uc8279Driver.cpp",
+    "driver/Uc8279Driver.h",
+    "driver/Uc8279X4Driver.cpp",
+    "driver/Uc8279X4Driver.h",
+    "bus/EpdBus.cpp",
+    "bus/EpdBus.h",
 )
 
 
@@ -34,14 +36,15 @@ def fetch_text(url: str) -> str:
         data = response.read()
     text = data.decode("utf-8")
     if len(text) < 128:
-        raise SystemExit(f"Pinned FreeInk driver download looks truncated: {url}")
+        raise SystemExit(f"Pinned FreeInk display file looks truncated: {url}")
     return text
 
 
-for filename in PINNED_FILES:
-    target = DRIVER_DIR / filename
-    target.write_text(fetch_text(f"{RAW_BASE}/{filename}"), encoding="utf-8")
-print(f"Pinned Xteink display drivers to FreeInk SDK {FREEINK_COMMIT}")
+for relative in PINNED_FILES:
+    target = DISPLAY_SRC / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(fetch_text(f"{RAW_SRC_BASE}/{relative}"), encoding="utf-8")
+print(f"Pinned Xteink drivers + EpdBus to FreeInk SDK {FREEINK_COMMIT}")
 
 # The 1.1.5 release temporarily injected a live UC81xx bus probe from
 # patch_feedback_fixes.py. Field reports show devices can fail to come back

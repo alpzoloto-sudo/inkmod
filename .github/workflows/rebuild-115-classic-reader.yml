@@ -1,4 +1,4 @@
-name: Rebuild inkMOD 1.1.5 classic reader
+name: Rebuild inkMOD 1.1.5 final
 
 on:
   push:
@@ -40,6 +40,9 @@ jobs:
         run: |
           grep -qx 'version = 1.1.5' platformio.ini
           grep -qx 'inkmod_version = 1.1.5' platformio.ini
+          grep -q 'XteinkDetect=symlink://freeink-sdk/libs/hardware/XteinkDetect' platformio.ini
+          grep -q 'applyXteinkDisplayController' scripts/patch_feedback_fixes.py
+          grep -q 'inkmod-recovery.bin' scripts/patch_feedback_fixes.py
           python scripts/release_check.py
 
       - name: Build production 1.1.5 firmware
@@ -71,4 +74,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ASSET_SHA: ${{ steps.asset.outputs.sha }}
         run: |
-          gh pr comment 10 --repo "${{ github.repository }}" --body "RELEASE_115_CLASSIC_OK commit=${GITHUB_SHA} asset=firmware-release-v1.1.5.bin sha256=${ASSET_SHA}"
+          gh pr comment 11 --repo "${{ github.repository }}" --body "RELEASE_115_FINAL_OK commit=${GITHUB_SHA} asset=firmware-release-v1.1.5.bin sha256=${ASSET_SHA}"

@@ -40,19 +40,32 @@ def adapt(path: str, text: str) -> str:
                         'constexpr char DEVICE_ID[] = "inkmod-device";')
 
     if path == "src/network/OtaUpdater.cpp":
+        # Keep the visible firmware version at 1.1.4 while allowing the OTA test
+        # harness to use a private fourth numeric segment (1.1.4.0 -> 1.1.4.1).
+        # Production builds that do not define INKMOD_OTA_VERSION fall back to
+        # the normal visible INKMOD_VERSION.
+        text = text.replace("INKMOD_VERSION", "INKMOD_OTA_VERSION")
+        marker = "#include \"network/WifiPowerSaveGuard.h\"\n"
+        ota_version_fallback = (
+            marker
+            + "\n#ifndef INKMOD_OTA_VERSION\n"
+            + "#define INKMOD_OTA_VERSION INKMOD_VERSION\n"
+            + "#endif\n"
+        )
+        if marker not in text:
+            raise RuntimeError("OtaUpdater include insertion point not found")
+        text = text.replace(marker, ota_version_fallback, 1)
+
         # inkMOD's FirmwareFlasher predates CrossInk's chip-id helper. The X3/X4
-        # branch is already built for ESP32-C3 only, so keep CrossInk's buffered
-        # header path but disable the unavailable helper until the flasher is
-        # upgraded separately.
+        # branch is ESP32-C3 only, so preserve rc3's image-header validation but
+        # disable only the unavailable running-partition helper when present.
         text = text.replace(
             "const uint16_t runningChipId = firmware_flash::runningPartitionChipId();",
             "const uint16_t runningChipId = 0xFFFF;")
-        # Always use the wolfSSL streaming transport for the firmware asset.
-        # This is the key rc3 behavior that avoids esp_https_ota's
-        # ESP_ERR_HTTP_CONNECT failures on the memory-constrained X4.
-        text = text.replace(
-            "if (hasManifestSha256) downloadOptions.transport = HttpDownloader::Transport::WOLFSSL;",
-            "downloadOptions.transport = HttpDownloader::Transport::WOLFSSL;")
+
+        # Do NOT force WolfSSL. CrossInk rc3 intentionally selects WolfSSL only
+        # when the trusted release manifest provides a SHA-256 digest; otherwise
+        # it keeps the verified esp_http_client HTTPS path.
 
     return text
 

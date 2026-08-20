@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -35,17 +35,53 @@ jobs:
           grep -q 'app0,     app,  ota_0,   0x10000, 0x640000' partitions.csv
           grep -q 'app1,     app,  ota_1,   0x650000,0x640000' partitions.csv
 
-      - name: Build release firmware
-        run: pio run -e release
+      - name: Build OTA target 1.1.4
+        run: pio run -e ota-target
 
-      - name: Show artifacts
-        run: ls -lah .pio/build/release/
+      - name: Stage OTA release asset
+        run: |
+          mkdir -p dist
+          cp .pio/build/ota-target/firmware.bin dist/firmware-release.bin
+          sha256sum dist/firmware-release.bin
 
-      - name: Upload OTA firmware
+      - name: Publish controlled OTA target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG='v1.1.4.1'
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/firmware-release.bin --clobber
+          else
+            gh release create "$TAG" dist/firmware-release.bin \
+              --repo "${{ github.repository }}" \
+              --target "${{ github.sha }}" \
+              --prerelease \
+              --title 'inkMOD 1.1.4 OTA test target' \
+              --notes 'Controlled OTA target for test/ota-1.1.4-apple-folders. Visible firmware version remains 1.1.4; private OTA comparison revision is 1.1.4.1.'
+          fi
+
+      - name: Verify release manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${{ github.repository }}/releases/tags/v1.1.4.1 > dist/release.json
+          grep -q '"tag_name":"v1.1.4.1"' dist/release.json
+          grep -q '"name":"firmware-release.bin"' dist/release.json
+
+      - name: Build OTA bootstrap 1.1.4
+        run: pio run -e ota-bootstrap
+
+      - name: Stage bootstrap artifact
+        run: |
+          cp .pio/build/ota-bootstrap/firmware.bin dist/inkMOD-1.1.4-OTA-bootstrap.bin
+          sha256sum dist/inkMOD-1.1.4-OTA-bootstrap.bin
+
+      - name: Upload OTA test pair
         uses: actions/upload-artifact@v4
         with:
           name: inkMOD-1.1.4-OTA-X4-apple-folder-fix
           path: |
-            .pio/build/release/firmware-release*.bin
-            .pio/build/release/firmware.bin
+            dist/inkMOD-1.1.4-OTA-bootstrap.bin
+            dist/firmware-release.bin
+            dist/release.json
           if-no-files-found: error

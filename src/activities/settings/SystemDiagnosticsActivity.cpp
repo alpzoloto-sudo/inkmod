@@ -7,6 +7,7 @@
 #include <HalStorage.h>
 #include <HalSystem.h>
 #include <I18n.h>
+#include <Logging.h>
 #include <MemoryBudget.h>
 #include <esp_system.h>
 #include <esp_ota_ops.h>
@@ -17,6 +18,7 @@
 #include <vector>
 
 #include "MappedInputManager.h"
+#include "activities/ActivityManager.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "SdFirmwareUpdateActivity.h"
 #include "SettingsList.h"
@@ -78,6 +80,10 @@ std::string bytesHuman(uint64_t bytes) {
 
 void SystemDiagnosticsActivity::onEnter() {
   Activity::onEnter();
+#ifdef ENABLE_SERIAL_LOG
+  const size_t renderStackFree = activityManager.getRenderTaskStackHighWaterMark();
+  LOG_INF("DIAG", "Render task stack minimum free=%u B of 16384 B", static_cast<unsigned>(renderStackFree));
+#endif
   if (!StorageUsageCalc::ready()) StorageUsageCalc::start();
   storageReadySeen = StorageUsageCalc::ready();
   requestUpdate(true);
@@ -93,8 +99,6 @@ void SystemDiagnosticsActivity::loop() {
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (selectedAction == 0) {
-      // Keep only the useful engineering action. Two full white refreshes purge
-      // accumulated e-ink ghosting without keeping a runtime logging subsystem in RAM.
       renderer.clearScreen();
       renderer.displayBuffer(HalDisplay::FULL_REFRESH);
       renderer.clearScreen();

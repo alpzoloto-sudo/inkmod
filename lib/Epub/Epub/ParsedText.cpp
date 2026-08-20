@@ -318,7 +318,7 @@ int ParsedText::resolveFirstLineIndent(const bool isFirstLine, const GfxRenderer
     }
     return 0;
   }
-  if (!extraParagraphSpacing) {
+  if (!extraParagraphSpacing || forceParagraphIndents) {
     return renderer.getSpaceWidth(fontId, EpdFontFamily::REGULAR) * 3;
   }
   return 0;

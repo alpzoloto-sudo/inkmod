@@ -145,14 +145,11 @@ void BookMenuSettingsActivity::render(RenderLock&&) {
   const int helpBottom = pageHeight - metrics.buttonHintsHeight;
   const int helpTop = helpBottom - HELP_BAND_HEIGHT;
 
-  const int listHeight =
-      std::max(0, helpTop - HELP_GAP - top);
+  const int listHeight = std::max(0, helpTop - HELP_GAP - top);
 
   GUI.drawList(
-      renderer, Rect{0, top, pageWidth, listHeight},
-      static_cast<int>(layout.size()), selectedIndex,
-      [this](int i) { return std::string(I18N.get(bookMenuItemLabel(layout[i].id))); },
-      nullptr, nullptr,
+      renderer, Rect{0, top, pageWidth, listHeight}, static_cast<int>(layout.size()), selectedIndex,
+      [this](int i) { return std::string(I18N.get(bookMenuItemLabel(layout[i].id))); }, nullptr, nullptr,
       [this](int i) {
         if (layout[i].id == BookMenuItemId::DICTIONARY && dictionaryLookupAssignedToButton()) {
           return std::string(tr(STR_ASSIGNED_TO_BUTTON));
@@ -166,15 +163,27 @@ void BookMenuSettingsActivity::render(RenderLock&&) {
   renderer.fillRect(0, helpTop, pageWidth, HELP_BAND_HEIGHT, false);
   renderer.drawLine(10, helpTop, pageWidth - 10, helpTop, true);
 
-  constexpr const char* HELP_TEXT = "Удерживайте Вверх/Вниз для перемещения";
-  const auto helpLines = renderer.wrappedText(
-      SMALL_FONT_ID, HELP_TEXT, pageWidth - 24, 2, EpdFontFamily::REGULAR);
+  const char* helpText = nullptr;
+  switch (I18N.getLanguage()) {
+    case Language::RU:
+      helpText = "Удерживайте Вверх/Вниз для перемещения";
+      break;
+    case Language::UK:
+      helpText = "Утримуйте Вгору/Вниз для переміщення";
+      break;
+    case Language::EN:
+    default:
+      helpText = "Hold Up/Down to move item";
+      break;
+  }
+
+  const auto helpLines =
+      renderer.wrappedText(SMALL_FONT_ID, helpText, pageWidth - 24, 2, EpdFontFamily::REGULAR);
 
   const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
   const int gap = 2;
-  const int blockHeight =
-      static_cast<int>(helpLines.size()) * lineHeight +
-      std::max(0, static_cast<int>(helpLines.size()) - 1) * gap;
+  const int blockHeight = static_cast<int>(helpLines.size()) * lineHeight +
+                          std::max(0, static_cast<int>(helpLines.size()) - 1) * gap;
   int y = helpTop + std::max(1, (HELP_BAND_HEIGHT - blockHeight) / 2);
 
   for (const auto& line : helpLines) {
@@ -182,8 +191,7 @@ void BookMenuSettingsActivity::render(RenderLock&&) {
     y += lineHeight + gap;
   }
 
-  const auto labels =
-      mappedInput.mapLabels(tr(STR_BACK), tr(STR_TOGGLE), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_TOGGLE), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, true);
   renderer.displayBuffer();
 }

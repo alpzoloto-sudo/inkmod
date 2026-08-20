@@ -1,19 +1,24 @@
 // Base64Decoder.h
 //
-// Streaming, allocation-free base64 decoder. FB2 <binary> elements (covers,
+// Streaming, bounded-memory base64 decoder. FB2 <binary> elements (covers,
 // inline images) can be hundreds of KB of base64 text — on an ESP32-C3 with
 // ~380KB of usable RAM we cannot read that into a std::string. This decoder
 // consumes input a chunk at a time and emits decoded bytes via a callback,
-// carrying at most 3 pending bytes of state between calls.
+// carrying only a tiny fixed output batch plus one partial base64 group.
 
 #pragma once
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
+#include <utility>
 
 class Base64Decoder {
 public:
-    // Called with each run of decoded bytes as they become available.
+    // Called with bounded runs of decoded bytes. Older code called this once
+    // per base64 quartet (normally only 3 output bytes), which turned a
+    // 300-KiB image into roughly 100,000 std::function invocations. Batching
+    // those bytes locally removes that CPU overhead without buffering the
+    // image itself.
     using OutputFn = std::function<void(const uint8_t* data, size_t len)>;
 
     explicit Base64Decoder(OutputFn out) : out_(std::move(out)) {}
@@ -24,29 +29,36 @@ public:
     void feed(const char* text, size_t len) {
         for (size_t i = 0; i < len; ++i) {
             const unsigned char c = static_cast<unsigned char>(text[i]);
-            if (c == '=' ) { pad_seen_++; continue; }
+            if (c == '=') continue;
             const int v = decodeChar(c);
-            if (v < 0) continue; // whitespace / non-alphabet char, skip
+            if (v < 0) continue;
 
-            group_[group_len_++] = static_cast<uint8_t>(v);
-            if (group_len_ == 4) {
-                flushGroup(4);
-                group_len_ = 0;
+            accumulator_ = (accumulator_ << 6) | static_cast<uint32_t>(v);
+            if (++sextets_ == 4) {
+                emitByte(static_cast<uint8_t>(accumulator_ >> 16));
+                emitByte(static_cast<uint8_t>(accumulator_ >> 8));
+                emitByte(static_cast<uint8_t>(accumulator_));
+                accumulator_ = 0;
+                sextets_ = 0;
             }
         }
     }
 
-    // Call once after the last feed() to flush a trailing partial group
-    // (base64 length not a multiple of 4 because of '=' padding).
+    // Flush a final padded/partial quartet, then the bounded output batch.
     void finish() {
-        if (group_len_ > 1) {
-            flushGroup(group_len_);
+        if (sextets_ >= 2) {
+            const uint32_t triple = accumulator_ << ((4 - sextets_) * 6);
+            emitByte(static_cast<uint8_t>(triple >> 16));
+            if (sextets_ >= 3) emitByte(static_cast<uint8_t>(triple >> 8));
         }
-        group_len_ = 0;
-        pad_seen_ = 0;
+        accumulator_ = 0;
+        sextets_ = 0;
+        flushOutput();
     }
 
 private:
+    static constexpr size_t kOutputBatchSize = 384;
+
     static int decodeChar(unsigned char c) {
         if (c >= 'A' && c <= 'Z') return c - 'A';
         if (c >= 'a' && c <= 'z') return c - 'a' + 26;
@@ -56,25 +68,20 @@ private:
         return -1;
     }
 
-    // n is 2..4 valid sextets currently in group_.
-    void flushGroup(int n) {
-        uint8_t out[3];
-        const uint32_t triple = (static_cast<uint32_t>(group_[0]) << 18) |
-                                 (static_cast<uint32_t>(n > 1 ? group_[1] : 0) << 12) |
-                                 (static_cast<uint32_t>(n > 2 ? group_[2] : 0) << 6) |
-                                 (static_cast<uint32_t>(n > 3 ? group_[3] : 0));
-        out[0] = static_cast<uint8_t>((triple >> 16) & 0xFF);
-        out[1] = static_cast<uint8_t>((triple >> 8) & 0xFF);
-        out[2] = static_cast<uint8_t>(triple & 0xFF);
+    void emitByte(uint8_t value) {
+        output_[output_len_++] = value;
+        if (output_len_ == kOutputBatchSize) flushOutput();
+    }
 
-        // Bytes actually valid depend on how many sextets we had:
-        // 2 sextets -> 1 byte, 3 sextets -> 2 bytes, 4 sextets -> 3 bytes.
-        const size_t validBytes = (n == 2) ? 1 : (n == 3) ? 2 : 3;
-        out_(out, validBytes);
+    void flushOutput() {
+        if (output_len_ == 0) return;
+        out_(output_, output_len_);
+        output_len_ = 0;
     }
 
     OutputFn out_;
-    uint8_t group_[4] = {0, 0, 0, 0};
-    int group_len_ = 0;
-    int pad_seen_ = 0;
+    uint32_t accumulator_ = 0;
+    uint8_t sextets_ = 0;
+    uint8_t output_[kOutputBatchSize] = {};
+    size_t output_len_ = 0;
 };

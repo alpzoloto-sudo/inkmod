@@ -1,5 +1,8 @@
 add_executable(reader_core_io_test
   IByteReaderTest.cpp
+  BufferedByteReaderTest.cpp
+  LayoutPerformanceTest.cpp
+  XhtmlPerformanceTest.cpp
   ../../src/reader/core/BookIdentity.cpp
   ../../src/reader/core/DocumentProgress.cpp
   ../../src/reader/core/ReaderJobQueue.cpp

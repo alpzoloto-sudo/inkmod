@@ -1556,6 +1556,17 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     userAlignmentBlockStyle.paddingBottom = 0;
     userAlignmentBlockStyle.textIndentDefined = false;
     userAlignmentBlockStyle.textIndent = 0;
+  } else if (self->extraParagraphSpacing == 0 && strcmp(name, "p") == 0) {
+    // "Paragraph spacing: None" is a user layout override for normal prose.
+    // Keep publisher styling enabled (alignment, indent, font styles and all
+    // structural container/header spacing), but suppress only the vertical
+    // margins/padding attached directly to ordinary <p> elements. This gives
+    // compact body paragraphs while headings, epigraphs, poems, blockquotes,
+    // sections, etc. retain their intentional separation.
+    userAlignmentBlockStyle.marginTop = 0;
+    userAlignmentBlockStyle.marginBottom = 0;
+    userAlignmentBlockStyle.paddingTop = 0;
+    userAlignmentBlockStyle.paddingBottom = 0;
   }
 
   // Force paragraph indent to prevent unreadable walls of text.

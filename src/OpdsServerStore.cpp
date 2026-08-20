@@ -14,6 +14,11 @@ namespace {
 constexpr char OPDS_FILE_JSON[] = "/.inkmod/opds.json";
 constexpr char FILENAME_FORMAT_AUTHOR_TITLE[] = "author_title";
 constexpr char FILENAME_FORMAT_TITLE_AUTHOR[] = "title_author";
+
+bool sameServer(const OpdsServer& a, const OpdsServer& b) {
+  return a.name == b.name && a.url == b.url && a.username == b.username && a.password == b.password &&
+         a.filenameFormat == b.filenameFormat;
+}
 }  // namespace
 
 const char* opdsFilenameFormatToJson(const OpdsFilenameFormat format) {
@@ -39,18 +44,18 @@ bool OpdsServerStore::saveToFile() const {
 }
 
 bool OpdsServerStore::loadFromFile() {
-  if (Storage.exists(OPDS_FILE_JSON)) {
-    String json = Storage.readFile(OPDS_FILE_JSON);
-    if (!json.isEmpty()) {
-      // resave flag is set when passwords were stored in plaintext and need re-obfuscation
-      bool resave = false;
-      bool result = JsonSettingsIO::loadOpds(*this, json.c_str(), &resave);
-      if (result && resave) {
-        LOG_DBG("OPS", "Resaving JSON with obfuscated passwords");
-        saveToFile();
-      }
-      return result;
+  // readFile() already performs a single open and returns an empty String when
+  // the file is absent. Avoid a separate exists() directory lookup on every boot.
+  String json = Storage.readFile(OPDS_FILE_JSON);
+  if (!json.isEmpty()) {
+    // resave flag is set when passwords were stored in plaintext and need re-obfuscation
+    bool resave = false;
+    bool result = JsonSettingsIO::loadOpds(*this, json.c_str(), &resave);
+    if (result && resave) {
+      LOG_DBG("OPS", "Resaving JSON with obfuscated passwords");
+      saveToFile();
     }
+    return result;
   }
 
   // No opds.json found — attempt one-time migration from the legacy single-server
@@ -105,6 +110,9 @@ bool OpdsServerStore::updateServer(size_t index, const OpdsServer& server) {
   if (index >= servers.size()) {
     return false;
   }
+
+  // Saving an unchanged settings form should not rewrite the whole JSON file.
+  if (sameServer(servers[index], server)) return true;
 
   servers[index] = server;
   LOG_DBG("OPS", "Updated server: %s", server.name.c_str());

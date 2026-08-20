@@ -1,7 +1,7 @@
 #include "FsHelpers.h"
 
 #include <algorithm>
-#include <cctype>
+#include <cstdint>
 #include <cstring>
 #include <vector>
 
@@ -10,14 +10,52 @@ namespace FsHelpers {
 namespace {
 bool isHexDigit(const char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
 
+inline bool isAsciiDigit(const char c) { return c >= '0' && c <= '9'; }
+
 uint8_t hexValue(const char c) {
   if (c >= '0' && c <= '9') return static_cast<uint8_t>(c - '0');
   if (c >= 'a' && c <= 'f') return static_cast<uint8_t>(10 + (c - 'a'));
   return static_cast<uint8_t>(10 + (c - 'A'));
 }
+
+inline unsigned char asciiLower(const unsigned char c) {
+  return (c >= 'A' && c <= 'Z') ? static_cast<unsigned char>(c + ('a' - 'A')) : c;
+}
+
+template <size_t N>
+bool checkLiteralExtension(const std::string_view fileName, const char (&extension)[N]) {
+  static_assert(N > 1, "extension literal must not be empty");
+  constexpr size_t extLen = N - 1;
+  if (fileName.size() < extLen) return false;
+
+  const size_t offset = fileName.size() - extLen;
+  for (size_t i = 0; i < extLen; ++i) {
+    if (asciiLower(static_cast<unsigned char>(fileName[offset + i])) !=
+        asciiLower(static_cast<unsigned char>(extension[i]))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void appendPathComponent(std::string& result, const char* data, const size_t len) {
+  if (len == 0) return;
+  if (!result.empty()) result.push_back('/');
+  result.append(data, len);
+}
+
+void popPathComponent(std::string& result) {
+  if (result.empty()) return;
+  const size_t slash = result.find_last_of('/');
+  if (slash == std::string::npos) {
+    result.clear();
+  } else {
+    result.resize(slash);
+  }
+}
 }  // namespace
 
-std::string decodeUriEscapes(const std::string& path) {
+std::string decodeUriEscapes(const std::string_view path) {
   std::string decoded;
   decoded.reserve(path.size());
 
@@ -35,37 +73,33 @@ std::string decodeUriEscapes(const std::string& path) {
   return decoded;
 }
 
-std::string normalisePath(const std::string& path) {
-  std::vector<std::string> components;
-  std::string component;
-
-  for (const auto c : path) {
-    if (c == '/') {
-      if (!component.empty()) {
-        if (component == "..") {
-          if (!components.empty()) {
-            components.pop_back();
-          }
-        } else {
-          components.push_back(component);
-        }
-        component.clear();
-      }
-    } else {
-      component += c;
-    }
-  }
-
-  if (!component.empty()) {
-    components.push_back(component);
-  }
-
+std::string normalisePath(const std::string_view path) {
+  // Build the normalized path directly in one reserved string. The previous
+  // implementation allocated a vector plus a separate std::string for every
+  // component, which made this very common EPUB helper unnecessarily heap-heavy.
+  // Preserve its exact legacy semantics: ".." is resolved only when it is
+  // followed by '/', while a trailing ".." remains a literal component.
   std::string result;
-  for (const auto& c : components) {
-    if (!result.empty()) {
-      result += "/";
+  result.reserve(path.size());
+
+  size_t componentStart = 0;
+  for (size_t i = 0; i < path.size(); ++i) {
+    if (path[i] != '/') continue;
+
+    const size_t len = i - componentStart;
+    if (len != 0) {
+      if (len == 2 && path[componentStart] == '.' && path[componentStart + 1] == '.') {
+        popPathComponent(result);
+      } else {
+        appendPathComponent(result, path.data() + componentStart, len);
+      }
     }
-    result += c;
+    componentStart = i + 1;
+  }
+
+  // Legacy behavior intentionally does not interpret a final ".." segment.
+  if (componentStart < path.size()) {
+    appendPathComponent(result, path.data() + componentStart, path.size() - componentStart);
   }
 
   return result;
@@ -73,50 +107,39 @@ std::string normalisePath(const std::string& path) {
 
 void sortFileList(std::vector<std::string>& strs) {
   std::sort(begin(strs), end(strs), [](const std::string& str1, const std::string& str2) {
-    // Directories first
-    bool isDir1 = str1.back() == '/';
-    bool isDir2 = str2.back() == '/';
+    const bool isDir1 = str1.back() == '/';
+    const bool isDir2 = str2.back() == '/';
     if (isDir1 != isDir2) return isDir1;
 
-    // Start naive natural sort
     const char* s1 = str1.c_str();
     const char* s2 = str2.c_str();
 
-    // Iterate while both strings have characters
     while (*s1 && *s2) {
-      // Check if both are at the start of a number
-      if (isdigit(*s1) && isdigit(*s2)) {
-        // Skip leading zeros and track them
+      if (isAsciiDigit(*s1) && isAsciiDigit(*s2)) {
         while (*s1 == '0') s1++;
         while (*s2 == '0') s2++;
 
-        // Count digits to compare lengths first
         int len1 = 0, len2 = 0;
-        while (isdigit(s1[len1])) len1++;
-        while (isdigit(s2[len2])) len2++;
+        while (isAsciiDigit(s1[len1])) len1++;
+        while (isAsciiDigit(s2[len2])) len2++;
 
-        // Different length so return smaller integer value
         if (len1 != len2) return len1 < len2;
 
-        // Same length so compare digit by digit
         for (int i = 0; i < len1; i++) {
           if (s1[i] != s2[i]) return s1[i] < s2[i];
         }
 
-        // Numbers equal so advance pointers
         s1 += len1;
         s2 += len2;
       } else {
-        // Regular case-insensitive character comparison
-        char c1 = tolower(*s1);
-        char c2 = tolower(*s2);
+        const unsigned char c1 = asciiLower(static_cast<unsigned char>(*s1));
+        const unsigned char c2 = asciiLower(static_cast<unsigned char>(*s2));
         if (c1 != c2) return c1 < c2;
         s1++;
         s2++;
       }
     }
 
-    // One string is prefix of other
     return *s1 == '\0' && *s2 != '\0';
   });
 }
@@ -129,8 +152,8 @@ bool checkFileExtension(std::string_view fileName, const char* extension) {
 
   const size_t offset = fileName.length() - extLen;
   for (size_t i = 0; i < extLen; i++) {
-    if (tolower(static_cast<unsigned char>(fileName[offset + i])) !=
-        tolower(static_cast<unsigned char>(extension[i]))) {
+    if (asciiLower(static_cast<unsigned char>(fileName[offset + i])) !=
+        asciiLower(static_cast<unsigned char>(extension[i]))) {
       return false;
     }
   }
@@ -138,26 +161,26 @@ bool checkFileExtension(std::string_view fileName, const char* extension) {
 }
 
 bool hasJpgExtension(std::string_view fileName) {
-  return checkFileExtension(fileName, ".jpg") || checkFileExtension(fileName, ".jpeg");
+  return checkLiteralExtension(fileName, ".jpg") || checkLiteralExtension(fileName, ".jpeg");
 }
 
-bool hasPngExtension(std::string_view fileName) { return checkFileExtension(fileName, ".png"); }
+bool hasPngExtension(std::string_view fileName) { return checkLiteralExtension(fileName, ".png"); }
 
-bool hasBmpExtension(std::string_view fileName) { return checkFileExtension(fileName, ".bmp"); }
+bool hasBmpExtension(std::string_view fileName) { return checkLiteralExtension(fileName, ".bmp"); }
 
-bool hasGifExtension(std::string_view fileName) { return checkFileExtension(fileName, ".gif"); }
+bool hasGifExtension(std::string_view fileName) { return checkLiteralExtension(fileName, ".gif"); }
 
-bool hasEpubExtension(std::string_view fileName) { return checkFileExtension(fileName, ".epub"); }
+bool hasEpubExtension(std::string_view fileName) { return checkLiteralExtension(fileName, ".epub"); }
 
 bool hasXtcExtension(std::string_view fileName) {
-  return checkFileExtension(fileName, ".xtc") || checkFileExtension(fileName, ".xtch");
+  return checkLiteralExtension(fileName, ".xtc") || checkLiteralExtension(fileName, ".xtch");
 }
 
-bool hasTxtExtension(std::string_view fileName) { return checkFileExtension(fileName, ".txt"); }
+bool hasTxtExtension(std::string_view fileName) { return checkLiteralExtension(fileName, ".txt"); }
 
-bool hasMarkdownExtension(std::string_view fileName) { return checkFileExtension(fileName, ".md"); }
+bool hasMarkdownExtension(std::string_view fileName) { return checkLiteralExtension(fileName, ".md"); }
 
-bool hasCssExtension(std::string_view fileName) { return checkFileExtension(fileName, ".css"); }
+bool hasCssExtension(std::string_view fileName) { return checkLiteralExtension(fileName, ".css"); }
 
 std::string extractFolderPath(const std::string& filePath) {
   const auto lastSlash = filePath.find_last_of('/');

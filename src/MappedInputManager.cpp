@@ -117,43 +117,55 @@ size_t buttonIndex(MappedInputManager::Button button) { return static_cast<size_
 }  // namespace
 
 bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint8_t) const) const {
-  const auto sideLayout = static_cast<InkMODSettings::SIDE_BUTTON_LAYOUT>(SETTINGS.sideButtonLayout);
-  const auto side = mapSideLayoutForReaderOrientation(kSideLayouts[sideLayout], readerMode);
-
-  const bool useReaderMapping = readerMode && SETTINGS.readerFrontButtonsEnabled;
-  const ButtonIndex btnBack = useReaderMapping ? SETTINGS.readerFrontButtonBack : SETTINGS.frontButtonBack;
-  const ButtonIndex btnConfirm = useReaderMapping ? SETTINGS.readerFrontButtonConfirm : SETTINGS.frontButtonConfirm;
-  const ButtonIndex btnLeft = useReaderMapping ? SETTINGS.readerFrontButtonLeft : SETTINGS.frontButtonLeft;
-  const ButtonIndex btnRight = useReaderMapping ? SETTINGS.readerFrontButtonRight : SETTINGS.frontButtonRight;
-  const ButtonIndex mappedBack = mapFrontButtonForReaderOrientation(btnBack, btnLeft, btnRight, readerMode);
-  const ButtonIndex mappedConfirm = mapFrontButtonForReaderOrientation(btnConfirm, btnLeft, btnRight, readerMode);
-  const ButtonIndex mappedLeft = mapFrontButtonForReaderOrientation(btnLeft, btnLeft, btnRight, readerMode);
-  const ButtonIndex mappedRight = mapFrontButtonForReaderOrientation(btnRight, btnLeft, btnRight, readerMode);
-
+  // Avoid rebuilding both front- and side-button mappings for every query.
+  // Activities may ask several button states each main-loop pass, so only
+  // compute the mapping group required by the requested logical button.
   switch (button) {
-    case Button::Back:
-      return (gpio.*fn)(mappedBack);
-    case Button::Confirm:
-      return (gpio.*fn)(mappedConfirm);
-    case Button::Left:
-      return (gpio.*fn)(mappedLeft);
-    case Button::Right:
-      return (gpio.*fn)(mappedRight);
+    case Button::Power:
+      return (gpio.*fn)(HalGPIO::BTN_POWER);
+
     case Button::Up:
-      // Reader menus should follow the same top/bottom side-button orientation as reader page turns.
       return (gpio.*fn)(mapSideButtonForReaderOrientation(HalGPIO::BTN_UP, readerMode));
     case Button::Down:
-      // Reader menus should follow the same top/bottom side-button orientation as reader page turns.
       return (gpio.*fn)(mapSideButtonForReaderOrientation(HalGPIO::BTN_DOWN, readerMode));
-    case Button::Power:
-      // Power button bypasses remapping.
-      return (gpio.*fn)(HalGPIO::BTN_POWER);
+
     case Button::PageBack:
-      // Reader page navigation uses side buttons and can be swapped via settings.
-      return readMappedSideButtons(gpio, fn, side.pageBackPrimary, side.pageBackSecondary);
-    case Button::PageForward:
-      // Reader page navigation uses side buttons and can be swapped via settings.
+    case Button::PageForward: {
+      const auto sideLayout = static_cast<InkMODSettings::SIDE_BUTTON_LAYOUT>(SETTINGS.sideButtonLayout);
+      const auto side = mapSideLayoutForReaderOrientation(kSideLayouts[sideLayout], readerMode);
+      if (button == Button::PageBack) {
+        return readMappedSideButtons(gpio, fn, side.pageBackPrimary, side.pageBackSecondary);
+      }
       return readMappedSideButtons(gpio, fn, side.pageForwardPrimary, side.pageForwardSecondary);
+    }
+
+    case Button::Back:
+    case Button::Confirm:
+    case Button::Left:
+    case Button::Right: {
+      const bool useReaderMapping = readerMode && SETTINGS.readerFrontButtonsEnabled;
+      const ButtonIndex btnBack = useReaderMapping ? SETTINGS.readerFrontButtonBack : SETTINGS.frontButtonBack;
+      const ButtonIndex btnConfirm = useReaderMapping ? SETTINGS.readerFrontButtonConfirm : SETTINGS.frontButtonConfirm;
+      const ButtonIndex btnLeft = useReaderMapping ? SETTINGS.readerFrontButtonLeft : SETTINGS.frontButtonLeft;
+      const ButtonIndex btnRight = useReaderMapping ? SETTINGS.readerFrontButtonRight : SETTINGS.frontButtonRight;
+
+      ButtonIndex physical = btnBack;
+      switch (button) {
+        case Button::Confirm:
+          physical = btnConfirm;
+          break;
+        case Button::Left:
+          physical = btnLeft;
+          break;
+        case Button::Right:
+          physical = btnRight;
+          break;
+        case Button::Back:
+        default:
+          break;
+      }
+      return (gpio.*fn)(mapFrontButtonForReaderOrientation(physical, btnLeft, btnRight, readerMode));
+    }
   }
 
   return false;

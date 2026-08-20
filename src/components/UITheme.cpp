@@ -40,12 +40,17 @@ std::string addBmpSuffix(const std::string& path, const char* suffix) {
 UITheme UITheme::instance;
 
 UITheme::UITheme() {
-  auto themeType = static_cast<InkMODSettings::UI_THEME>(SETTINGS.uiTheme);
+  const auto themeType = static_cast<InkMODSettings::UI_THEME>(SETTINGS.uiTheme);
   setTheme(themeType);
 }
 
 void UITheme::reload() {
-  auto themeType = static_cast<InkMODSettings::UI_THEME>(SETTINGS.uiTheme);
+  const auto themeType = static_cast<InkMODSettings::UI_THEME>(SETTINGS.uiTheme);
+  // The singleton is constructed before settings are loaded from SD, and setup()
+  // calls reload() afterwards. When the persisted theme equals the already-active
+  // default, recreating the polymorphic theme only adds a heap free+allocation at
+  // every boot. A real theme change still goes through setTheme() below.
+  if (currentTheme && currentType == themeType) return;
   setTheme(themeType);
 }
 
@@ -55,41 +60,49 @@ void UITheme::setTheme(InkMODSettings::UI_THEME type) {
       LOG_DBG("UI", "Using Classic theme");
       currentTheme = std::make_unique<BaseTheme>();
       currentMetrics = &BaseMetrics::values;
+      currentType = type;
       break;
     case InkMODSettings::UI_THEME::LYRA:
       LOG_DBG("UI", "Using Lyra theme");
       currentTheme = std::make_unique<LyraTheme>();
       currentMetrics = &LyraMetrics::values;
+      currentType = type;
       break;
     case InkMODSettings::UI_THEME::ROUNDEDRAFF:
       LOG_DBG("UI", "Using RoundedRaff theme");
       currentTheme = std::make_unique<RoundedRaffTheme>();
       currentMetrics = &RoundedRaffMetrics::values;
+      currentType = type;
       break;
     case InkMODSettings::UI_THEME::LYRA_3_COVERS:
       LOG_DBG("UI", "Using Lyra 3 Covers theme");
       currentTheme = std::make_unique<Lyra3CoversTheme>();
       currentMetrics = &Lyra3CoversMetrics::values;
+      currentType = type;
       break;
     case InkMODSettings::UI_THEME::LYRA_CAROUSEL:
       LOG_DBG("UI", "Using Lyra Carousel theme");
       currentTheme = std::make_unique<LyraCarouselTheme>();
       currentMetrics = &LyraCarouselMetrics::values;
+      currentType = type;
       break;
     case InkMODSettings::UI_THEME::MINIMAL:
       LOG_DBG("UI", "Using Minimal theme");
       currentTheme = std::make_unique<MinimalTheme>();
       currentMetrics = &MinimalMetrics::values;
+      currentType = type;
       break;
     case InkMODSettings::UI_THEME::DASHBOARD:
       LOG_DBG("UI", "Using Dashboard theme");
       currentTheme = std::make_unique<DashboardTheme>();
       currentMetrics = &DashboardMetrics::values;
+      currentType = type;
       break;
     default:
       LOG_ERR("UI", "Unknown theme %d, falling back to Classic", static_cast<int>(type));
       currentTheme = std::make_unique<BaseTheme>();
       currentMetrics = &BaseMetrics::values;
+      currentType = InkMODSettings::UI_THEME::CLASSIC;
       break;
   }
 }
@@ -119,7 +132,6 @@ int UITheme::getNumberOfItemsPerPage(const GfxRenderer& renderer, bool hasHeader
   return std::max(1, availableHeight / rowHeight);
 }
 
-// Screen area excluding the button hints
 Rect UITheme::getScreenSafeArea(const GfxRenderer& renderer, bool hasFrontButtonHints, bool hasSideButtonHints) {
   (void)hasSideButtonHints;
   auto orientation = renderer.getOrientation();
@@ -157,7 +169,6 @@ std::string UITheme::getCoverThumbPath(const std::string& coverBmpPath, int cove
   if (coverHeight <= 0) {
     return "";
   }
-  // Use int64_t so large heights cannot overflow before division.
   const int coverWidth = static_cast<int>((static_cast<int64_t>(coverHeight) * 3 + 2) / 5);
   return getCoverThumbPath(coverBmpPath, coverWidth, coverHeight);
 }
@@ -224,7 +235,6 @@ UIIcon UITheme::getFileIcon(const std::string& filename) {
 int UITheme::getStatusBarHeight() {
   const ThemeMetrics& metrics = UITheme::getInstance().getMetrics();
 
-  // Add status bar margin
   const bool showStatusBar = SETTINGS.statusBarChapterPageCount || SETTINGS.statusBarBookProgressPercentage ||
                              SETTINGS.statusBarTitle != InkMODSettings::STATUS_BAR_TITLE::HIDE_TITLE ||
                              SETTINGS.statusBarTimeLeft != InkMODSettings::STATUS_BAR_TIME_LEFT::TIME_LEFT_HIDE ||
@@ -242,7 +252,6 @@ int UITheme::getProgressBarHeight() {
   return (showProgressBar ? (((SETTINGS.statusBarProgressBarThickness + 1) * 2) + metrics.progressBarMarginTop) : 0);
 }
 
-// Centered text implementation that takes the safe area into account
 void UITheme::drawCenteredText(const GfxRenderer& renderer, Rect screen, int fontId, int y, const char* text,
                                bool black, EpdFontFamily::Style style) {
   const int x = screen.x + (screen.width - renderer.getTextWidth(fontId, text, style)) / 2;

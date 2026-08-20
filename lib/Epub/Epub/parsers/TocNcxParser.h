@@ -17,6 +17,10 @@ class TocNcxParser final : public Print {
 
   std::string currentLabel;
   std::string currentSrc;
+  // Reused scratch strings avoid allocating a fresh path/anchor for every
+  // TOC entry in books with large navigation maps.
+  std::string currentTarget;
+  std::string currentAnchor;
   uint8_t currentDepth = 0;
 
   static void startElement(void* userData, const XML_Char* name, const XML_Char** atts);

@@ -83,7 +83,7 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer) {
   const auto* family = registry_.findFamily(wantedFamily);
   if (family) {
     if (manager_.loadFamily(*family, renderer, targetPointSize, sizeStep)) {
-      LOG_DBG("SDFS", "Loaded SD font family: %s", wantedFamily);
+      LOG_DBG("SDFS", "Loaded SD card font family: %s", wantedFamily);
     } else {
       LOG_ERR("SDFS", "Failed to load SD font family: %s (clearing)", wantedFamily);
       SETTINGS.sdFontFamilyName[0] = '\0';
@@ -97,10 +97,12 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer) {
 void SdCardFontSystem::releaseLoadedFont(GfxRenderer& renderer) {
   if (manager_.currentFamilyName().empty()) return;
 
-  const std::string familyName = manager_.currentFamilyName();
-  (void)familyName;
+  // Log while the manager still owns the name. The previous code copied it to
+  // a new std::string solely so it survived unloadAll(), creating a heap
+  // allocation at exactly the point where this function is trying to free RAM
+  // for a low-memory operation. In release LOG_DBG is compiled out entirely.
+  LOG_DBG("SDFS", "Releasing SD card font before low-memory operation: %s", manager_.currentFamilyName().c_str());
   manager_.unloadAll(renderer);
-  LOG_DBG("SDFS", "Released SD card font before low-memory operation: %s", familyName.c_str());
 }
 
 int SdCardFontSystem::resolveFontId(const char* familyName, uint8_t /*fontSizeEnum*/) const {
@@ -128,6 +130,15 @@ bool SdCardFontSystem::changeReaderFontSize(const bool larger) {
         return true;
       }
     }
+  }
+
+  // The built-in DejaVu Sans family currently has exactly one compiled size.
+  // Keep quick/long-press font-size actions honest instead of cycling the
+  // legacy 8-20 pt enum while rendering the same 12 pt glyphs every time.
+  if (SETTINGS.sdFontFamilyName[0] == '\0' && SETTINGS.fontFamily == InkMODSettings::TEST_FONTS) {
+    const uint8_t stored = InkMODSettings::getStoredReaderFontSize(InkMODSettings::SMALL);
+    SETTINGS.fontSize = stored == UINT8_MAX ? 0 : stored;
+    return false;
   }
 
   return SETTINGS.changeReaderFontSize(larger);

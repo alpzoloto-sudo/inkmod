@@ -1,12 +1,13 @@
 #include "Inflate.h"
-#include <cstring>
+
 #include <array>
+#include <cstring>
 #include <memory>
+#include <new>
 #include <vector>
 
 namespace {
 
-// ---- bounded pull-based bit reader over IByteReader --------------------
 class BitReader {
 public:
     BitReader(IByteReader& in, uint32_t limit) : in_(in), remaining_(limit) {}
@@ -26,18 +27,8 @@ public:
         return v;
     }
 
-    // DEFLATE Huffman codes are read one bit at a time, MSB-first *within
-    // the canonical decode loop* even though the bitstream itself is
-    // packed LSB-first per byte — getBits(1) already handles that framing.
     int getBit() { return static_cast<int>(getBits(1)); }
 
-    // Fast Huffman decoder support. DEFLATE codes are usually short; being
-    // able to inspect 8 bits at once avoids calling getBit() 5-9 times for
-    // most literal/distance symbols. ensureBitsFast() is deliberately
-    // non-fatal: near the exact end of the compressed stream there may be
-    // fewer than 8 source bits left while still having enough buffered bits
-    // for a valid shorter code, in which case the caller falls back to the
-    // canonical bit-by-bit decoder.
     bool ensureBitsFast(int n) {
         while (bitCount_ < n) {
             if (bufPos_ >= bufLen_) {
@@ -60,12 +51,7 @@ public:
         bitCount_ -= n;
     }
 
-    // Discard any partial byte in the bit buffer (used before a stored
-    // block, which is byte-aligned per RFC 1951 §3.2.4).
     void byteAlign() { bitBuf_ = 0; bitCount_ = 0; }
-
-    // Raw byte read, bypassing the bit buffer entirely (only valid right
-    // after byteAlign()).
     int rawByte() { return getByte(); }
 
 private:
@@ -91,20 +77,10 @@ private:
     bool ok_ = true;
 };
 
-// ---- canonical Huffman decode table (RFC 1951 reference-decoder shape) --
 struct Huff {
-    uint16_t counts[16] = {0};   // counts[len] = number of symbols with that code length
-    std::vector<uint16_t> symbols; // symbols ordered by (length, symbol value)
+    uint16_t counts[16] = {0};
+    std::vector<uint16_t> symbols;
 
-    // A compact first-level decode table. One uint16_t packs:
-    //   high 4 bits = code length (1..8)
-    //   low 12 bits = symbol
-    // 0xffff means "use the canonical slow path".
-    //
-    // 8 bits is intentional: 256 * 2 = 512 bytes per Huff object, small
-    // enough for ESP32-C3, while catching most literal and virtually all
-    // common distance codes. A 9/10-bit table would cost considerably more
-    // stack for only a modest extra hit rate.
     static constexpr int kFastBits = 8;
     static constexpr uint16_t kFastMiss = 0xffffu;
     std::array<uint16_t, 1u << kFastBits> fast{};
@@ -118,7 +94,6 @@ struct Huff {
         return r;
     }
 
-    // code_lengths[i] = bit length of symbol i (0 = symbol unused).
     void build(const uint8_t* code_lengths, int n) {
         fast.fill(kFastMiss);
         for (int i = 0; i < 16; i++) counts[i] = 0;
@@ -135,9 +110,6 @@ struct Huff {
             if (len != 0) symbols[offsets[len]++] = static_cast<uint16_t>(i);
         }
 
-        // Build canonical codes, reverse them for DEFLATE's LSB-first
-        // bitstream, then replicate each short code across all table entries
-        // that share that prefix.
         uint16_t nextCode[16] = {0};
         uint16_t code = 0;
         for (int bits = 1; bits <= 15; ++bits) {
@@ -157,10 +129,7 @@ struct Huff {
         }
     }
 
-    // Returns the decoded symbol, or -1 on a malformed code.
     int decode(BitReader& br) const {
-        // Fast path: one table lookup + one shift instead of 5-9 calls to
-        // getBit() for the overwhelming majority of real DEFLATE symbols.
         if (br.ensureBitsFast(kFastBits)) {
             const uint16_t packed = fast[br.peekBitsFast(kFastBits)];
             if (packed != kFastMiss) {
@@ -170,8 +139,6 @@ struct Huff {
             }
         }
 
-        // Canonical reference path for codes longer than 8 bits, malformed
-        // inputs, and the final few buffered bits at end-of-stream.
         int code = 0, first = 0, index = 0;
         for (int len = 1; len <= 15; len++) {
             code |= br.getBit();
@@ -187,69 +154,79 @@ struct Huff {
     }
 };
 
-// RFC 1951 §3.2.5 length/distance extra-bit and base-value tables.
 const uint16_t kLenBase[29]  = {3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258};
 const uint8_t  kLenExtra[29] = {0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0};
 const uint16_t kDistBase[30]  = {1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577};
 const uint8_t  kDistExtra[30] = {0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13};
 const int kCodeLenOrder[19] = {16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15};
 
-// 32KB sliding window: DEFLATE back-references can point up to 32768 bytes
-// behind the current output position, so a general-purpose decompressor
-// needs a buffer at least that large, full stop.
 class Window {
 public:
-    // buf_ used to be a plain uint8_t[32768] member - meaning a whole
-    // Window instance (this buffer plus everything else) sat directly on
-    // whichever stack constructed it. inflateRaw() below constructs one as
-    // a local variable, so every call put 32KB+ on the CALLING task's
-    // stack - on this device that's the "loopTask" stack, which is only
-    // 8-16KB total, guaranteeing overflow the moment a real deflate stream
-    // needed the full window (not always on the very first call - depends
-    // on when extraction actually happened to run). Heap-allocating it
-    // instead keeps Window itself small enough to live on the stack
-    // safely; the 32KB now lives on the heap, which has roughly 275KB
-    // available on this device - not remotely the same constraint.
-    explicit Window(const InflateOutputFn& out) : out_(out), buf_(new uint8_t[kWindowSize]) {
-        std::memset(buf_.get(), 0, kWindowSize);
-    }
-    // Emits any bytes still sitting in the output buffer. Also runs via the
-    // destructor, so every inflateRaw() exit path (success or the several
-    // early `return false`s in inflateBlock()) flushes automatically -
-    // nothing here otherwise needs to change to stay correct.
+    // No zero-fill is needed: DEFLATE can only reference bytes already
+    // emitted, and copyMatch() enforces distance <= pos_. Avoiding a 32 KiB
+    // memset saves pure memory-bandwidth work on every FB2.ZIP extraction.
+    explicit Window(const InflateOutputFn& out) : out_(out), buf_(new (std::nothrow) uint8_t[kWindowSize]) {}
     ~Window() { flushOut(); }
+
+    bool valid() const { return static_cast<bool>(buf_); }
 
     void putByte(uint8_t b) {
         buf_[pos_++ & kMask] = b;
-        // `out_` is a std::function - type-erased, so every invocation has
-        // real overhead beyond whatever the caller's callback body itself
-        // does. Calling it once per decompressed byte (previously: no
-        // batching at all here) means a book with a few MB of text turns
-        // into a few million calls just to satisfy that overhead, which on
-        // a weak MCU is enough by itself to make decompression the
-        // dominant cost - independent of how efficiently the caller then
-        // writes those bytes onward. Buffering locally and calling `out_`
-        // in ~1KB chunks doesn't change what bytes get produced or when a
-        // caller can rely on them (still fully sequential, still delivered
-        // before inflateRaw() returns) - only how many times the call
-        // itself happens.
         outBuf_[outLen_++] = b;
         if (outLen_ == sizeof(outBuf_)) flushOut();
     }
-    // Copies `length` bytes from `distance` bytes back in the output
-    // stream (distance <= 32768). Must go one byte at a time (not memcpy)
-    // because source and destination ranges legitimately overlap when
-    // distance < length (that's how DEFLATE encodes run-length repeats).
+
     bool copyMatch(uint32_t distance, uint32_t length) {
-        if (distance == 0 || distance > pos_) return false; // reference before start of stream
-        for (uint32_t i = 0; i < length; i++) {
-            uint8_t b = buf_[(pos_ - distance) & kMask];
-            putByte(b);
+        if (distance == 0 || distance > pos_) return false;
+
+        // A distance-1 match is a run. Fill the ring and output in contiguous
+        // chunks instead of routing every byte through putByte().
+        if (distance == 1) {
+            const uint8_t repeated = buf_[(pos_ - 1) & kMask];
+            while (length > 0) {
+                const uint32_t dst = pos_ & kMask;
+                const uint32_t chunk = std::min<uint32_t>(length, kWindowSize - dst);
+                std::memset(buf_.get() + dst, repeated, chunk);
+                appendOut(buf_.get() + dst, chunk);
+                pos_ += chunk;
+                length -= chunk;
+            }
+            return true;
+        }
+
+        // LZ77 matches may overlap. Copy at most one distance at a time so
+        // each chunk only reads bytes that were already produced; the next
+        // chunk can then reuse bytes written by the previous one. Ring-wrap
+        // boundaries keep both source and destination spans contiguous.
+        while (length > 0) {
+            const uint32_t src = (pos_ - distance) & kMask;
+            const uint32_t dst = pos_ & kMask;
+            uint32_t chunk = std::min<uint32_t>(length, distance);
+            chunk = std::min<uint32_t>(chunk, kWindowSize - src);
+            chunk = std::min<uint32_t>(chunk, kWindowSize - dst);
+            if (chunk == 0) return false;
+
+            if (src != dst) std::memmove(buf_.get() + dst, buf_.get() + src, chunk);
+            appendOut(buf_.get() + dst, chunk);
+            pos_ += chunk;
+            length -= chunk;
         }
         return true;
     }
 
 private:
+    void appendOut(const uint8_t* data, size_t len) {
+        while (len > 0) {
+            const size_t space = sizeof(outBuf_) - outLen_;
+            const size_t take = std::min(space, len);
+            std::memcpy(outBuf_ + outLen_, data, take);
+            outLen_ += take;
+            data += take;
+            len -= take;
+            if (outLen_ == sizeof(outBuf_)) flushOut();
+        }
+    }
+
     void flushOut() {
         if (outLen_ > 0) {
             out_(outBuf_, outLen_);
@@ -272,15 +249,13 @@ bool inflateBlock(BitReader& br, Window& win, bool& outFinal) {
     if (!br.ok()) return false;
 
     if (btype == 0) {
-        // Stored (uncompressed) block: byte-align, then LEN/NLEN (16-bit
-        // LE each, NLEN is one's-complement of LEN), then LEN raw bytes.
         br.byteAlign();
         int lenLo = br.rawByte(), lenHi = br.rawByte();
         int nlenLo = br.rawByte(), nlenHi = br.rawByte();
         if (lenLo < 0 || lenHi < 0 || nlenLo < 0 || nlenHi < 0) return false;
         uint16_t len = static_cast<uint16_t>(lenLo | (lenHi << 8));
         uint16_t nlen = static_cast<uint16_t>(nlenLo | (nlenHi << 8));
-        if (static_cast<uint16_t>(~len) != nlen) return false; // corrupt block header
+        if (static_cast<uint16_t>(~len) != nlen) return false;
         for (uint16_t i = 0; i < len; i++) {
             int b = br.rawByte();
             if (b < 0) return false;
@@ -289,11 +264,10 @@ bool inflateBlock(BitReader& br, Window& win, bool& outFinal) {
         return true;
     }
 
-    if (btype == 3) return false; // reserved value: invalid stream
+    if (btype == 3) return false;
 
     Huff litLen, dist;
     if (btype == 1) {
-        // Fixed Huffman codes, hardwired lengths per RFC 1951 §3.2.6.
         uint8_t litLenLens[288];
         for (int i = 0; i < 144; i++) litLenLens[i] = 8;
         for (int i = 144; i < 256; i++) litLenLens[i] = 9;
@@ -305,7 +279,6 @@ bool inflateBlock(BitReader& br, Window& win, bool& outFinal) {
         for (int i = 0; i < 30; i++) distLens[i] = 5;
         dist.build(distLens, 30);
     } else {
-        // Dynamic Huffman codes: header describes the two code tables.
         uint32_t hlit = br.getBits(5) + 257;
         uint32_t hdist = br.getBits(5) + 1;
         uint32_t hclen = br.getBits(4) + 4;
@@ -318,10 +291,6 @@ bool inflateBlock(BitReader& br, Window& win, bool& outFinal) {
         Huff clc;
         clc.build(clcLens, 19);
 
-        // RFC 1951 bounds: HLIT <= 286 and HDIST <= 32, so 318 bytes is
-        // enough for every valid dynamic block. Fixed storage avoids a heap
-        // allocation/free for every block and therefore reduces fragmentation
-        // during large FB2.ZIP extraction.
         std::array<uint8_t, 318> lens{};
         const uint32_t lensCount = hlit + hdist;
         uint32_t i = 0;
@@ -338,7 +307,7 @@ bool inflateBlock(BitReader& br, Window& win, bool& outFinal) {
             } else if (sym == 17) {
                 uint32_t rep = br.getBits(3) + 3;
                 while (rep-- > 0 && i < lensCount) lens[i++] = 0;
-            } else { // 18
+            } else {
                 uint32_t rep = br.getBits(7) + 11;
                 while (rep-- > 0 && i < lensCount) lens[i++] = 0;
             }
@@ -355,10 +324,10 @@ bool inflateBlock(BitReader& br, Window& win, bool& outFinal) {
             win.putByte(static_cast<uint8_t>(sym));
             continue;
         }
-        if (sym == 256) return true; // end of block
+        if (sym == 256) return true;
 
         sym -= 257;
-        if (sym >= 29) return false; // invalid length code
+        if (sym >= 29) return false;
         uint32_t length = kLenBase[sym] + br.getBits(kLenExtra[sym]);
         if (!br.ok()) return false;
 
@@ -376,6 +345,7 @@ bool inflateBlock(BitReader& br, Window& win, bool& outFinal) {
 bool inflateRaw(IByteReader& in, uint32_t compressedLimit, const InflateOutputFn& out) {
     BitReader br(in, compressedLimit);
     Window win(out);
+    if (!win.valid()) return false;
     bool final = false;
     do {
         if (!inflateBlock(br, win, final)) return false;

@@ -31,6 +31,20 @@ struct BlockStyle {
   bool textAlignDefined = false;   // true if text-align was explicitly set in CSS
   bool isRtl = false;              // true if resolved direction is RTL
   bool directionDefined = false;   // true if direction was explicitly set in CSS/HTML
+
+  // Paragraph spacing=None deliberately clears the live vertical box values
+  // of <p> elements in ChapterHtmlSlimParser. Converted FB2 and many EPUBs,
+  // however, also encode semantic title/subtitle/author/date blocks as <p>
+  // with explicit center/right alignment. Keep a tiny copy of their publisher
+  // vertical spacing here so withoutBottom()/addBottom() can restore it after
+  // that compact-prose override. Ordinary left/justified body paragraphs do
+  // not opt in and therefore remain gap-free.
+  bool preserveStructuralVerticalSpacing = false;
+  int16_t structuralMarginTop = 0;
+  int16_t structuralMarginBottom = 0;
+  int16_t structuralPaddingTop = 0;
+  int16_t structuralPaddingBottom = 0;
+
   // Set when this block was created by a <br> element. Used by startNewTextBlock to inject
   // a full line-height gap when the <br> block stays empty (section-break use case).
   // NOT propagated through getCombinedBlockStyle so it can't leak into sibling blocks.
@@ -46,6 +60,14 @@ struct BlockStyle {
   // Return a copy with bottom margins/padding zeroed out.
   [[nodiscard]] BlockStyle withoutBottom() const {
     BlockStyle result = *this;
+    // If Paragraph spacing=None cleared this semantic paragraph's top box,
+    // restore the publisher spacing before the block is laid out. This check
+    // is intentionally pair-wise: an explicitly non-zero live value means no
+    // compact override happened and must be left untouched.
+    if (result.preserveStructuralVerticalSpacing && result.marginTop == 0 && result.paddingTop == 0) {
+      result.marginTop = result.structuralMarginTop;
+      result.paddingTop = result.structuralPaddingTop;
+    }
     result.marginBottom = 0;
     result.paddingBottom = 0;
     return result;
@@ -55,8 +77,14 @@ struct BlockStyle {
   // Uses CSS margin collapsing: adjacent parent-child margins resolve to the larger value.
   [[nodiscard]] BlockStyle addBottom(const BlockStyle& source) const {
     BlockStyle result = *this;
-    result.marginBottom = std::max(marginBottom, source.marginBottom);
-    result.paddingBottom = static_cast<int16_t>(paddingBottom + source.paddingBottom);
+    int16_t sourceMarginBottom = source.marginBottom;
+    int16_t sourcePaddingBottom = source.paddingBottom;
+    if (source.preserveStructuralVerticalSpacing && sourceMarginBottom == 0 && sourcePaddingBottom == 0) {
+      sourceMarginBottom = source.structuralMarginBottom;
+      sourcePaddingBottom = source.structuralPaddingBottom;
+    }
+    result.marginBottom = std::max(marginBottom, sourceMarginBottom);
+    result.paddingBottom = static_cast<int16_t>(paddingBottom + sourcePaddingBottom);
     return result;
   }
 
@@ -124,6 +152,19 @@ struct BlockStyle {
     blockStyle.paddingBottom = cssStyle.paddingBottom.toPixelsInt16(emSize, vw);
     blockStyle.paddingLeft = resolveHorizontalInset(cssStyle.paddingLeft);
     blockStyle.paddingRight = resolveHorizontalInset(cssStyle.paddingRight);
+
+    // An explicit centered/right-aligned paragraph is commonly structural
+    // typography (FB2 title/subtitle/text-author/date) rather than body prose.
+    // Preserve only those cases; left/justify body paragraphs stay compact.
+    blockStyle.preserveStructuralVerticalSpacing =
+        cssStyle.hasTextAlign() &&
+        (cssStyle.textAlign == CssTextAlign::Center || cssStyle.textAlign == CssTextAlign::Right);
+    if (blockStyle.preserveStructuralVerticalSpacing) {
+      blockStyle.structuralMarginTop = blockStyle.marginTop;
+      blockStyle.structuralMarginBottom = blockStyle.marginBottom;
+      blockStyle.structuralPaddingTop = blockStyle.paddingTop;
+      blockStyle.structuralPaddingBottom = blockStyle.paddingBottom;
+    }
 
     // For textIndent: if it's a percentage we can't resolve (no viewport width),
     // leave textIndentDefined=false so the space-width fallback in resolveFirstLineIndent() is used

@@ -7,9 +7,9 @@
 
 namespace FsHelpers {
 
-std::string decodeUriEscapes(const std::string& path);
+std::string decodeUriEscapes(std::string_view path);
 
-std::string normalisePath(const std::string& path);
+std::string normalisePath(std::string_view path);
 
 void sortFileList(std::vector<std::string>& strs);
 

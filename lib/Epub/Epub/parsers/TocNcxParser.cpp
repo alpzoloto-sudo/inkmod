@@ -4,6 +4,8 @@
 #include <Logging.h>
 #include <XmlParserUtils.h>
 
+#include <string_view>
+
 #include "Epub/BookMetadataCache.h"
 
 bool TocNcxParser::setup() {
@@ -12,6 +14,11 @@ bool TocNcxParser::setup() {
     LOG_DBG("TOC", "Couldn't allocate memory for parser");
     return false;
   }
+
+  currentLabel.reserve(96);
+  currentSrc.reserve(128);
+  currentTarget.reserve(baseContentPath.size() + 128);
+  currentAnchor.reserve(48);
 
   XML_SetUserData(parser, this);
   XML_SetElementHandler(parser, startElement, endElement);
@@ -30,17 +37,9 @@ size_t TocNcxParser::write(const uint8_t* buffer, const size_t size) {
   auto remainingInBuffer = size;
 
   while (remainingInBuffer > 0) {
-    void* const buf = XML_GetBuffer(parser, 1024);
-    if (!buf) {
-      LOG_DBG("TOC", "Couldn't allocate memory for buffer");
-      destroyXmlParser(parser);
-      return 0;
-    }
-
     const auto toRead = remainingInBuffer < 1024 ? remainingInBuffer : 1024;
-    memcpy(buf, currentBufferPos, toRead);
-
-    if (XML_ParseBuffer(parser, static_cast<int>(toRead), remainingSize == toRead) == XML_STATUS_ERROR) {
+    if (XML_Parse(parser, reinterpret_cast<const char*>(currentBufferPos), static_cast<int>(toRead),
+                  remainingSize == toRead) == XML_STATUS_ERROR) {
       LOG_DBG("TOC", "Parse error at line %lu: %s", XML_GetCurrentLineNumber(parser),
               XML_ErrorString(XML_GetErrorCode(parser)));
       destroyXmlParser(parser);
@@ -55,20 +54,6 @@ size_t TocNcxParser::write(const uint8_t* buffer, const size_t size) {
 }
 
 void XMLCALL TocNcxParser::startElement(void* userData, const XML_Char* name, const XML_Char** atts) {
-  // NOTE: We rely on navPoint label and content coming before any nested navPoints, this will be fine:
-  // <navPoint>
-  //   <navLabel><text>Chapter 1</text></navLabel>
-  //   <content src="ch1.html"/>
-  //   <navPoint> ...nested... </navPoint>
-  // </navPoint>
-  //
-  // This will NOT:
-  // <navPoint>
-  //   <navPoint> ...nested... </navPoint>
-  //   <navLabel><text>Chapter 1</text></navLabel>
-  //   <content src="ch1.html"/>
-  // </navPoint>
-
   auto* self = static_cast<TocNcxParser*>(userData);
 
   if (self->state == START && strcmp(name, "ncx") == 0) {
@@ -81,11 +66,9 @@ void XMLCALL TocNcxParser::startElement(void* userData, const XML_Char* name, co
     return;
   }
 
-  // Handles both top-level and nested navPoints
   if ((self->state == IN_NAV_MAP || self->state == IN_NAV_POINT) && strcmp(name, "navPoint") == 0) {
     self->state = IN_NAV_POINT;
     self->currentDepth++;
-
     self->currentLabel.clear();
     self->currentSrc.clear();
     return;
@@ -141,25 +124,23 @@ void XMLCALL TocNcxParser::endElement(void* userData, const XML_Char* name) {
   }
 
   if (self->state == IN_NAV_POINT && strcmp(name, "content") == 0) {
-    // At this point (end of content tag), we likely have both Label (from previous tags) and Src.
-    // This is the safest place to push the data, assuming <navLabel> always comes before <content>.
-    // NCX spec says navLabel comes before content.
     if (!self->currentLabel.empty() && !self->currentSrc.empty()) {
-      const std::string rawTarget = self->baseContentPath + self->currentSrc;
-      const size_t pos = rawTarget.find('#');
-      const std::string rawPath = pos == std::string::npos ? rawTarget : rawTarget.substr(0, pos);
-      std::string href = FsHelpers::normalisePath(FsHelpers::decodeUriEscapes(rawPath));
-      std::string anchor;
+      self->currentTarget.clear();
+      self->currentTarget.append(self->baseContentPath);
+      self->currentTarget.append(self->currentSrc);
 
+      const size_t pos = self->currentTarget.find('#');
+      self->currentAnchor.clear();
       if (pos != std::string::npos) {
-        anchor = FsHelpers::decodeUriEscapes(rawTarget.substr(pos + 1));
+        self->currentAnchor = FsHelpers::decodeUriEscapes(std::string_view{self->currentTarget}.substr(pos + 1));
+        self->currentTarget.resize(pos);
       }
+      std::string href = FsHelpers::normalisePath(FsHelpers::decodeUriEscapes(self->currentTarget));
 
       if (self->cache) {
-        self->cache->createTocEntry(self->currentLabel, href, anchor, self->currentDepth);
+        self->cache->createTocEntry(self->currentLabel, href, self->currentAnchor, self->currentDepth);
       }
 
-      // Clear them so we don't re-add them if there are weird XML structures
       self->currentLabel.clear();
       self->currentSrc.clear();
     }

@@ -41,10 +41,10 @@ bool ClippingStore::loadForBook(const std::string& filePath, const std::string& 
 }
 
 bool ClippingStore::load() {
-  if (storePath_.empty() || !Storage.exists(storePath_.c_str())) return true;
+  if (storePath_.empty()) return true;
 
   FsFile file;
-  if (!Storage.openFileForRead("CLIP", storePath_, file)) return false;
+  if (!Storage.openFileForRead("CLIP", storePath_, file)) return true;
 
   uint8_t version = 0;
   uint16_t count = 0;
@@ -63,7 +63,10 @@ bool ClippingStore::load() {
   }
 
   clippings_.clear();
-  clippings_.reserve(std::min<size_t>(count, 16));
+  // The validated file header already tells us the final vector size. Reserve
+  // it exactly so books with many clippings do not repeatedly grow/copy the
+  // vector while loading; the final memory footprint is unchanged.
+  clippings_.reserve(count);
   for (uint16_t i = 0; i < count; ++i) {
     Clipping clipping;
     if (!readFixed(file, &clipping, sizeof(clipping))) {
@@ -104,8 +107,9 @@ bool ClippingStore::save() const {
     if (!ok) break;
     ok = writeFixed(file, &clipping, sizeof(clipping));
   }
-  ok = ok && file.sync();
-  file.close();
+
+  const bool closed = file.close();
+  ok = ok && closed;
 
   if (!ok) {
     Storage.remove(tmpPath.c_str());
@@ -144,15 +148,10 @@ bool ClippingStore::appendKindleExport(const Clipping& clipping) const {
   }
   file.print(clipping.text);
   file.print("\r\n==========\r\n");
-  const bool ok = file.sync();
-  file.close();
-  return ok;
+  return file.close();
 }
 
 ClippingStore::AddResult ClippingStore::add(const Clipping& clipping) {
-  // Creating exactly the same clipping again acts as a toggle. This gives the
-  // reader an obvious way to remove a highlight directly from the page,
-  // without first visiting the clippings list.
   const auto sameRange = [&clipping](const Clipping& existing) {
     return existing.spineIndex == clipping.spineIndex &&
            existing.pageNumber == clipping.pageNumber &&
@@ -179,7 +178,7 @@ ClippingStore::AddResult ClippingStore::add(const Clipping& clipping) {
     clippings_.pop_back();
     return AddResult::SaveFailed;
   }
-  appendKindleExport(clipping);  // Export remains Kindle-style append-only.
+  appendKindleExport(clipping);
   return AddResult::Added;
 }
 

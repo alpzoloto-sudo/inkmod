@@ -5,29 +5,27 @@
 #include <MD5Builder.h>
 
 namespace {
-// Extract filename from path (everything after last '/')
-std::string getFilename(const std::string& path) {
+const char* getFilenamePtr(const std::string& path) {
   const size_t pos = path.rfind('/');
-  if (pos == std::string::npos) {
-    return path;
-  }
-  return path.substr(pos + 1);
+  return path.c_str() + (pos == std::string::npos ? 0 : pos + 1);
 }
 }  // namespace
 
 std::string KOReaderDocumentId::calculateFromFilename(const std::string& filePath) {
-  const std::string filename = getFilename(filePath);
-  if (filename.empty()) {
+  // The basename is already the null-terminated suffix of filePath, so hash it
+  // in place instead of allocating/copying a temporary std::string.
+  const char* filename = getFilenamePtr(filePath);
+  if (!filename || *filename == '\0') {
     return "";
   }
 
   MD5Builder md5;
   md5.begin();
-  md5.add(filename.c_str());
+  md5.add(filename);
   md5.calculate();
 
   std::string result = md5.toString().c_str();
-  LOG_DBG("KODoc", "Filename hash: %s (from '%s')", result.c_str(), filename.c_str());
+  LOG_DBG("KODoc", "Filename hash: %s (from '%s')", result.c_str(), filename);
   return result;
 }
 

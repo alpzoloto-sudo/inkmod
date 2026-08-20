@@ -70,8 +70,24 @@ inline bool endsWithIgnoreCase(const char* value, const char* suffix) {
   return true;
 }
 
+inline bool tailMatchesIgnoreCase(const char* value, const size_t valueLen, const char* suffix,
+                                  const size_t suffixLen) {
+  if (suffixLen > valueLen) return false;
+  const char* valueTail = value + valueLen - suffixLen;
+  for (size_t i = 0; i < suffixLen; ++i) {
+    if (asciiLower(valueTail[i]) != asciiLower(suffix[i])) return false;
+  }
+  return true;
+}
+
 inline bool isJpegSource(const char* source) {
-  return endsWithIgnoreCase(source, ".jpg") || endsWithIgnoreCase(source, ".jpeg");
+  if (!source) return false;
+  // Inline-image checks are on a hot render path. Compute the source length
+  // once and use compile-time literal lengths instead of running strlen() for
+  // both .jpg and .jpeg probes.
+  const size_t sourceLen = strlen(source);
+  return tailMatchesIgnoreCase(source, sourceLen, ".jpg", sizeof(".jpg") - 1) ||
+         tailMatchesIgnoreCase(source, sourceLen, ".jpeg", sizeof(".jpeg") - 1);
 }
 
 inline HeapRequirement epubInlineImageRequirementForSource(const char* source) {

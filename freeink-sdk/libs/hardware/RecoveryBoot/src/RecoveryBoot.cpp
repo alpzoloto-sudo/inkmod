@@ -25,17 +25,32 @@ namespace {
 // the ladder correctly. That lets this run as the first line of setup().
 constexpr int kSettleSamples = 16;  // max polls while debounce warms up
 constexpr int kConfirmSamples = 5;  // consecutive holds required (~30 ms)
+constexpr int kIdleExitSamples = 2; // stable no-button samples before fast normal boot
 
 bool comboHeld() {
   InputManager input;
   input.begin();
   int consecutive = 0;
+  int idleSamples = 0;
   for (int i = 0; i < kSettleSamples; ++i) {
     input.update();  // applies debounce; currentState lags the first poll or two
-    const bool held =
-        input.isPressed(InputManager::BTN_BACK) && input.isPressed(InputManager::BTN_UP);
+    const bool backHeld = input.isPressed(InputManager::BTN_BACK);
+    const bool upHeld = input.isPressed(InputManager::BTN_UP);
+    const bool held = backHeld && upHeld;
     consecutive = held ? consecutive + 1 : 0;
     if (consecutive >= kConfirmSamples) return true;
+
+    // Normal boots overwhelmingly have no recovery buttons held. Once two
+    // consecutive samples are stably idle and there is no raw state waiting
+    // inside the 5 ms debounce window, there is nothing for the remaining
+    // settle polls to discover. A real held combo makes debounce pending on the
+    // first sample, so it continues through the normal confirmation path.
+    if (!backHeld && !upHeld && !input.isDebouncePending()) {
+      if (++idleSamples >= kIdleExitSamples) return false;
+    } else {
+      idleSamples = 0;
+    }
+
     delay(6);
   }
   return false;

@@ -5,6 +5,7 @@
 inline bool isPowerButtonActionAvailableOutsideReader(const InkMODSettings::SHORT_PWRBTN action) {
   switch (action) {
     case InkMODSettings::SHORT_PWRBTN::SLEEP:
+    case InkMODSettings::SHORT_PWRBTN::QUICK_RESUME_SLEEP:
     case InkMODSettings::SHORT_PWRBTN::FORCE_REFRESH:
     case InkMODSettings::SHORT_PWRBTN::SYNC_PROGRESS:
     case InkMODSettings::SHORT_PWRBTN::SCREENSHOT:

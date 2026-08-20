@@ -12,6 +12,7 @@ from the source distribution included in the build.
 | ArduinoJson | settings/network JSON | Declared PlatformIO dependency | Keep out of reader core unless a reader cache format explicitly needs it |
 | PNGdec / JPEGDEC | image conversion | Declared PlatformIO dependencies | Do not copy decoder code; invoke through a renderer/image adapter |
 | expat, uzlib, InflateReader, ZipFile | XML/ZIP infrastructure | Mixed local/vendor history; per-file provenance review required | Reuse through narrow stream interfaces; record licence before any relocation |
+| DejaVu Sans | Built-in 12 pt reader font (regular, bold, italic, bold-italic), compiled into generated font headers under `lib/EpdFont/builtinFonts/` | DejaVu changes are public domain; underlying Bitstream Vera glyphs retain the Bitstream Vera font licence, with any Arev-derived glyphs retaining Tavmjong Bah's notice. Full bundled text: `freeink-sdk/libs/book/FreeInkBook/test/fixtures/fonts/DEJAVU-LICENSE` | Keep the licence text in the source distribution and preserve required copyright/trademark notices when redistributing the embedded/generated font data |
 | Fonts and generated font headers | UI and book glyphs | Assets may have their own licences | Keep source/font licence next to a manifest; do not assume MIT from firmware licence |
 
 ## Review checklist for every migration PR

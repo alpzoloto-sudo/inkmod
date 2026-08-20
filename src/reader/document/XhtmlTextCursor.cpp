@@ -11,8 +11,7 @@ bool asciiEqualIgnoreCase(const char left, const char right) {
   return normalized == right;
 }
 
-bool beginsTag(const char* const tag, const size_t len, const char* const expected) {
-  const size_t expectedLen = std::strlen(expected);
+bool beginsTag(const char* const tag, const size_t len, const char* const expected, const size_t expectedLen) {
   if (len < expectedLen) return false;
   for (size_t i = 0; i < expectedLen; ++i) {
     if (!asciiEqualIgnoreCase(tag[i], expected[i])) return false;
@@ -27,6 +26,84 @@ uint32_t fnv1a(const char* const value, const size_t len) {
     hash *= 16777619U;
   }
   return hash == 0 ? 1U : hash;
+}
+
+enum class TagKind : uint8_t {
+  Other,
+  Img,
+  Br,
+  P,
+  Div,
+  Li,
+  H1,
+  H2,
+  H3,
+  H4,
+  H5,
+  H6,
+  Blockquote,
+  Pre,
+  Em,
+  I,
+  Strong,
+  B,
+};
+
+TagKind classifyTag(const char* const tag, const size_t len) {
+  if (!tag || len == 0) return TagKind::Other;
+
+  // XHTML tag names are ASCII. Dispatch by first letter and pass compile-time
+  // literal lengths so this hot path does not call strlen() for every tag.
+  char first = tag[0];
+  if (first >= 'A' && first <= 'Z') first = static_cast<char>(first + ('a' - 'A'));
+
+  switch (first) {
+    case 'b':
+      if (beginsTag(tag, len, "br", 2)) return TagKind::Br;
+      if (beginsTag(tag, len, "blockquote", 10)) return TagKind::Blockquote;
+      if (beginsTag(tag, len, "b", 1)) return TagKind::B;
+      break;
+    case 'd':
+      if (beginsTag(tag, len, "div", 3)) return TagKind::Div;
+      break;
+    case 'e':
+      if (beginsTag(tag, len, "em", 2)) return TagKind::Em;
+      break;
+    case 'h':
+      if (beginsTag(tag, len, "h1", 2)) return TagKind::H1;
+      if (beginsTag(tag, len, "h2", 2)) return TagKind::H2;
+      if (beginsTag(tag, len, "h3", 2)) return TagKind::H3;
+      if (beginsTag(tag, len, "h4", 2)) return TagKind::H4;
+      if (beginsTag(tag, len, "h5", 2)) return TagKind::H5;
+      if (beginsTag(tag, len, "h6", 2)) return TagKind::H6;
+      break;
+    case 'i':
+      if (beginsTag(tag, len, "img", 3)) return TagKind::Img;
+      if (beginsTag(tag, len, "i", 1)) return TagKind::I;
+      break;
+    case 'l':
+      if (beginsTag(tag, len, "li", 2)) return TagKind::Li;
+      break;
+    case 'p':
+      if (beginsTag(tag, len, "pre", 3)) return TagKind::Pre;
+      if (beginsTag(tag, len, "p", 1)) return TagKind::P;
+      break;
+    case 's':
+      if (beginsTag(tag, len, "strong", 6)) return TagKind::Strong;
+      break;
+    default:
+      break;
+  }
+  return TagKind::Other;
+}
+
+bool isHeading(const TagKind kind) {
+  return kind >= TagKind::H1 && kind <= TagKind::H6;
+}
+
+bool isBlockTag(const TagKind kind) {
+  return kind == TagKind::P || kind == TagKind::Div || kind == TagKind::Li || kind == TagKind::Blockquote ||
+         kind == TagKind::Pre || isHeading(kind);
 }
 
 }  // namespace
@@ -76,7 +153,7 @@ bool XhtmlTextCursor::isSpace(const char value) {
 }
 
 bool XhtmlTextCursor::tagNameEquals(const char* const tag, const size_t len, const char* const expected) {
-  return beginsTag(tag, len, expected);
+  return beginsTag(tag, len, expected, std::strlen(expected));
 }
 
 uint32_t XhtmlTextCursor::imageResourceId(const char* const tag, const size_t len) {
@@ -103,13 +180,14 @@ uint32_t XhtmlTextCursor::imageResourceId(const char* const tag, const size_t le
 void XhtmlTextCursor::handleTag() {
   size_t start = 0;
   while (start < tagSize_ && isSpace(tag_[start])) ++start;
-  bool closing = start < tagSize_ && tag_[start] == '/';
+  const bool closing = start < tagSize_ && tag_[start] == '/';
   if (closing) ++start;
   while (start < tagSize_ && isSpace(tag_[start])) ++start;
   const char* const name = tag_.data() + start;
   const size_t nameLen = tagSize_ - start;
+  const TagKind kind = classifyTag(name, nameLen);
 
-  if (!closing && tagNameEquals(name, nameLen, "img")) {
+  if (!closing && kind == TagKind::Img) {
     const uint32_t resource = imageResourceId(name, nameLen);
     if (resource != 0) {
       pendingImage_ = {.value = resource};
@@ -117,45 +195,40 @@ void XhtmlTextCursor::handleTag() {
     }
     return;
   }
-  if (!closing && tagNameEquals(name, nameLen, "br")) {
+  if (!closing && kind == TagKind::Br) {
     pageBreakPending_ = true;
     return;
   }
-  if (!closing && (tagNameEquals(name, nameLen, "p") || tagNameEquals(name, nameLen, "div") ||
-                   tagNameEquals(name, nameLen, "li"))) {
-    blockBoundaryPending_ = true;
-    activeType_ = NodeType::Paragraph;
-    activeStyle_ = {};
-  } else if (!closing && (tagNameEquals(name, nameLen, "h1") || tagNameEquals(name, nameLen, "h2") ||
-                          tagNameEquals(name, nameLen, "h3") || tagNameEquals(name, nameLen, "h4") ||
-                          tagNameEquals(name, nameLen, "h5") || tagNameEquals(name, nameLen, "h6"))) {
-    blockBoundaryPending_ = true;
-    activeType_ = NodeType::Heading;
-    activeStyle_ = {.bold = true, .fontScalePermille = 1250};
-  } else if (!closing && tagNameEquals(name, nameLen, "blockquote")) {
-    blockBoundaryPending_ = true;
-    activeType_ = NodeType::Quote;
-    activeStyle_ = {.italic = true};
-  } else if (!closing && tagNameEquals(name, nameLen, "pre")) {
-    blockBoundaryPending_ = true;
-    activeType_ = NodeType::CodeBlock;
-    activeStyle_ = {};
-  } else if (!closing && (tagNameEquals(name, nameLen, "em") || tagNameEquals(name, nameLen, "i"))) {
-    activeStyle_.italic = true;
-  } else if (!closing && (tagNameEquals(name, nameLen, "strong") || tagNameEquals(name, nameLen, "b"))) {
-    activeStyle_.bold = true;
-  } else if (closing && (tagNameEquals(name, nameLen, "em") || tagNameEquals(name, nameLen, "i"))) {
-    activeStyle_.italic = false;
-  } else if (closing && (tagNameEquals(name, nameLen, "strong") || tagNameEquals(name, nameLen, "b"))) {
-    activeStyle_.bold = false;
-  }
-  if (closing && (tagNameEquals(name, nameLen, "p") || tagNameEquals(name, nameLen, "div") ||
-                  tagNameEquals(name, nameLen, "li") || tagNameEquals(name, nameLen, "blockquote") ||
-                  tagNameEquals(name, nameLen, "pre") || tagNameEquals(name, nameLen, "h1") ||
-                  tagNameEquals(name, nameLen, "h2") || tagNameEquals(name, nameLen, "h3") ||
-                  tagNameEquals(name, nameLen, "h4") || tagNameEquals(name, nameLen, "h5") ||
-                  tagNameEquals(name, nameLen, "h6"))) {
-    blockBoundaryPending_ = true;
+
+  if (!closing) {
+    if (kind == TagKind::P || kind == TagKind::Div || kind == TagKind::Li) {
+      blockBoundaryPending_ = true;
+      activeType_ = NodeType::Paragraph;
+      activeStyle_ = {};
+    } else if (isHeading(kind)) {
+      blockBoundaryPending_ = true;
+      activeType_ = NodeType::Heading;
+      activeStyle_ = {.bold = true, .fontScalePermille = 1250};
+    } else if (kind == TagKind::Blockquote) {
+      blockBoundaryPending_ = true;
+      activeType_ = NodeType::Quote;
+      activeStyle_ = {.italic = true};
+    } else if (kind == TagKind::Pre) {
+      blockBoundaryPending_ = true;
+      activeType_ = NodeType::CodeBlock;
+      activeStyle_ = {};
+    } else if (kind == TagKind::Em || kind == TagKind::I) {
+      activeStyle_.italic = true;
+    } else if (kind == TagKind::Strong || kind == TagKind::B) {
+      activeStyle_.bold = true;
+    }
+  } else {
+    if (kind == TagKind::Em || kind == TagKind::I) {
+      activeStyle_.italic = false;
+    } else if (kind == TagKind::Strong || kind == TagKind::B) {
+      activeStyle_.bold = false;
+    }
+    if (isBlockTag(kind)) blockBoundaryPending_ = true;
   }
 }
 

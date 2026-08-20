@@ -74,12 +74,10 @@ inline bool saveProgress(Epub& epub, int spineIndex, int pageNumber, int pageCou
   const std::string tmpPath = progressPath + ".tmp";
   const std::string backupPath = progressPath + ".bak";
 
-  if (Storage.exists(tmpPath.c_str()) && !Storage.remove(tmpPath.c_str())) {
-    LOG_ERR("ERS", "Could not remove stale progress temp file");
-    return false;
-  }
-
   FsFile f;
+  // openFileForWrite uses O_CREAT | O_TRUNC, so it safely replaces a stale
+  // progress temp file left by a reset. Avoid the previous exists()+remove()
+  // metadata round-trip on every page turn.
   if (!Storage.openFileForWrite("ERS", tmpPath, f)) {
     LOG_ERR("ERS", "Could not open progress temp file for write!");
     return false;
@@ -98,25 +96,31 @@ inline bool saveProgress(Epub& epub, int spineIndex, int pageNumber, int pageCou
     Storage.remove(tmpPath.c_str());
     return false;
   }
-  f.flush();
-  if (!f.sync()) {
-    LOG_ERR("ERS", "Failed to sync progress temp file");
-    f.close();
-    Storage.remove(tmpPath.c_str());
-    return false;
-  }
+
+  // SdFat FatFile::close() and ExFatFile::close() both call sync() internally.
+  // An explicit sync here therefore wrote the same six-byte update twice on
+  // every page turn. close() preserves the durability guarantee and reports
+  // sync failure, so one storage flush is sufficient before atomic rotation.
   if (!f.close()) {
-    LOG_ERR("ERS", "Failed to close progress temp file");
+    LOG_ERR("ERS", "Failed to close/sync progress temp file");
     Storage.remove(tmpPath.c_str());
     return false;
   }
 
-  if (Storage.exists(backupPath.c_str()) && !Storage.remove(backupPath.c_str())) {
+  // The backup normally exists after the first saved page. Try the operation
+  // first and only probe metadata when it fails. This preserves the old error
+  // detection while removing one exists() call from the common path.
+  if (!Storage.remove(backupPath.c_str()) && Storage.exists(backupPath.c_str())) {
     LOG_ERR("ERS", "Could not remove old progress backup");
     Storage.remove(tmpPath.c_str());
     return false;
   }
-  if (Storage.exists(progressPath.c_str()) && !Storage.rename(progressPath.c_str(), backupPath.c_str())) {
+
+  // Same idea for the current progress file: a successful rename needs no
+  // preceding exists() query. On the very first save rename() may fail because
+  // there is no old progress file; only then do we check whether that is the
+  // harmless missing-file case or a real rename failure.
+  if (!Storage.rename(progressPath.c_str(), backupPath.c_str()) && Storage.exists(progressPath.c_str())) {
     LOG_ERR("ERS", "Could not rotate progress backup");
     Storage.remove(tmpPath.c_str());
     return false;

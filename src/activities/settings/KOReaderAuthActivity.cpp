@@ -4,6 +4,10 @@
 #include <I18n.h>
 #include <WiFi.h>
 
+#include <algorithm>
+#include <string>
+#include <vector>
+
 #include "KOReaderCredentialStore.h"
 #include "KOReaderSyncClient.h"
 #include "MappedInputManager.h"
@@ -12,6 +16,55 @@
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+
+namespace {
+std::vector<std::string> wrapCenteredMessage(const GfxRenderer& renderer, const std::string& text, const int maxWidth,
+                                             const size_t maxLines = 3) {
+  std::vector<std::string> lines;
+  if (text.empty() || maxWidth <= 0 || maxLines == 0) return lines;
+
+  size_t pos = 0;
+  while (pos < text.size() && lines.size() < maxLines) {
+    while (pos < text.size() && text[pos] == ' ') ++pos;
+    if (pos >= text.size()) break;
+
+    size_t bestEnd = pos;
+    size_t scan = pos;
+    while (scan < text.size()) {
+      size_t wordEnd = text.find(' ', scan);
+      if (wordEnd == std::string::npos) wordEnd = text.size();
+      const std::string candidate = text.substr(pos, wordEnd - pos);
+      if (renderer.getTextWidth(UI_10_FONT_ID, candidate.c_str()) > maxWidth) break;
+      bestEnd = wordEnd;
+      if (wordEnd == text.size()) break;
+      scan = wordEnd + 1;
+    }
+
+    if (bestEnd == pos) {
+      // A single unbroken token (URL/error code) can be wider than the screen.
+      // Fall back to the renderer's UTF-8-safe truncation rather than drawing
+      // outside the panel.
+      std::string remaining = text.substr(pos);
+      lines.push_back(renderer.truncatedText(UI_10_FONT_ID, remaining.c_str(), maxWidth));
+      pos = text.size();
+      break;
+    }
+
+    lines.push_back(text.substr(pos, bestEnd - pos));
+    pos = bestEnd;
+  }
+
+  if (pos < text.size() && !lines.empty()) {
+    // The message needs more lines than the compact error area allows. Keep
+    // the last visible line inside the screen and make the truncation clear.
+    const std::string suffix = "...";
+    const int suffixWidth = renderer.getTextWidth(UI_10_FONT_ID, suffix.c_str());
+    const int available = std::max(1, maxWidth - suffixWidth);
+    lines.back() = renderer.truncatedText(UI_10_FONT_ID, lines.back().c_str(), available) + suffix;
+  }
+  return lines;
+}
+}  // namespace
 
 void KOReaderAuthActivity::onWifiSelectionComplete(const bool success) {
   if (!success) {
@@ -92,8 +145,18 @@ void KOReaderAuthActivity::render(RenderLock&&) {
     renderer.drawCenteredText(UI_10_FONT_ID, top, tr(STR_AUTH_SUCCESS), true, EpdFontFamily::BOLD);
     renderer.drawCenteredText(UI_10_FONT_ID, top + height + 10, tr(STR_SYNC_READY));
   } else if (state == FAILED) {
-    renderer.drawCenteredText(UI_10_FONT_ID, top, tr(STR_AUTH_FAILED), true, EpdFontFamily::BOLD);
-    renderer.drawCenteredText(UI_10_FONT_ID, top + height + 10, errorMessage.c_str());
+    constexpr int sideMargin = 24;
+    constexpr int messageGap = 8;
+    const int maxTextWidth = std::max(1, pageWidth - sideMargin * 2);
+    const auto lines = wrapCenteredMessage(renderer, errorMessage, maxTextWidth);
+    const int totalMessageHeight = static_cast<int>(lines.size()) * height;
+    const int titleY = top - totalMessageHeight / 2;
+    renderer.drawCenteredText(UI_10_FONT_ID, titleY, tr(STR_AUTH_FAILED), true, EpdFontFamily::BOLD);
+    int lineY = titleY + height + messageGap;
+    for (const auto& line : lines) {
+      renderer.drawCenteredText(UI_10_FONT_ID, lineY, line.c_str());
+      lineY += height;
+    }
   }
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");

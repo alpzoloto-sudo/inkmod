@@ -43,26 +43,23 @@ bool InkMODState::saveToFile() const {
 }
 
 bool InkMODState::loadFromFile() {
-  // Try JSON first
-  if (Storage.exists(STATE_FILE_JSON)) {
-    String json = Storage.readFile(STATE_FILE_JSON);
-    if (!json.isEmpty()) {
-      return JsonSettingsIO::loadState(*this, json.c_str());
-    }
+  // readFile() already performs the open, so probing with exists() first only
+  // doubles the FAT lookup during every normal boot.
+  String json = Storage.readFile(STATE_FILE_JSON);
+  if (!json.isEmpty()) {
+    return JsonSettingsIO::loadState(*this, json.c_str());
   }
 
-  // Fall back to binary migration
-  if (Storage.exists(STATE_FILE_BIN)) {
-    if (loadFromBinaryFile()) {
-      if (saveToFile()) {
-        Storage.rename(STATE_FILE_BIN, STATE_FILE_BAK);
-        LOG_DBG("CPS", "Migrated state.bin to state.json");
-        return true;
-      } else {
-        LOG_ERR("CPS", "Failed to save state during migration");
-        return false;
-      }
+  // Fall back to binary migration. The loader itself detects a missing file,
+  // avoiding a second exists()+open pair on systems long since migrated.
+  if (loadFromBinaryFile()) {
+    if (saveToFile()) {
+      Storage.rename(STATE_FILE_BIN, STATE_FILE_BAK);
+      LOG_DBG("CPS", "Migrated state.bin to state.json");
+      return true;
     }
+    LOG_ERR("CPS", "Failed to save state during migration");
+    return false;
   }
 
   return false;

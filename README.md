@@ -34,6 +34,8 @@ The project focuses on extending the capabilities of the Xteink X4/X3 while keep
 - Custom reader fonts.
 - Unicode fallback for missing characters when possible.
 - Improved handling of large chapters and image-heavy books.
+- `Paragraph spacing: None` keeps ordinary prose compact while preserving heading and structural spacing when embedded book styles are enabled.
+- Long-press page controls can jump by logical chapter boundaries or by 10 pages.
 - Text clippings for EPUB and FB2.
 - Save and manage selected text excerpts directly on the device.
 - Customizable book menu ordering and visibility.

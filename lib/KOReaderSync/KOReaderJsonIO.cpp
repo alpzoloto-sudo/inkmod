@@ -16,9 +16,18 @@ bool save(const KOReaderCredentialStore& store, const char* path) {
   doc["serverUrl"] = store.getServerUrl();
   doc["matchMethod"] = static_cast<uint8_t>(store.getMatchMethod());
 
-  String json;
-  serializeJson(doc, json);
-  return Storage.writeFile(path, json);
+  FsFile file;
+  if (!Storage.openFileForWrite("KRS", path, file)) {
+    return false;
+  }
+
+  // Serialize straight into the SD file instead of building a second complete
+  // Arduino String first. This reduces peak heap/copying on ESP32-C3 while
+  // preserving the exact same JSON representation on disk.
+  const size_t expected = measureJson(doc);
+  const size_t written = serializeJson(doc, file);
+  const bool closed = file.close();
+  return written == expected && closed;
 }
 
 bool load(KOReaderCredentialStore& store, const char* json, bool* needsResave) {

@@ -27,6 +27,10 @@ uint8_t closestSizeIndex(const std::vector<uint8_t>& sizes, const uint8_t target
 }
 
 uint8_t currentFontPointSize(const SdCardFontRegistry* registry) {
+  if (SETTINGS.sdFontFamilyName[0] == '\0' && SETTINGS.fontFamily == InkMODSettings::TEST_FONTS) {
+    return 12;
+  }
+
   if (registry && SETTINGS.sdFontFamilyName[0] != '\0') {
     const SdCardFontFamilyInfo* family = registry->findFamily(SETTINGS.sdFontFamilyName);
     if (family) {
@@ -49,12 +53,11 @@ FontSelectionActivity::FontSelectionActivity(GfxRenderer& renderer, MappedInputM
 void FontSelectionActivity::onEnter() {
   Activity::onEnter();
 
-  // Font list: SD card fonts only. Built-in reading fonts (LexendDeca/Bitter/
-  // ChareInk) no longer ship with this firmware; InkMODSettings::FONT_FAMILY
-  // is kept only so old settings files still parse, and getBuiltInReaderFontId()
-  // falls back to the UI font (Inter) when no SD font is selected.
+  // DejaVu Sans is the built-in reader font. SD-card families follow it so
+  // the same picker works whether or not the user has installed extra fonts.
   fonts_.clear();
-  fonts_.reserve(registry_ ? registry_->getFamilyCount() : 0);
+  fonts_.reserve(1 + (registry_ ? registry_->getFamilyCount() : 0));
+  fonts_.push_back({"DejaVu Sans", true, static_cast<uint8_t>(InkMODSettings::TEST_FONTS)});
 
   if (registry_) {
     const auto& families = registry_->getFamilies();
@@ -63,13 +66,13 @@ void FontSelectionActivity::onEnter() {
     }
   }
 
-  // Find current selection
+  // Find current selection. DejaVu Sans is index 0; SD-card families start at 1.
   selectedIndex_ = 0;
   if (SETTINGS.sdFontFamilyName[0] != '\0' && registry_) {
     const auto& families = registry_->getFamilies();
     for (int i = 0; i < static_cast<int>(families.size()); i++) {
       if (families[i].name == SETTINGS.sdFontFamilyName) {
-        selectedIndex_ = i;
+        selectedIndex_ = i + 1;
         break;
       }
     }
@@ -123,6 +126,15 @@ void FontSelectionActivity::handleSelection() {
   }
 
   const auto& font = fonts_[selectedIndex_];
+  if (font.isBuiltin) {
+    SETTINGS.fontFamily = InkMODSettings::TEST_FONTS;
+    const uint8_t stored = InkMODSettings::getStoredReaderFontSize(InkMODSettings::SMALL);
+    SETTINGS.fontSize = stored == UINT8_MAX ? 0 : stored;
+    SETTINGS.sdFontFamilyName[0] = '\0';
+    finish();
+    return;
+  }
+
   const uint8_t targetPointSize = currentFontPointSize(registry_);
   if (registry_) {
     const int sdIdx = font.settingIndex - InkMODSettings::BUILTIN_FONT_COUNT;
@@ -141,20 +153,23 @@ void FontSelectionActivity::render(RenderLock&&) {
   renderer.clearScreen();
 
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const auto safeArea = UITheme::getInstance().getScreenSafeArea(renderer, /*hasFrontButtonHints=*/true, /*hasSideButtonHints=*/false);
+  const auto safeArea =
+      UITheme::getInstance().getScreenSafeArea(renderer, /*hasFrontButtonHints=*/true, /*hasSideButtonHints=*/false);
 
-  GUI.drawHeader(renderer, Rect{safeArea.x, metrics.topPadding, safeArea.width, metrics.headerHeight}, tr(STR_FONT_FAMILY));
+  GUI.drawHeader(renderer, Rect{safeArea.x, metrics.topPadding, safeArea.width, metrics.headerHeight},
+                 tr(STR_FONT_FAMILY));
 
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight = safeArea.y + safeArea.height - contentTop - metrics.verticalSpacing;
 
-  // Determine which font index is currently active (to mark as "Selected")
-  int currentFontIndex = -1;
+  // Determine which font index is currently active (to mark as "Selected").
+  int currentFontIndex =
+      (SETTINGS.sdFontFamilyName[0] == '\0' && SETTINGS.fontFamily == InkMODSettings::TEST_FONTS) ? 0 : -1;
   if (SETTINGS.sdFontFamilyName[0] != '\0' && registry_) {
     const auto& families = registry_->getFamilies();
     for (int i = 0; i < static_cast<int>(families.size()); i++) {
       if (families[i].name == SETTINGS.sdFontFamilyName) {
-        currentFontIndex = i;
+        currentFontIndex = i + 1;
         break;
       }
     }

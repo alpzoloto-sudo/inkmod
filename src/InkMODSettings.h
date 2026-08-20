@@ -133,12 +133,13 @@ class InkMODSettings {
     SIDE_LONG_FONT_SIZE = 1,
     SIDE_LONG_OFF = 2,
     SIDE_LONG_ORIENTATION_CHANGE = 3,
+    SIDE_LONG_PAGE_SKIP_10 = 4,
     SIDE_LONG_PRESS_COUNT
   };
 
   // Legacy built-in font values are retained only to read old settings files.
   // Reader fonts are loaded from the SD card via sdFontFamilyName.
-  enum FONT_FAMILY { LEXENDDECA = 0, BITTER = 1, CHAREINK = 2, FONT_FAMILY_COUNT };
+  enum FONT_FAMILY { LEXENDDECA = 0, BITTER = 1, CHAREINK = 2, TEST_FONTS = 3, FONT_FAMILY_COUNT };
   static constexpr uint8_t BUILTIN_FONT_COUNT = FONT_FAMILY_COUNT;
   // Font size options
   enum FONT_SIZE {
@@ -221,6 +222,7 @@ class InkMODSettings {
     JOIN_NETWORK = 19,
     CREATE_HOTSPOT = 20,
     DICTIONARY_LOOKUP = 21,
+    QUICK_RESUME_SLEEP = 22,
     SHORT_PWRBTN_COUNT
   };
 
@@ -233,6 +235,7 @@ class InkMODSettings {
     CHAPTER_SKIP = 1,
     ORIENTATION_CHANGE = 2,
     FONT_SIZE_CHANGE = 3,
+    PAGE_SKIP_10 = 4,
     LONG_PRESS_BUTTON_BEHAVIOR_COUNT
   };
 
@@ -359,7 +362,7 @@ class InkMODSettings {
   // Text rendering settings
   // 0=off, 1=small (legacy ON / current default), 2=medium, 3=large
   uint8_t extraParagraphSpacing = 1;
-  uint8_t forceParagraphIndents = 0;
+  uint8_t forceParagraphIndents = 1;
   uint8_t textAntiAliasing = 1;
   uint8_t readerDarkMode = 0;
   // Short power button action behaviour

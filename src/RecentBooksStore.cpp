@@ -45,20 +45,25 @@ void RecentBooksStore::addBook(const std::string& path, const std::string& title
 
 void RecentBooksStore::addOrUpdateBook(const std::string& path, const std::string& title, const std::string& author,
                                        const std::string& coverBmpPath) {
-  // /My Clippings.txt is an InkMOD export artifact, not a book. Never allow
-  // opening it from the file browser to promote it into Recent Books.
   if (isMyClippingsExportPath(path)) {
-    removeByPath(path);  // also cleans up an entry created by older builds
+    removeByPath(path);
     return;
   }
 
-  // Drop stale entries first so a new add can't evict a valid book in their stead.
-  pruneMissing();
-
-  // Remove existing entry if present
   auto it =
       std::find_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& book) { return book.path == path; });
+
+  if (it == recentBooks.end() && recentBooks.size() >= MAX_RECENT_BOOKS) {
+    pruneMissing();
+    it = recentBooks.end();
+  }
+
   if (it != recentBooks.end()) {
+    // Re-entering/resuming the already-most-recent book is a very common path.
+    // If nothing changed, avoid rewriting the complete recent.json to SD.
+    const bool metadataChanged = it->title != title || it->author != author || it->coverBmpPath != coverBmpPath;
+    if (it == recentBooks.begin() && !metadataChanged) return;
+
     it->title = title;
     it->author = author;
     it->coverBmpPath = coverBmpPath;
@@ -80,10 +85,9 @@ bool RecentBooksStore::updateBook(const std::string& path, const std::string& ti
                                   const std::string& coverBmpPath) {
   auto it =
       std::find_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& book) { return book.path == path; });
-  if (it == recentBooks.end()) {
-    return false;
-  }
+  if (it == recentBooks.end()) return false;
   RecentBook& book = *it;
+  if (book.title == title && book.author == author && book.coverBmpPath == coverBmpPath) return true;
   book.title = title;
   book.author = author;
   book.coverBmpPath = coverBmpPath;
@@ -94,13 +98,9 @@ bool RecentBooksStore::updateBook(const std::string& path, const std::string& ti
 bool RecentBooksStore::removeByPath(const std::string& path) {
   auto it =
       std::find_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& book) { return book.path == path; });
-  if (it == recentBooks.end()) {
-    return false;
-  }
+  if (it == recentBooks.end()) return false;
   recentBooks.erase(it);
-  if (!saveToFile()) {
-    LOG_ERR("RBS", "Failed to persist removal of recent book: %s", path.c_str());
-  }
+  if (!saveToFile()) LOG_ERR("RBS", "Failed to persist removal of recent book: %s", path.c_str());
   return true;
 }
 
@@ -108,13 +108,16 @@ void RecentBooksStore::updatePath(const std::string& oldPath, const std::string&
                                   const std::string& oldCachePath, const std::string& newCachePath) {
   auto it = std::find_if(recentBooks.begin(), recentBooks.end(),
                          [&](const RecentBook& book) { return book.path == oldPath; });
-  if (it == recentBooks.end()) {
-    return;
-  }
-  it->path = newPath;
+  if (it == recentBooks.end()) return;
+
+  std::string nextCoverPath = it->coverBmpPath;
   if (!oldCachePath.empty() && !it->coverBmpPath.empty() && it->coverBmpPath.rfind(oldCachePath, 0) == 0) {
-    it->coverBmpPath = newCachePath + it->coverBmpPath.substr(oldCachePath.size());
+    nextCoverPath = newCachePath + it->coverBmpPath.substr(oldCachePath.size());
   }
+  if (it->path == newPath && it->coverBmpPath == nextCoverPath) return;
+
+  it->path = newPath;
+  it->coverBmpPath = std::move(nextCoverPath);
   saveToFile();
 }
 
@@ -137,29 +140,18 @@ bool RecentBooksStore::saveToFile() const {
 RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
   std::string lastBookFileName = "";
   const size_t lastSlash = path.find_last_of('/');
-  if (lastSlash != std::string::npos) {
-    lastBookFileName = path.substr(lastSlash + 1);
-  }
+  if (lastSlash != std::string::npos) lastBookFileName = path.substr(lastSlash + 1);
 
   LOG_DBG("RBS", "Loading recent book: %s", path.c_str());
+  if (isMyClippingsExportPath(path)) return RecentBook{path, "", "", ""};
 
-  if (isMyClippingsExportPath(path)) {
-    return RecentBook{path, "", "", ""};
-  }
-
-  // If epub, try to load the metadata for title/author and cover.
-  // Use buildIfMissing=false to avoid heavy epub loading on boot; getTitle()/getAuthor() may be
-  // blank until the book is opened, and entries with missing title are omitted from recent list.
   if (FsHelpers::hasEpubExtension(lastBookFileName)) {
     Epub epub(path, "/.inkmod");
     epub.load(false, true);
     return RecentBook{path, epub.getTitle(), epub.getAuthor(), epub.getThumbBmpPath()};
   } else if (FsHelpers::hasXtcExtension(lastBookFileName)) {
-    // Handle XTC file
     Xtc xtc(path, "/.inkmod");
-    if (xtc.load()) {
-      return RecentBook{path, xtc.getTitle(), xtc.getAuthor(), xtc.getThumbBmpPath()};
-    }
+    if (xtc.load()) return RecentBook{path, xtc.getTitle(), xtc.getAuthor(), xtc.getThumbBmpPath()};
   } else if (FsHelpers::hasTxtExtension(lastBookFileName) || FsHelpers::hasMarkdownExtension(lastBookFileName)) {
     return RecentBook{path, lastBookFileName, "", ""};
   }
@@ -167,56 +159,51 @@ RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
 }
 
 bool RecentBooksStore::loadFromFile() {
-  // Try JSON first
-  if (Storage.exists(RECENT_BOOKS_FILE_JSON)) {
-    String json = Storage.readFile(RECENT_BOOKS_FILE_JSON);
-    if (!json.isEmpty()) {
-      if (!JsonSettingsIO::loadRecentBooks(*this, json.c_str())) {
-        return false;
-      }
-      if (pruneMissing()) {
-        LOG_DBG("RBS", "Removed non-book export/stale entries from recents");
-        saveToFile();
-      }
-      return true;
-    }
-  }
+  String json = Storage.readFile(RECENT_BOOKS_FILE_JSON);
+  if (!json.isEmpty()) {
+    if (!JsonSettingsIO::loadRecentBooks(*this, json.c_str())) return false;
 
-  // Fall back to binary migration
-  if (Storage.exists(RECENT_BOOKS_FILE_BIN)) {
-    if (loadFromBinaryFile()) {
+    // Keep filtering non-book export artifacts immediately, because those can
+    // physically exist and therefore would pass Home's later existence check.
+    // This is string-only and performs zero SD lookups. Missing real books are
+    // deliberately pruned lazily by the screens / full-list insertion path.
+    const size_t before = recentBooks.size();
+    recentBooks.erase(std::remove_if(recentBooks.begin(), recentBooks.end(),
+                                     [](const RecentBook& book) { return isMyClippingsExportPath(book.path); }),
+                      recentBooks.end());
+    if (recentBooks.size() != before) {
+      LOG_DBG("RBS", "Removed non-book export entries from recents");
       saveToFile();
-      Storage.rename(RECENT_BOOKS_FILE_BIN, RECENT_BOOKS_FILE_BAK);
-      LOG_DBG("RBS", "Migrated recent.bin to recent.json");
-      return true;
     }
+    return true;
   }
 
+  if (loadFromBinaryFile()) {
+    saveToFile();
+    Storage.rename(RECENT_BOOKS_FILE_BIN, RECENT_BOOKS_FILE_BAK);
+    LOG_DBG("RBS", "Migrated recent.bin to recent.json");
+    return true;
+  }
   return false;
 }
 
 bool RecentBooksStore::loadFromBinaryFile() {
   HalFile inputFile;
-  if (!Storage.openFileForRead("RBS", RECENT_BOOKS_FILE_BIN, inputFile)) {
-    return false;
-  }
+  if (!Storage.openFileForRead("RBS", RECENT_BOOKS_FILE_BIN, inputFile)) return false;
 
   uint8_t version;
   serialization::readPod(inputFile, version);
   if (version == 1 || version == 2) {
-    // Old version, just read paths
     uint8_t count;
     serialization::readPod(inputFile, count);
+    const size_t loadCount = std::min<size_t>(count, MAX_RECENT_BOOKS);
     recentBooks.clear();
-    recentBooks.reserve(count);
-    for (uint8_t i = 0; i < count; i++) {
+    recentBooks.reserve(loadCount);
+    for (size_t i = 0; i < loadCount; i++) {
       std::string path;
       serialization::readString(inputFile, path);
-
-      // load book to get missing data
       RecentBook book = getDataFromBook(path);
       if (book.title.empty() && book.author.empty() && version == 2) {
-        // Fall back to loading what we can from the store
         std::string title, author;
         serialization::readString(inputFile, title);
         serialization::readString(inputFile, author);
@@ -228,24 +215,21 @@ bool RecentBooksStore::loadFromBinaryFile() {
   } else if (version == 3) {
     uint8_t count;
     serialization::readPod(inputFile, count);
-
+    const size_t loadCount = std::min<size_t>(count, MAX_RECENT_BOOKS);
     recentBooks.clear();
-    recentBooks.reserve(count);
+    recentBooks.reserve(loadCount);
     uint8_t omitted = 0;
 
-    for (uint8_t i = 0; i < count; i++) {
+    for (size_t i = 0; i < loadCount; i++) {
       std::string path, title, author, coverBmpPath;
       serialization::readString(inputFile, path);
       serialization::readString(inputFile, title);
       serialization::readString(inputFile, author);
       serialization::readString(inputFile, coverBmpPath);
-
-      // Omit books with missing title (e.g. saved before metadata was available)
       if (title.empty()) {
         omitted++;
         continue;
       }
-
       recentBooks.push_back({path, title, author, coverBmpPath});
     }
 

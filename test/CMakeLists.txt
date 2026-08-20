@@ -28,6 +28,7 @@ add_library(inkmod_test_common INTERFACE)
 target_include_directories(inkmod_test_common INTERFACE
   ${REPO_ROOT}
   ${REPO_ROOT}/lib
+  ${REPO_ROOT}/src
 )
 target_compile_options(inkmod_test_common INTERFACE
   -Wall
@@ -43,3 +44,5 @@ add_subdirectory(release_json_parser)
 add_subdirectory(differential_rounding)
 add_subdirectory(hyphenation_eval)
 add_subdirectory(reader_core)
+add_subdirectory(native_fb2_zip)
+add_subdirectory(fs_helpers)

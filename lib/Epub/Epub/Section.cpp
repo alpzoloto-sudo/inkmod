@@ -14,8 +14,11 @@
 
 namespace {
 constexpr uint32_t SECTION_CACHE_MAGIC = 0x535843FF;  // bytes: 0xFF, "CXS"
-constexpr uint8_t SECTION_FILE_VERSION = 50;
-constexpr uint8_t LEGACY_EPUB_SECTION_FILE_VERSION = 48;
+// Layout semantics changed: Paragraph spacing=None now suppresses vertical
+// spacing only on normal <p> elements while preserving publisher spacing on
+// headings and structural containers. Old section pages cannot be reused
+// safely because their vertical positions/page counts differ.
+constexpr uint8_t SECTION_FILE_VERSION = 52;
 constexpr uint32_t HEADER_SIZE = sizeof(SECTION_CACHE_MAGIC) + sizeof(uint8_t) + sizeof(int) + sizeof(float) +
                                  sizeof(bool) + sizeof(bool) + sizeof(uint8_t) + sizeof(uint16_t) + sizeof(uint16_t) +
                                  sizeof(uint16_t) + sizeof(bool) + sizeof(bool) + sizeof(uint8_t) + sizeof(bool) +
@@ -138,13 +141,10 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
       clearCache();
       return false;
     }
-    // Version 49 only changed how FB2-origin packages choose their virtual
-    // section boundaries; the serialized header/page format stayed intact.
-    // Reuse v48 for normal EPUBs, but force FB2 packages to rebuild so an old
-    // unsafe split cannot cut a paragraph between two cache files.
-    const bool compatibleLegacyEpubCache =
-        version == LEGACY_EPUB_SECTION_FILE_VERSION && !epub->isFb2Package();
-    if (version != SECTION_FILE_VERSION && !compatibleLegacyEpubCache) {
+    // Do not reuse older page-layout caches after a layout-semantics change.
+    // The binary records may still deserialize, but their page boundaries are
+    // no longer guaranteed to match current Paragraph spacing/style behavior.
+    if (version != SECTION_FILE_VERSION) {
       // Explicit close() required: member variable persists beyond function scope
       file.close();
       LOG_ERR("SCT", "Deserialization failed: Unknown version %u", version);

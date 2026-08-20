@@ -156,6 +156,7 @@ bool JsonSettingsIO::loadState(InkMODState& s, const char* json) {
 
 bool JsonSettingsIO::saveSettings(const InkMODSettings& s, const char* path) {
   JsonDocument doc;
+  doc["readerParagraphDefaultsV1"] = 1;
 
   for (const auto& info : getSettingsList()) {
     if (!info.key) continue;
@@ -301,6 +302,14 @@ bool JsonSettingsIO::loadSettings(InkMODSettings& s, const char* json, bool* nee
       }
       s.*(info.valuePtr) = v;
     }
+  }
+
+  // One-time migration to the new book-style paragraph defaults. Once the
+  // marker is saved, subsequent user changes are never overridden on boot.
+  if (doc["readerParagraphDefaultsV1"].isNull()) {
+    s.extraParagraphSpacing = 1;
+    s.forceParagraphIndents = 1;
+    if (needsResave) *needsResave = true;
   }
 
   {

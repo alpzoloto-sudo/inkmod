@@ -341,7 +341,7 @@ bool InkMODSettings::loadFromFile() {
       // Older settings files may explicitly store an empty SD font selection.
       // This firmware has no built-in reader family, so migrate that state to
       // the supplied default instead of falling back to the compact UI font.
-      if (result && sdFontFamilyName[0] == '\0') {
+      if (result && sdFontFamilyName[0] == '\0' && fontFamily != TEST_FONTS) {
         strncpy(sdFontFamilyName, "Bookerly", sizeof(sdFontFamilyName) - 1);
         sdFontFamilyName[sizeof(sdFontFamilyName) - 1] = '\0';
         resave = true;
@@ -707,8 +707,11 @@ int InkMODSettings::getReaderFontId() const {
 }
 
 int InkMODSettings::getBuiltInReaderFontId() const {
-  // No built-in reading fonts ship with this firmware (Bitter/ChareInk/
-  // LexendDeca were removed; reading fonts now come only from the SD card).
-  // `fontFamily` is kept solely so old settings files still parse correctly.
+  if (fontFamily == TEST_FONTS) {
+    return TEST_FONTS_12_FONT_ID;
+  }
+
+  // Legacy built-in family values remain compatibility-only. If no SD font
+  // resolves, keep the compact Inter fallback used by earlier optimized builds.
   return getFallbackReaderFontIdForFamily(static_cast<FONT_FAMILY>(fontFamily));
 }

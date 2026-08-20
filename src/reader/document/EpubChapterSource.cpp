@@ -12,6 +12,12 @@ namespace reader {
 namespace {
 
 constexpr char kCacheDirectory[] = "/reader_v1";
+// Chapter preparation is a sequential ZIP/package -> SD-cache copy. 512-byte
+// chunks caused eight times as many stream/write operations as a 4 KiB block.
+// The Epub streaming API allocates this buffer only for the duration of the
+// copy, so 4 KiB is a bounded temporary cost and remains well below the FB2
+// scan/decompression working sets already supported on ESP32-C3.
+constexpr size_t kChapterCopyChunkSize = 4096;
 
 bool copyPath(const std::string& path, char* const out, const size_t outSize) {
   if (!out || outSize == 0) return false;
@@ -30,15 +36,20 @@ bool EpubChapterSource::prepare(const uint32_t chapter, char* const outPath, con
   // before the cursor/layout phase, so no long-lived chapter text is on heap.
   const std::string cacheDir = epub_.getCachePath() + kCacheDirectory;
   const std::string chapterPath = cacheDir + "/chapter_" + std::to_string(chapter) + ".xhtml";
-  const std::string tempPath = chapterPath + ".tmp";
-  const std::string backupPath = chapterPath + ".bak";
+
+  // The normal path after the first open is a cache hit. Avoid touching the
+  // directory metadata in that case: on X4 the SD card is much slower than a
+  // string/path check, and ensureDirectoryExists() otherwise adds an extra
+  // filesystem lookup every time an already-prepared chapter is reopened.
+  if (Storage.exists(chapterPath.c_str())) return copyPath(chapterPath, outPath, outPathSize);
 
   if (!Storage.ensureDirectoryExists(cacheDir.c_str())) {
     LOG_ERR("RCORE", "Could not create EPUB reader cache: %s", cacheDir.c_str());
     return false;
   }
-  if (Storage.exists(chapterPath.c_str())) return copyPath(chapterPath, outPath, outPathSize);
 
+  const std::string tempPath = chapterPath + ".tmp";
+  const std::string backupPath = chapterPath + ".bak";
   if (Storage.exists(tempPath.c_str())) Storage.remove(tempPath.c_str());
   FsFile target;
   if (!Storage.openFileForWrite("RCORE", tempPath, target)) {
@@ -47,10 +58,12 @@ bool EpubChapterSource::prepare(const uint32_t chapter, char* const outPath, con
   }
 
   const auto spine = epub_.getSpineItem(static_cast<int>(chapter));
-  const bool copied = epub_.readItemContentsToStream(spine.href, target, 512);
-  const bool synced = copied && target.sync();
+  const bool copied = epub_.readItemContentsToStream(spine.href, target, kChapterCopyChunkSize);
+  // SdFat close() already performs sync() for both FAT and exFAT files. Keep
+  // one durable flush instead of sync()+close()->sync() after every prepared
+  // chapter, and let close() report any sync failure.
   const bool closed = target.close();
-  if (!synced || !closed) {
+  if (!copied || !closed) {
     LOG_ERR("RCORE", "Could not prepare EPUB chapter %u", static_cast<unsigned>(chapter));
     Storage.remove(tempPath.c_str());
     return false;

@@ -15,24 +15,19 @@ struct CssLength {
   CssLength() = default;
   CssLength(const float v, const CssUnit u) : value(v), unit(u) {}
 
-  // Convenience constructor for pixel values (most common case)
   explicit CssLength(const float pixels) : value(pixels) {}
 
-  // Returns true if this length can be resolved to pixels with the given context.
-  // Percentage units require a non-zero containerWidth to resolve.
   [[nodiscard]] bool isResolvable(const float containerWidth = 0) const {
     return unit != CssUnit::Percent || containerWidth > 0;
   }
 
-  // Resolve to pixels given the current em size (font line height)
-  // containerWidth is needed for percentage units (e.g. viewport width)
   [[nodiscard]] float toPixels(const float emSize, const float containerWidth = 0) const {
     switch (unit) {
       case CssUnit::Em:
       case CssUnit::Rem:
         return value * emSize;
       case CssUnit::Points:
-        return value * 1.33f;  // Approximate pt to px conversion
+        return value * 1.33f;
       case CssUnit::Percent:
         return value * containerWidth / 100.0f;
       default:
@@ -40,27 +35,17 @@ struct CssLength {
     }
   }
 
-  // Resolve to int16_t pixels (for BlockStyle fields)
   [[nodiscard]] int16_t toPixelsInt16(const float emSize, const float containerWidth = 0) const {
     return static_cast<int16_t>(toPixels(emSize, containerWidth));
   }
 };
 
-// Font style options matching CSS font-style property
 enum class CssFontStyle : uint8_t { Normal = 0, Italic = 1 };
-
-// Font weight options - CSS supports 100-900, we simplify to normal/bold
 enum class CssFontWeight : uint8_t { Normal = 0, Bold = 1 };
-// Text decoration options
 enum class CssTextDecoration : uint8_t { None = 0, Underline = 1, LineThrough = 2 };
-
-// Display options - only None and Block are relevant for e-ink rendering
 enum class CssDisplay : uint8_t { Block = 0, None = 1, Inline = 2 };
-
-// Vertical alignment options for inline elements (e.g. superscript/subscript)
 enum class CssVerticalAlign : uint8_t { Baseline = 0, Super = 1, Sub = 2 };
 
-// Bitmask for tracking which properties have been explicitly set
 struct CssPropertyFlags {
   uint32_t textAlign : 1;
   uint32_t fontStyle : 1;
@@ -124,9 +109,6 @@ struct CssPropertyFlags {
 static_assert(sizeof(CssPropertyFlags) <= sizeof(uint32_t),
               "CssPropertyFlags exceeds 32 bits; update cache read/write in CssParser.cpp");
 
-// Represents a collection of CSS style properties
-// Only stores properties relevant to e-ink text rendering
-// Length values are stored as CssLength (value + unit) for deferred resolution
 struct CssStyle {
   CssTextAlign textAlign = CssTextAlign::Left;
   CssFontStyle fontStyle = CssFontStyle::Normal;
@@ -134,27 +116,42 @@ struct CssStyle {
   CssTextDecoration textDecoration = CssTextDecoration::None;
   CssTextDirection direction = CssTextDirection::Ltr;
 
-  CssLength textIndent;     // First-line indent (deferred resolution)
-  CssLength marginTop;      // Vertical spacing before block
-  CssLength marginBottom;   // Vertical spacing after block
-  CssLength marginLeft;     // Horizontal spacing left of block
-  CssLength marginRight;    // Horizontal spacing right of block
-  CssLength paddingTop;     // Padding before
-  CssLength paddingBottom;  // Padding after
-  CssLength paddingLeft;    // Padding left
-  CssLength paddingRight;   // Padding right
-  CssLength imageHeight;    // Height for img (e.g. 2em) – width derived from aspect ratio when only height set
-  CssLength imageWidth;     // Width for img when both or only width set
-  CssLength imageMaxWidth;  // Maximum width for img; must never enlarge an image
-  CssDisplay display = CssDisplay::Block;                       // display property (Block or None)
-  bool backgroundBlack = false;                                 // Simple black inline/block background support
-  CssVerticalAlign verticalAlign = CssVerticalAlign::Baseline;  // vertical-align (super/sub positioning)
-  bool smallCaps = false;  // font-variant: small-caps - rendered as uppercase (see hasSmallCaps() callers)
+  CssLength textIndent;
+  CssLength marginTop;
+  CssLength marginBottom;
+  CssLength marginLeft;
+  CssLength marginRight;
+  CssLength paddingTop;
+  CssLength paddingBottom;
+  CssLength paddingLeft;
+  CssLength paddingRight;
+  CssLength imageHeight;
+  CssLength imageWidth;
+  CssLength imageMaxWidth;
+  CssDisplay display = CssDisplay::Block;
+  bool backgroundBlack = false;
+  CssVerticalAlign verticalAlign = CssVerticalAlign::Baseline;
+  bool smallCaps = false;
 
-  CssPropertyFlags defined;  // Tracks which properties were explicitly set
+  // Runtime-only reader override. It is intentionally not serialized in the
+  // CSS cache. When set for a <p>, publisher vertical margins/padding (including
+  // inline style="...") cannot be re-applied on top of Paragraph spacing.
+  bool lockVerticalSpacing = false;
 
-  // Apply properties from another style, only overwriting if the other style
-  // has that property explicitly defined
+  CssPropertyFlags defined;
+
+  void lockVerticalSpacingToZero() {
+    marginTop = CssLength{};
+    marginBottom = CssLength{};
+    paddingTop = CssLength{};
+    paddingBottom = CssLength{};
+    defined.marginTop = 0;
+    defined.marginBottom = 0;
+    defined.paddingTop = 0;
+    defined.paddingBottom = 0;
+    lockVerticalSpacing = true;
+  }
+
   void applyOver(const CssStyle& base) {
     if (base.hasTextAlign()) {
       textAlign = base.textAlign;
@@ -176,11 +173,11 @@ struct CssStyle {
       textIndent = base.textIndent;
       defined.textIndent = 1;
     }
-    if (base.hasMarginTop()) {
+    if (!lockVerticalSpacing && base.hasMarginTop()) {
       marginTop = base.marginTop;
       defined.marginTop = 1;
     }
-    if (base.hasMarginBottom()) {
+    if (!lockVerticalSpacing && base.hasMarginBottom()) {
       marginBottom = base.marginBottom;
       defined.marginBottom = 1;
     }
@@ -192,11 +189,11 @@ struct CssStyle {
       marginRight = base.marginRight;
       defined.marginRight = 1;
     }
-    if (base.hasPaddingTop()) {
+    if (!lockVerticalSpacing && base.hasPaddingTop()) {
       paddingTop = base.paddingTop;
       defined.paddingTop = 1;
     }
-    if (base.hasPaddingBottom()) {
+    if (!lockVerticalSpacing && base.hasPaddingBottom()) {
       paddingBottom = base.paddingBottom;
       defined.paddingBottom = 1;
     }
@@ -278,6 +275,7 @@ struct CssStyle {
     backgroundBlack = false;
     verticalAlign = CssVerticalAlign::Baseline;
     smallCaps = false;
+    lockVerticalSpacing = false;
     defined.clearAll();
   }
 };

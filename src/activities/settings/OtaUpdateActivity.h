@@ -20,7 +20,7 @@ class OtaUpdateActivity : public Activity {
 
   State state = WIFI_SELECTION;
   unsigned int lastUpdaterPercentage = UNINITIALIZED_PERCENTAGE;
-  // Diagnostic-only: surface the OTA result code on the failure screen.
+  // Diagnostic-only: surface the OTA result code and partition layout on the failure screen.
   int lastErrorCode = -1;
   OtaUpdater updater;
 

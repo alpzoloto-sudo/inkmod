@@ -3,6 +3,9 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 #include <WiFi.h>
+#include <esp_ota_ops.h>
+
+#include <cstdio>
 
 #include "AppVersion.h"
 #include "MappedInputManager.h"
@@ -25,12 +28,14 @@ void OtaUpdateActivity::onWifiSelectionComplete(const bool success) {
   {
     RenderLock lock(*this);
     state = CHECKING_FOR_UPDATE;
+    lastErrorCode = -1;
   }
   if (requestUpdateAndWait() != RequestUpdateResult::Rendered) {
     LOG_ERR("OTA", "Checking update screen could not be rendered synchronously; aborting update check");
     {
       RenderLock lock(*this);
       state = FAILED;
+      lastErrorCode = 100;
     }
     requestUpdate(true);
     return;
@@ -42,6 +47,7 @@ void OtaUpdateActivity::onWifiSelectionComplete(const bool success) {
     {
       RenderLock lock(*this);
       state = FAILED;
+      lastErrorCode = static_cast<int>(res);
     }
     requestUpdate(true);
     return;
@@ -146,7 +152,43 @@ void OtaUpdateActivity::render(RenderLock&&) {
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   } else if (state == FAILED) {
-    renderer.drawCenteredText(UI_10_FONT_ID, top, tr(STR_UPDATE_FAILED), true, EpdFontFamily::BOLD);
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    const esp_partition_t* next = running ? esp_ota_get_next_update_partition(running) : nullptr;
+
+    char errLine[40];
+    char runLine[64];
+    char nextLine[64];
+    char sizeLine[64];
+    snprintf(errLine, sizeof(errLine), "OTA ERR=%d", lastErrorCode);
+    if (running) {
+      snprintf(runLine, sizeof(runLine), "RUN %s @%06lX", running->label,
+               static_cast<unsigned long>(running->address));
+      snprintf(sizeLine, sizeof(sizeLine), "RUN %luK  FILE %luK",
+               static_cast<unsigned long>(running->size / 1024u),
+               static_cast<unsigned long>(updater.getTotalSize() / 1024u));
+    } else {
+      snprintf(runLine, sizeof(runLine), "RUN: NONE");
+      snprintf(sizeLine, sizeof(sizeLine), "FILE %luK",
+               static_cast<unsigned long>(updater.getTotalSize() / 1024u));
+    }
+    if (next) {
+      snprintf(nextLine, sizeof(nextLine), "NEXT %s @%06lX %luK", next->label,
+               static_cast<unsigned long>(next->address), static_cast<unsigned long>(next->size / 1024u));
+    } else {
+      snprintf(nextLine, sizeof(nextLine), "NEXT: NONE");
+    }
+
+    int y = top - (height + metrics.verticalSpacing) * 2;
+    renderer.drawCenteredText(UI_10_FONT_ID, y, tr(STR_UPDATE_FAILED), true, EpdFontFamily::BOLD);
+    y += height + metrics.verticalSpacing;
+    renderer.drawCenteredText(UI_10_FONT_ID, y, errLine);
+    y += height + metrics.verticalSpacing;
+    renderer.drawCenteredText(UI_10_FONT_ID, y, runLine);
+    y += height + metrics.verticalSpacing;
+    renderer.drawCenteredText(UI_10_FONT_ID, y, nextLine);
+    y += height + metrics.verticalSpacing;
+    renderer.drawCenteredText(UI_10_FONT_ID, y, sizeLine);
+
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   } else if (state == FINISHED) {
@@ -164,12 +206,14 @@ void OtaUpdateActivity::loop() {
       {
         RenderLock lock(*this);
         state = UPDATE_IN_PROGRESS;
+        lastErrorCode = -1;
       }
       if (requestUpdateAndWait() != RequestUpdateResult::Rendered) {
         LOG_ERR("OTA", "Update progress screen could not be rendered synchronously; aborting OTA install");
         {
           RenderLock lock(*this);
           state = FAILED;
+          lastErrorCode = 101;
         }
         requestUpdate(true);
         return;
@@ -188,8 +232,9 @@ void OtaUpdateActivity::loop() {
         {
           RenderLock lock(*this);
           state = FAILED;
+          lastErrorCode = static_cast<int>(res);
         }
-        requestUpdate();
+        requestUpdate(true);
         return;
       }
 

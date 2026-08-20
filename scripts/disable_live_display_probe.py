@@ -2,7 +2,10 @@
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-ROOT = Path(__file__).resolve().parents[1]
+if "__file__" in globals():
+    ROOT = Path(__file__).resolve().parents[1]
+else:
+    ROOT = Path.cwd().resolve()
 HAL_DISPLAY_CPP = ROOT / "lib/hal/HalDisplay.cpp"
 
 # Pin the Xteink panel-driver set to the known-good FreeInk SDK snapshot supplied

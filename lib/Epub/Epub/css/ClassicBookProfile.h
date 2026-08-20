@@ -9,11 +9,10 @@
 
 // inkMOD Classic Book profile
 //
-// This is deliberately applied after publisher stylesheet + inline style
-// resolution.  It therefore behaves like the small set of !important rules
-// we want for an e-ink book layout, while leaving font sizes, inline emphasis,
-// links, images, lists, tables, RTL direction, superscript/subscript and other
-// author semantics intact.
+// Applied after publisher stylesheet + inline-style resolution, so these few
+// e-ink layout rules behave like !important without throwing away author font
+// sizes, inline emphasis, links, images, lists, tables, RTL, super/subscript,
+// small-caps or other semantic styling.
 namespace inkmod_book_style {
 
 inline char asciiLower(char c) {
@@ -62,28 +61,31 @@ inline bool ancestorHasTag(const std::vector<CssAncestorEntry>& ancestors, std::
   return false;
 }
 
-inline void setLength(CssLength& target, uint32_t& flag, float value) {
-  target = CssLength(value, CssUnit::Em);
-  flag = 1;
-}
-
 inline void setLayout(CssStyle& style, CssTextAlign align, float indent,
                       float top, float bottom, float left, float right) {
   style.textAlign = align;
   style.defined.textAlign = 1;
-  setLength(style.textIndent, style.defined.textIndent, indent);
-  setLength(style.marginTop, style.defined.marginTop, top);
-  setLength(style.marginBottom, style.defined.marginBottom, bottom);
-  setLength(style.marginLeft, style.defined.marginLeft, left);
-  setLength(style.marginRight, style.defined.marginRight, right);
+  style.textIndent = CssLength(indent, CssUnit::Em);
+  style.defined.textIndent = 1;
+  style.marginTop = CssLength(top, CssUnit::Em);
+  style.defined.marginTop = 1;
+  style.marginBottom = CssLength(bottom, CssUnit::Em);
+  style.defined.marginBottom = 1;
+  style.marginLeft = CssLength(left, CssUnit::Em);
+  style.defined.marginLeft = 1;
+  style.marginRight = CssLength(right, CssUnit::Em);
+  style.defined.marginRight = 1;
 
   // Publisher padding is one of the biggest sources of mysterious blank space
-  // on a 480x800 screen. The structural spacing above is the only vertical
-  // spacing the classic profile needs.
-  setLength(style.paddingTop, style.defined.paddingTop, 0.0f);
-  setLength(style.paddingBottom, style.defined.paddingBottom, 0.0f);
-  setLength(style.paddingLeft, style.defined.paddingLeft, 0.0f);
-  setLength(style.paddingRight, style.defined.paddingRight, 0.0f);
+  // on a 480x800 screen. Structural spacing above is all this profile needs.
+  style.paddingTop = CssLength(0.0f, CssUnit::Em);
+  style.defined.paddingTop = 1;
+  style.paddingBottom = CssLength(0.0f, CssUnit::Em);
+  style.defined.paddingBottom = 1;
+  style.paddingLeft = CssLength(0.0f, CssUnit::Em);
+  style.defined.paddingLeft = 1;
+  style.paddingRight = CssLength(0.0f, CssUnit::Em);
+  style.defined.paddingRight = 1;
 }
 
 inline void setBoldNormal(CssStyle& style) {
@@ -116,8 +118,7 @@ inline void apply(const char* tagName, const std::string& classAttr,
   const bool inQuote = quoteContainer || ancestorHasTag(ancestors, "blockquote") || inClass("cite") ||
                        inClass("quote") || inClass("epigraph");
 
-  // Structural containers first.  Their horizontal inset survives into child
-  // blocks through the existing BlockStyle stack.
+  // Container geometry is inherited by the existing block-style stack.
   if (heading || subtitle) {
     setLayout(style, CssTextAlign::Center, 0.0f, 1.0f, 0.5f, 0.0f, 0.0f);
     setBoldNormal(style);
@@ -130,13 +131,12 @@ inline void apply(const char* tagName, const std::string& classAttr,
     setLayout(style, CssTextAlign::Left, 0.0f, 0.0f, 0.6f, 0.0f, 0.0f);
   }
 
-  // Normal paragraph rhythm: no extra vertical gap, 1.5em red line and
-  // justified text.  Special book structures override this below.
+  // Ordinary prose: no inter-paragraph holes, 1.5em red line, justified.
+  // Structural book paragraphs override this below.
   if (tag != "p") return;
 
-  if (subtitle) {
-    return;  // already handled as a centered bold structural line
-  }
+  if (subtitle) return;
+
   if (has("text-author")) {
     setLayout(style, CssTextAlign::Right, 0.0f, 0.3f, 0.0f, 0.0f, 0.0f);
     setItalic(style);
@@ -164,8 +164,6 @@ inline void apply(const char* tagName, const std::string& classAttr,
     return;
   }
 
-  // Notes are intentionally compact. A note label/number should not look like
-  // the first line of a new prose paragraph.
   if (has("note-label")) {
     setLayout(style, CssTextAlign::Left, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
     style.fontWeight = CssFontWeight::Bold;

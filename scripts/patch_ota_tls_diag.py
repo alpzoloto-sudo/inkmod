@@ -37,13 +37,25 @@ if 'ota_diag_event_handler' not in s:
         raise RuntimeError('totalBytesReceived anchor not found')
     s = s.replace(anchor, helper, 1)
 
+# Do not add .event_handler as a designated initializer: ESP-IDF requires the
+# designators to follow the exact declaration order. Assign it immediately
+# after the initializer instead, which is order-independent.
 install_anchor = '  esp_http_client_config_t client_config = {\n      .url = otaUrl.c_str(),\n'
 install_pos = s.find(install_anchor)
 if install_pos < 0:
     raise RuntimeError('installUpdate http config not found')
-if '.event_handler = ota_diag_event_handler,' not in s[install_pos:install_pos + 900]:
-    s = s.replace(install_anchor,
-                  '  esp_http_client_config_t client_config = {\n      .url = otaUrl.c_str(),\n      .event_handler = ota_diag_event_handler,\n', 1)
+
+# Remove the previous injected designator if present.
+s = s.replace('      .event_handler = ota_diag_event_handler,\n', '', 1)
+
+# Find the end of the installUpdate client_config initializer and insert assignment.
+install_pos = s.find(install_anchor)
+config_end = s.find('\n  };', install_pos)
+if config_end < 0:
+    raise RuntimeError('installUpdate http config end not found')
+assign = '\n  client_config.event_handler = ota_diag_event_handler;'
+if assign.strip() not in s[config_end:config_end + 160]:
+    s = s[:config_end + 5] + assign + s[config_end + 5:]
 
 # v3 has lastOtaStage between raw error and handle declaration.
 reset_old = '''  processedSize = 0;\n  lastEspError = 0;\n  lastOtaStage = 2;  // BEGIN\n\n  esp_https_ota_handle_t ota_handle = NULL;'''

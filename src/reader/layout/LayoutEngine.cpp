@@ -22,19 +22,35 @@ uint32_t skipLeadingSpace(const StringRef text, uint32_t offset) {
 uint32_t lineEnd(const StringRef text, const uint32_t offset, const uint16_t availableWidth, const TextMeasurer& measurer,
                  const TextStyle& style) {
   const uint32_t remaining = text.size - offset;
+  if (remaining == 0) return offset;
   if (measurer.measure({text.data + offset, remaining}, style) <= availableWidth) return text.size;
 
-  uint32_t lastBreak = 0;
-  for (uint32_t index = 1; index <= remaining; ++index) {
-    const StringRef candidate{text.data + offset, index};
-    if (measurer.measure(candidate, style) > availableWidth) break;
-    if (isAsciiSpace(text.data[offset + index - 1])) lastBreak = index - 1;
+  // Text measurement is monotonic for the reader's glyph-advance based
+  // measurers: appending glyphs never makes a prefix narrower. The old code
+  // measured prefix lengths 1,2,3,... until overflow, making long lines
+  // quadratic in total measured bytes. Binary-search the same maximal fitting
+  // prefix instead, then preserve the old whitespace/long-word decision below.
+  uint32_t low = 0;             // known to fit (empty prefix always fits)
+  uint32_t high = remaining;    // known not to fit (checked above)
+  while (low + 1 < high) {
+    const uint32_t mid = low + (high - low) / 2;
+    if (measurer.measure({text.data + offset, mid}, style) <= availableWidth) {
+      low = mid;
+    } else {
+      high = mid;
+    }
+  }
+
+  // We need the *last* breakable whitespace in the fitting prefix. Scanning
+  // backwards returns it immediately for normal prose instead of walking the
+  // whole line just to remember the most recent break position.
+  for (uint32_t index = low; index > 1; --index) {
+    if (isAsciiSpace(text.data[offset + index - 1])) return offset + index - 1;
   }
 
   // Do not split a UTF-8 code point or invent a hyphen here. If one word is
   // wider than the viewport, emit the complete word; a later hyphenation stage
   // will replace this conservative behaviour.
-  if (lastBreak != 0) return offset + lastBreak;
   uint32_t wordEnd = 0;
   while (wordEnd < remaining && !isAsciiSpace(text.data[offset + wordEnd])) ++wordEnd;
   return offset + (wordEnd == 0 ? 1 : wordEnd);

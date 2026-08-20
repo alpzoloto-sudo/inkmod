@@ -85,6 +85,13 @@ class ActivityManager {
   void begin();
   void loop();
 
+  // Minimum free render-task stack observed since the task started. ESP-IDF's
+  // uxTaskGetStackHighWaterMark() reports bytes, so this can be compared directly
+  // with the 16384-byte render stack before deciding whether it is safe to shrink.
+  size_t getRenderTaskStackHighWaterMark() const {
+    return renderTaskHandle ? static_cast<size_t>(uxTaskGetStackHighWaterMark(renderTaskHandle)) : 0;
+  }
+
   // Will replace currentActivity and drop all activities on stack
   void replaceActivity(std::unique_ptr<Activity>&& newActivity);
 

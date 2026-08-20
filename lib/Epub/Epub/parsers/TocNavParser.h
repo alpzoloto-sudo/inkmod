@@ -27,9 +27,12 @@ class TocNavParser final : public Print {
 
   // Track nesting depth for <ol> elements to determine TOC depth
   uint8_t olDepth = 0;
-  // Current entry data being collected
+  // Current entry data being collected. Scratch path/anchor strings are kept
+  // across entries so large EPUB3 navigation documents do not churn the heap.
   std::string currentLabel;
   std::string currentHref;
+  std::string currentTarget;
+  std::string currentAnchor;
 
   static void startElement(void* userData, const XML_Char* name, const XML_Char** atts);
   static void characterData(void* userData, const XML_Char* s, int len);

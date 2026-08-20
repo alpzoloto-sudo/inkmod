@@ -125,6 +125,12 @@ EpdFontFamily ipaFallback12Family(&ipaFallback12Font);
 EpdFont ipaFallback14Font(&inter_14_ipa_fallback);
 EpdFontFamily ipaFallback14Family(&ipaFallback14Font);
 
+EpdFont testFonts12Regular(&dejavu_sans_12_regular);
+EpdFont testFonts12Bold(&dejavu_sans_12_bold);
+EpdFont testFonts12Italic(&dejavu_sans_12_italic);
+EpdFont testFonts12BoldItalic(&dejavu_sans_12_bolditalic);
+EpdFontFamily testFonts12Family(&testFonts12Regular, &testFonts12Bold, &testFonts12Italic, &testFonts12BoldItalic);
+
 // See UiTextSize.h. Only UI_10_FONT_ID (menu/list body text) grows; two roles
 // are deliberately left untouched:
 //  - UI_12_FONT_ID has no larger built-in size to grow into.
@@ -419,6 +425,9 @@ bool handleGlobalPowerButtonAction(const InkMODSettings::SHORT_PWRBTN action) {
     case InkMODSettings::SHORT_PWRBTN::SLEEP:
       enterDeepSleep();
       return true;
+    case InkMODSettings::SHORT_PWRBTN::QUICK_RESUME_SLEEP:
+      enterDeepSleep(true);
+      return true;
     case InkMODSettings::SHORT_PWRBTN::FORCE_REFRESH: {
       LOG_DBG("MAIN", "Manual screen refresh triggered");
       const bool repaintReaderGrayscale = activityManager.isCurrentReaderActivity();
@@ -586,6 +595,7 @@ void setupDisplayAndFonts(bool seamless = false) {
   renderer.insertFont(SMALL_FONT_ID, smallFontFamily);
   renderer.insertFont(IPA_FALLBACK_12_FONT_ID, ipaFallback12Family);
   renderer.insertFont(IPA_FALLBACK_14_FONT_ID, ipaFallback14Family);
+  renderer.insertFont(TEST_FONTS_12_FONT_ID, testFonts12Family);
 
   // Missing glyphs in a user reading font are drawn from the IPA-capable
   // built-in Inter fallback. Normal glyphs stay in the selected book font.

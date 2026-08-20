@@ -31,5 +31,190 @@
   <p class="footer" data-i18n="footer.tagline">inkMOD &bull; Open Source</p>
 
 {{ script }}
+<script>
+// Post-process browser FB2->EPUB output. Conversion and prepared-cache
+// generation share convertFb2ToEpub(), so fixes applied here automatically
+// affect both paths without duplicating the large converter implementation.
+(() => {
+  if (typeof convertFb2ToEpub !== 'function' || typeof JSZip === 'undefined') return;
+
+  const originalConvertFb2ToEpub = convertFb2ToEpub;
+  const STYLE_MARKER = '/* inkMOD FB2 structural spacing */';
+
+  const normalizeZipPath = (path) => {
+    const parts = [];
+    String(path || '').split('/').forEach(part => {
+      if (!part || part === '.') return;
+      if (part === '..') parts.pop();
+      else parts.push(part);
+    });
+    return parts.join('/');
+  };
+
+  async function extractFb2AnnotationParagraphs(file) {
+    try {
+      let text;
+      if (/\.zip$/i.test(file && file.name || '')) {
+        const sourceZip = await JSZip.loadAsync(file);
+        const entryName = Object.keys(sourceZip.files).find(name =>
+          !sourceZip.files[name].dir && name.toLowerCase().endsWith('.fb2'));
+        if (!entryName) return [];
+        const bytes = await sourceZip.file(entryName).async('uint8array');
+        text = (typeof decodeFb2Bytes === 'function')
+          ? decodeFb2Bytes(bytes)
+          : new TextDecoder('utf-8').decode(bytes);
+      } else {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        text = (typeof decodeFb2Bytes === 'function')
+          ? decodeFb2Bytes(bytes)
+          : new TextDecoder('utf-8').decode(bytes);
+      }
+
+      const doc = new DOMParser().parseFromString(text, 'application/xml');
+      if (doc.querySelector('parsererror')) return [];
+      const annotation = Array.from(doc.getElementsByTagName('*')).find(el =>
+        (el.localName || el.tagName) === 'annotation');
+      if (!annotation) return [];
+
+      const paragraphs = Array.from(annotation.getElementsByTagName('*'))
+        .filter(el => (el.localName || el.tagName) === 'p')
+        .map(el => (el.textContent || '').replace(/\s+/g, ' ').trim())
+        .filter(Boolean);
+      if (paragraphs.length) return paragraphs;
+
+      const fallback = (annotation.textContent || '').replace(/\s+/g, ' ').trim();
+      return fallback ? [fallback] : [];
+    } catch (e) {
+      console.warn('FB2 annotation extraction failed:', e);
+      return [];
+    }
+  }
+
+  async function postProcessFb2Epub(epubBlob, paragraphs) {
+    const zip = await JSZip.loadAsync(epubBlob);
+    let modified = false;
+
+    // "Paragraph spacing: None" must be able to produce compact body text
+    // while Embedded styles stays ON. Keep structural spacing on headings and
+    // containers (poem/cite/epigraph are already defined by the converter),
+    // but do not bake a 0.6em gap into every generated <p>.
+    const styleFile = zip.file('OEBPS/style.css');
+    if (styleFile) {
+      let css = await styleFile.async('text');
+      if (!css.includes(STYLE_MARKER)) {
+        css += `\n${STYLE_MARKER}\n` +
+               `p { margin-top: 0; margin-bottom: 0; }\n` +
+               `h1, h2, h3, h4, h5, h6 { margin-top: 0.8em; margin-bottom: 0.5em; }\n`;
+        zip.file('OEBPS/style.css', css, { compression: 'DEFLATE' });
+        modified = true;
+      }
+    }
+
+    if (paragraphs.length) {
+      const containerFile = zip.file('META-INF/container.xml');
+      if (containerFile) {
+        const containerText = await containerFile.async('text');
+        const containerDoc = new DOMParser().parseFromString(containerText, 'application/xml');
+        const rootfile = Array.from(containerDoc.getElementsByTagName('*')).find(el =>
+          (el.localName || el.tagName) === 'rootfile');
+        const opfPath = rootfile && rootfile.getAttribute('full-path');
+
+        if (opfPath && zip.file(opfPath)) {
+          const opfText = await zip.file(opfPath).async('text');
+          const opfDoc = new DOMParser().parseFromString(opfText, 'application/xml');
+          if (!opfDoc.querySelector('parsererror')) {
+            const manifest = new Map();
+            Array.from(opfDoc.getElementsByTagName('*')).forEach(el => {
+              if ((el.localName || el.tagName) !== 'item') return;
+              const id = el.getAttribute('id');
+              const href = el.getAttribute('href');
+              if (id && href) manifest.set(id, {
+                href,
+                mediaType: el.getAttribute('media-type') || '',
+                properties: el.getAttribute('properties') || ''
+              });
+            });
+
+            let chapterHref = '';
+            const itemrefs = Array.from(opfDoc.getElementsByTagName('*')).filter(el =>
+              (el.localName || el.tagName) === 'itemref');
+            for (const itemref of itemrefs) {
+              const idref = itemref.getAttribute('idref') || '';
+              const item = manifest.get(idref);
+              if (!item || !/xhtml|html/i.test(item.mediaType)) continue;
+              if (/cover/i.test(idref) || /(^|\/)cover[^/]*\.(xhtml|html|htm)$/i.test(item.href) ||
+                  /cover/i.test(item.properties)) continue;
+              chapterHref = item.href;
+              break;
+            }
+
+            if (chapterHref) {
+              const slash = opfPath.lastIndexOf('/');
+              const opfDir = slash >= 0 ? opfPath.slice(0, slash + 1) : '';
+              const chapterPath = normalizeZipPath(opfDir + chapterHref);
+              const chapterFile = zip.file(chapterPath);
+              if (chapterFile) {
+                const chapterText = await chapterFile.async('text');
+                const chapterDoc = new DOMParser().parseFromString(chapterText, 'application/xhtml+xml');
+                if (!chapterDoc.querySelector('parsererror')) {
+                  const body = Array.from(chapterDoc.getElementsByTagName('*')).find(el =>
+                    (el.localName || el.tagName) === 'body');
+                  if (body && !body.querySelector('.fb2-annotation')) {
+                    const ns = chapterDoc.documentElement.namespaceURI || 'http://www.w3.org/1999/xhtml';
+                    const annotation = chapterDoc.createElementNS(ns, 'section');
+                    annotation.setAttribute('class', 'fb2-annotation');
+                    annotation.setAttribute('style', 'font-style:italic;margin:0 0 1em 0;');
+                    paragraphs.forEach(text => {
+                      const p = chapterDoc.createElementNS(ns, 'p');
+                      p.setAttribute('style', 'text-indent:0;');
+                      p.textContent = text;
+                      annotation.appendChild(p);
+                    });
+                    body.insertBefore(annotation, body.firstChild);
+
+                    const serialized = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+                      new XMLSerializer().serializeToString(chapterDoc).replace(/^<\?xml[^>]*>\s*/i, '');
+                    zip.file(chapterPath, serialized, { compression: 'DEFLATE' });
+                    modified = true;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (!modified) return epubBlob;
+
+    // Reassert the EPUB-required uncompressed mimetype entry. Replacing an
+    // existing JSZip key preserves its insertion order, so it stays first.
+    zip.file('mimetype', 'application/epub+zip', { compression: 'STORE' });
+    return zip.generateAsync({
+      type: 'blob',
+      mimeType: 'application/epub+zip',
+      compression: 'DEFLATE',
+      compressionOptions: { level: 8 }
+    });
+  }
+
+  convertFb2ToEpub = async function(file, progressCallback) {
+    const paragraphs = await extractFb2AnnotationParagraphs(file);
+    const epubBlob = await originalConvertFb2ToEpub(file, progressCallback);
+    try {
+      const fixedBlob = await postProcessFb2Epub(epubBlob, paragraphs);
+      if (paragraphs.length) {
+        console.log(`FB2 annotation preserved in EPUB (${paragraphs.length} paragraph(s))`);
+      }
+      return fixedBlob;
+    } catch (e) {
+      // Never make upload/conversion fail solely because post-processing failed.
+      // The original converter result remains a valid fallback.
+      console.warn('FB2 EPUB post-processing failed:', e);
+      return epubBlob;
+    }
+  };
+})();
+</script>
 </body>
 </html>

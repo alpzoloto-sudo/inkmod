@@ -19,7 +19,10 @@ bool InflateReader::init(const bool streaming) {
   if (streaming) {
     ringBuffer = static_cast<uint8_t*>(malloc(INFLATE_DICT_SIZE));
     if (!ringBuffer) return false;
-    memset(ringBuffer, 0, INFLATE_DICT_SIZE);
+    // No memset here: a valid DEFLATE stream can only reference bytes that
+    // have already been produced, so unread dictionary bytes are never
+    // observable. Avoiding a 32 KiB clear removes pure CPU/memory-bandwidth
+    // work from every streamed ZIP entry (EPUB chapters, CSS, images, etc.).
   }
 
   uzlib_uncompress_init(&decomp, ringBuffer, ringBuffer ? INFLATE_DICT_SIZE : 0);

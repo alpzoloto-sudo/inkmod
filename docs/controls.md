@@ -56,6 +56,7 @@ Available actions include:
 
 - Ignore
 - Sleep
+- Quick Resume on Timeout
 - Page Turn
 - Refresh Screen
 - Change Font
@@ -75,6 +76,10 @@ Available actions include:
 - Footnotes
 - Dark Mode
 - Browse Files
+
+### Quick Resume sleep
+
+`Quick Resume on Timeout` can be assigned independently to either the short or long Power-button action. It enters the same deep-sleep path used by automatic timeout sleep, preserves the sleep frame, and wakes without the normal cold-start splash. The existing `Sleep` action remains unchanged and continues to use the normal manual-sleep path.
 
 ## Footnote Shortcut
 

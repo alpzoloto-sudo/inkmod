@@ -4,6 +4,8 @@
 #include <Logging.h>
 #include <Serialization.h>
 
+#include <array>
+
 namespace {
 
 constexpr uint16_t MAX_PAGE_ELEMENTS = 1024;
@@ -38,7 +40,6 @@ bool PageLine::serialize(FsFile& file) {
     return false;
   }
 
-  // serialize TextBlock pointed to by PageLine
   return block->serialize(file);
 }
 
@@ -67,7 +68,6 @@ std::unique_ptr<PageLine> PageLine::deserialize(FsFile& file) {
 void PageImage::render(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset,
                        const bool foregroundBlack) {
   (void)foregroundBlack;
-  // Images don't use fontId or text rendering
   imageBlock->render(renderer, xPos + xOffset, yPos + yOffset);
 }
 
@@ -77,7 +77,6 @@ bool PageImage::serialize(FsFile& file) {
     return false;
   }
 
-  // serialize ImageBlock
   return imageBlock->serialize(file);
 }
 
@@ -106,9 +105,7 @@ std::unique_ptr<PageImage> PageImage::deserialize(FsFile& file) {
 void PageHorizontalRule::render(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset,
                                 const bool foregroundBlack) {
   (void)fontId;
-  if (width == 0 || thickness == 0) {
-    return;
-  }
+  if (width == 0 || thickness == 0) return;
 
   renderer.drawLine(xPos + xOffset, yPos + yOffset, xPos + xOffset + width - 1, yPos + yOffset, thickness,
                     foregroundBlack);
@@ -200,9 +197,7 @@ bool TableFragmentRow::serialize(FsFile& file) const {
     return false;
   }
   for (const auto& cell : cells) {
-    if (!cell.serialize(file)) {
-      return false;
-    }
+    if (!cell.serialize(file)) return false;
   }
   return true;
 }
@@ -223,33 +218,30 @@ bool TableFragmentRow::deserialize(FsFile& file, TableFragmentRow& outRow) {
   outRow.cells.reserve(cellCount);
   for (uint8_t i = 0; i < cellCount; i++) {
     TableFragmentCell cell;
-    if (!TableFragmentCell::deserialize(file, cell)) {
-      return false;
-    }
+    if (!TableFragmentCell::deserialize(file, cell)) return false;
     outRow.cells.push_back(std::move(cell));
   }
   return true;
 }
 
 uint16_t PageTableFragment::getHeight() const {
-  uint16_t total = 1;  // Bottom border.
-  for (const auto& row : rows) {
-    total = static_cast<uint16_t>(total + row.height);
-  }
+  uint16_t total = 1;
+  for (const auto& row : rows) total = static_cast<uint16_t>(total + row.height);
   return total;
 }
 
 void PageTableFragment::render(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset,
                                const bool foregroundBlack) {
-  if (columnCount == 0 || rows.empty() || width < 2) {
-    return;
-  }
+  if (columnCount == 0 || columnCount > MAX_TABLE_CELLS_PER_ROW || rows.empty() || width < 2) return;
 
   const int drawX = xPos + xOffset;
   const int drawY = yPos + yOffset;
   const uint16_t totalHeight = getHeight();
 
-  std::vector<int16_t> columnStarts(columnCount + 1);
+  // columnCount is capped at eight during deserialization. A fixed nine-entry
+  // array avoids a heap allocation on every render of a table page while
+  // preserving the exact same coordinates.
+  std::array<int16_t, MAX_TABLE_CELLS_PER_ROW + 1> columnStarts{};
   for (uint8_t i = 0; i < columnCount; i++) {
     columnStarts[i] = static_cast<int16_t>((static_cast<uint32_t>(width) * i) / columnCount);
   }
@@ -298,9 +290,7 @@ bool PageTableFragment::serialize(FsFile& file) {
     return false;
   }
   for (const auto& row : rows) {
-    if (!row.serialize(file)) {
-      return false;
-    }
+    if (!row.serialize(file)) return false;
   }
   return true;
 }
@@ -332,9 +322,7 @@ std::unique_ptr<PageTableFragment> PageTableFragment::deserialize(FsFile& file) 
   rows.reserve(rowCount);
   for (uint8_t i = 0; i < rowCount; i++) {
     TableFragmentRow row;
-    if (!TableFragmentRow::deserialize(file, row)) {
-      return nullptr;
-    }
+    if (!TableFragmentRow::deserialize(file, row)) return nullptr;
     rows.push_back(std::move(row));
   }
 
@@ -376,18 +364,13 @@ bool Page::serialize(FsFile& file) const {
   }
 
   for (const auto& el : elements) {
-    // Use getTag() method to determine type
     if (!serialization::tryWritePod(file, static_cast<uint8_t>(el->getTag()))) {
       LOG_ERR("PGE", "Serialization failed: could not write element tag");
       return false;
     }
-
-    if (!el->serialize(file)) {
-      return false;
-    }
+    if (!el->serialize(file)) return false;
   }
 
-  // Serialize footnotes (clamp to MAX_FOOTNOTES_PER_PAGE to match addFootnote/deserialize limits)
   const uint16_t fnCount = std::min<uint16_t>(footnotes.size(), MAX_FOOTNOTES_PER_PAGE);
   if (!serialization::tryWritePod(file, fnCount)) {
     LOG_ERR("PGE", "Failed to write footnote count");
@@ -447,27 +430,19 @@ std::unique_ptr<Page> Page::deserialize(FsFile& file) {
 
     if (tag == TAG_PageLine) {
       auto pl = PageLine::deserialize(file);
-      if (!pl) {
-        return nullptr;
-      }
+      if (!pl) return nullptr;
       page->elements.push_back(std::move(pl));
     } else if (tag == TAG_PageImage) {
       auto pi = PageImage::deserialize(file);
-      if (!pi) {
-        return nullptr;
-      }
+      if (!pi) return nullptr;
       page->elements.push_back(std::move(pi));
     } else if (tag == TAG_PageTableFragment) {
       auto fragment = PageTableFragment::deserialize(file);
-      if (!fragment) {
-        return nullptr;
-      }
+      if (!fragment) return nullptr;
       page->elements.push_back(std::move(fragment));
     } else if (tag == TAG_PageHorizontalRule) {
       auto rule = PageHorizontalRule::deserialize(file);
-      if (!rule) {
-        return nullptr;
-      }
+      if (!rule) return nullptr;
       page->elements.push_back(std::move(rule));
     } else {
       LOG_ERR("PGE", "Deserialization failed: Unknown tag %u", tag);
@@ -475,7 +450,6 @@ std::unique_ptr<Page> Page::deserialize(FsFile& file) {
     }
   }
 
-  // Deserialize footnotes
   uint16_t fnCount;
   if (!serialization::tryReadPod(file, fnCount)) {
     LOG_ERR("PGE", "Failed to read footnote count");

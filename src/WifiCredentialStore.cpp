@@ -6,6 +6,9 @@
 #include <ObfuscationUtils.h>
 #include <Serialization.h>
 
+#include <algorithm>
+#include <utility>
+
 // Initialize the static instance
 WifiCredentialStore WifiCredentialStore::instance;
 
@@ -35,32 +38,29 @@ bool WifiCredentialStore::saveToFile() const {
 }
 
 bool WifiCredentialStore::loadFromFile() {
-  // Try JSON first
-  if (Storage.exists(WIFI_FILE_JSON)) {
-    String json = Storage.readFile(WIFI_FILE_JSON);
-    if (!json.isEmpty()) {
-      bool resave = false;
-      bool result = JsonSettingsIO::loadWifi(*this, json.c_str(), &resave);
-      if (result && resave) {
-        LOG_DBG("WCS", "Resaving JSON with obfuscated passwords");
-        saveToFile();
-      }
-      return result;
+  // readFile() already opens the JSON path and returns empty when absent, so
+  // avoid a separate exists() directory traversal on every time-sync boot.
+  String json = Storage.readFile(WIFI_FILE_JSON);
+  if (!json.isEmpty()) {
+    bool resave = false;
+    bool result = JsonSettingsIO::loadWifi(*this, json.c_str(), &resave);
+    if (result && resave) {
+      LOG_DBG("WCS", "Resaving JSON with obfuscated passwords");
+      saveToFile();
     }
+    return result;
   }
 
-  // Fall back to binary migration
-  if (Storage.exists(WIFI_FILE_BIN)) {
-    if (loadFromBinaryFile()) {
-      if (saveToFile()) {
-        Storage.rename(WIFI_FILE_BIN, WIFI_FILE_BAK);
-        LOG_DBG("WCS", "Migrated wifi.bin to wifi.json");
-        return true;
-      } else {
-        LOG_ERR("WCS", "Failed to save wifi during migration");
-        return false;
-      }
+  // Binary migration is a one-time fallback. Its loader already detects a
+  // missing file through open failure, so no exists()+open pair is needed.
+  if (loadFromBinaryFile()) {
+    if (saveToFile()) {
+      Storage.rename(WIFI_FILE_BIN, WIFI_FILE_BAK);
+      LOG_DBG("WCS", "Migrated wifi.bin to wifi.json");
+      return true;
     }
+    LOG_ERR("WCS", "Failed to save wifi during migration");
+    return false;
   }
 
   return false;
@@ -87,14 +87,16 @@ bool WifiCredentialStore::loadFromBinaryFile() {
 
   uint8_t count;
   serialization::readPod(file, count);
+  const size_t loadCount = std::min<size_t>(count, MAX_NETWORKS);
 
   credentials.clear();
-  for (uint8_t i = 0; i < count && i < MAX_NETWORKS; i++) {
+  credentials.reserve(loadCount);
+  for (size_t i = 0; i < loadCount; i++) {
     WifiCredential cred;
     serialization::readString(file, cred.ssid);
     serialization::readString(file, cred.password);
     legacyDeobfuscate(cred.password);
-    credentials.push_back(cred);
+    credentials.push_back(std::move(cred));
   }
 
   // LOG_DBG("WCS", "Loaded %zu WiFi credentials from binary file", credentials.size());
@@ -102,10 +104,11 @@ bool WifiCredentialStore::loadFromBinaryFile() {
 }
 
 bool WifiCredentialStore::addCredential(const std::string& ssid, const std::string& password) {
-  // Check if this SSID already exists and update it
+  // Check if this SSID already exists and update it only when needed.
   const auto cred = find_if(credentials.begin(), credentials.end(),
                             [&ssid](const WifiCredential& cred) { return cred.ssid == ssid; });
   if (cred != credentials.end()) {
+    if (cred->password == password) return true;
     cred->password = password;
     LOG_DBG("WCS", "Updated credentials for: %s", ssid.c_str());
     return saveToFile();
@@ -129,8 +132,11 @@ bool WifiCredentialStore::removeCredential(const std::string& ssid) {
   if (cred != credentials.end()) {
     credentials.erase(cred);
     LOG_DBG("WCS", "Removed credentials for: %s", ssid.c_str());
+    // Clear the remembered SSID in-memory and persist both changes together.
+    // Calling clearLastConnectedSsid() here would write wifi.json once, then
+    // removeCredential() would immediately write the same file a second time.
     if (ssid == lastConnectedSsid) {
-      clearLastConnectedSsid();
+      lastConnectedSsid.clear();
     }
     return saveToFile();
   }
@@ -167,6 +173,7 @@ void WifiCredentialStore::clearLastConnectedSsid() {
 }
 
 void WifiCredentialStore::clearAll() {
+  if (credentials.empty() && lastConnectedSsid.empty()) return;
   credentials.clear();
   lastConnectedSsid.clear();
   saveToFile();

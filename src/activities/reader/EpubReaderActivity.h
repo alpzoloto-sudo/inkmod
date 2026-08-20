@@ -1,4 +1,5 @@
 #pragma once
+#include <Arduino.h>
 #include <Epub.h>
 #include <Epub/FootnoteEntry.h>
 #include <Epub/Section.h>
@@ -15,6 +16,7 @@
 #include "ClippingStore.h"
 #include "EpubReaderMenuActivity.h"
 #include "GlobalReadingStats.h"
+#include "ReaderUtils.h"
 #include "activities/Activity.h"
 
 class EpubReaderActivity final : public Activity {
@@ -186,6 +188,40 @@ class EpubReaderActivity final : public Activity {
   void onExit() override;
   void loop() override;
   void render(RenderLock&& lock) override;
+
+  // A chapter/page-layout transition intentionally drops `section` while the
+  // target is rebuilt or reloaded. Previously, a page-turn arriving in the
+  // tiny unlocked gap before that render simply reached the `!section` branch
+  // in loop(), called requestUpdate(), and was forgotten. Preserve that one
+  // navigation event in the existing bounded coalesced queue.
+  //
+  // Do not duplicate the event which *caused* a normal chapter boundary: the
+  // pageTurn() path stamps lastPageTurnTime immediately before requestUpdate().
+  // Also leave configured long-press actions alone because Chapter Skip,
+  // 10-page skip, font-size and orientation have already handled their input.
+  void requestUpdate(bool immediate = false) override {
+    if (!section && epub) {
+      const unsigned long now = millis();
+      const auto turn = ReaderUtils::detectPageTurn(mappedInput);
+      const bool triggered = turn.prev || turn.next;
+      const bool longPress = !turn.fromTilt && mappedInput.getHeldTime() > ReaderUtils::SKIP_HOLD_MS;
+      const bool specialLongPress =
+          longPress &&
+          (turn.fromSideBtn
+               ? SETTINGS.sideButtonLongPress != InkMODSettings::SIDE_LONG_PRESS::SIDE_LONG_OFF
+               : SETTINGS.longPressButtonBehavior != InkMODSettings::LONG_PRESS_BUTTON_BEHAVIOR::OFF);
+
+      if (triggered && !specialLongPress && now != lastPageTurnTime) {
+        coalescedPageDelta.fetch_add(turn.next ? 1 : -1, std::memory_order_relaxed);
+        // A single preserved release does not need the normal 180 ms burst
+        // window. Any non-zero deadline lets the existing render path consume
+        // it only after the target section/page count exists.
+        navigationSettleUntilMs.store(1, std::memory_order_relaxed);
+      }
+    }
+    Activity::requestUpdate(immediate);
+  }
+
   bool preventAutoSleep() override { return automaticPageTurnActive; }
   bool isReaderActivity() const override { return true; }
   bool canSnapshotForSleepOverlay() const override { return true; }

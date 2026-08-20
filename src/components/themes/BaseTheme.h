@@ -128,7 +128,11 @@ constexpr ThemeMetrics values = {.batteryWidth = 15,
                                  .headerHeight = 45,
                                  .verticalSpacing = 10,
                                  .contentSidePadding = 20,
-                                 .listRowHeight = 30,
+                                 // Keep every list row tall enough for the two-line
+                                 // UI path. drawList may discover subtitles per row,
+                                 // so a short one-line selection must never make a
+                                 // neighbouring two-line item overlap or clip.
+                                 .listRowHeight = 50,
                                  .listWithSubtitleRowHeight = 50,
                                  .menuRowHeight = 45,
                                  .menuSpacing = 8,

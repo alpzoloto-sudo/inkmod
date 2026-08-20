@@ -169,7 +169,7 @@ void fb2ZipScanTask(void* arg) {
 }
 
 
-constexpr uint8_t PACKAGE_VERSION = 13;  // 40 KiB virtual text chunks; invalidates old 20 KiB package indexes
+constexpr uint8_t PACKAGE_VERSION = 14;  // 24 KiB virtual text chunks; invalidates older package indexes
 // A single FB2 <section> with more inline images than this gets split into
 // several virtual chapters while its SD-card index is written, so a chapter
 // that's actually opened never needs to extract more than this many images
@@ -189,10 +189,11 @@ constexpr uint32_t MAX_IMAGES_PER_CHAPTER = 2;
 // is bounded without creating hundreds of tiny spine items.
 // 20 KiB produced 2220 virtual spine items for a real 48 MiB FB2. Each item
 // adds index/OPF/cache work and made package creation take over two minutes.
-// Section rendering itself is streaming, so 40 KiB remains bounded while
-// roughly halving virtual-item overhead. Do not raise this to 64 KiB until
-// real-device heap traces confirm enough margin on image/style-heavy sections.
-constexpr uint32_t TARGET_TEXT_BYTES_PER_CHAPTER = 40 * 1024;
+// 24 KiB is the compromise after real-device traces showed maxAlloc falling
+// to roughly 32-36 KiB while a 40 KiB virtual chapter was being paginated.
+// This leaves headroom for parser/layout allocations without returning all the
+// way to the 20 KiB setting that created ~2220 spine items on a 48 MiB book.
+constexpr uint32_t TARGET_TEXT_BYTES_PER_CHAPTER = 24 * 1024;
 
 uint32_t virtualChapterCount(const Fb2SectionIndexEntry& section) {
   if (section.imageRefCount > 0) {
@@ -221,8 +222,7 @@ void normalizeText(std::string& value) {
   value.swap(normalized);
 }
 
-uint64_t fnvHash64(const char* data, size_t length) {
-  uint64_t hash = 14695981039346656037ull;
+uint64_t fnvHash64Update(uint64_t hash, const char* data, size_t length) {
   for (size_t i = 0; i < length; ++i) {
     hash ^= static_cast<uint8_t>(data[i]);
     hash *= 1099511628211ull;
@@ -230,7 +230,23 @@ uint64_t fnvHash64(const char* data, size_t length) {
   return hash;
 }
 
+uint64_t fnvHash64(const char* data, size_t length) {
+  return fnvHash64Update(14695981039346656037ull, data, length);
+}
+
 uint64_t hashString(const std::string& value) { return fnvHash64(value.data(), value.size()); }
+
+size_t formatUnsignedDecimal(uint32_t value, char (&buffer)[11]) {
+  char reverse[10];
+  size_t count = 0;
+  do {
+    reverse[count++] = static_cast<char>('0' + value % 10);
+    value /= 10;
+  } while (value != 0);
+  for (size_t i = 0; i < count; ++i) buffer[i] = reverse[count - 1 - i];
+  buffer[count] = '\0';
+  return count;
+}
 
 std::string anchorName(uint64_t hash) {
   constexpr char HEX_DIGITS[] = "0123456789abcdef";
@@ -243,28 +259,51 @@ std::string anchorName(uint64_t hash) {
 }
 
 uint64_t automaticAnchor(const char* type, int serial) {
-  const std::string value = std::string(type) + ":" + std::to_string(serial);
-  return hashString(value);
+  uint64_t hash = 14695981039346656037ull;
+  hash = fnvHash64Update(hash, type, strlen(type));
+  const char colon = ':';
+  hash = fnvHash64Update(hash, &colon, 1);
+  char digits[11];
+  const size_t digitCount = formatUnsignedDecimal(static_cast<uint32_t>(serial), digits);
+  return fnvHash64Update(hash, digits, digitCount);
 }
 
-std::string chapterHref(int index) { return "text/chapter_" + std::to_string(index) + ".xhtml"; }
+std::string chapterHref(int index) {
+  char digits[11];
+  const size_t digitCount = formatUnsignedDecimal(static_cast<uint32_t>(index), digits);
+  std::string result;
+  result.reserve(sizeof("text/chapter_") - 1 + digitCount + sizeof(".xhtml") - 1);
+  result.append("text/chapter_");
+  result.append(digits, digitCount);
+  result.append(".xhtml");
+  return result;
+}
 
-std::string lowercase(std::string value) {
-  std::transform(value.begin(), value.end(), value.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return value;
+inline unsigned char asciiLowerFb2(unsigned char c) {
+  return c >= 'A' && c <= 'Z' ? static_cast<unsigned char>(c + ('a' - 'A')) : c;
+}
+
+template <size_t N>
+bool equalsAsciiIgnoreCase(const std::string& value, const char (&literal)[N]) {
+  constexpr size_t literalLen = N - 1;
+  if (value.size() != literalLen) return false;
+  for (size_t i = 0; i < literalLen; ++i) {
+    if (asciiLowerFb2(static_cast<unsigned char>(value[i])) !=
+        asciiLowerFb2(static_cast<unsigned char>(literal[i]))) return false;
+  }
+  return true;
 }
 
 bool isNotesBody(const std::string& name) {
-  const std::string normalized = lowercase(name);
-  return normalized == "notes" || normalized == "comments" || normalized == "footnotes" ||
-         normalized == "endnotes" || normalized == "annotations";
+  return equalsAsciiIgnoreCase(name, "notes") || equalsAsciiIgnoreCase(name, "comments") ||
+         equalsAsciiIgnoreCase(name, "footnotes") || equalsAsciiIgnoreCase(name, "endnotes") ||
+         equalsAsciiIgnoreCase(name, "annotations");
 }
 
 std::string normalizeImageMediaType(const std::string& value) {
-  const std::string mediaType = lowercase(value);
-  if (mediaType == "image/jpeg" || mediaType == "image/jpg" || mediaType == "image/pjpeg") return "image/jpeg";
-  if (mediaType == "image/png" || mediaType == "image/x-png") return "image/png";
+  if (equalsAsciiIgnoreCase(value, "image/jpeg") || equalsAsciiIgnoreCase(value, "image/jpg") ||
+      equalsAsciiIgnoreCase(value, "image/pjpeg")) return "image/jpeg";
+  if (equalsAsciiIgnoreCase(value, "image/png") || equalsAsciiIgnoreCase(value, "image/x-png")) return "image/png";
   return {};
 }
 
@@ -275,6 +314,36 @@ void writeBytes(Print& out, const char* data, size_t length) {
 void writeBytes(Print& out, const std::string& value) { writeBytes(out, value.data(), value.size()); }
 
 void writeBytes(Print& out, const char* value) { writeBytes(out, value, strlen(value)); }
+
+void writeDecimal(Print& out, uint32_t value) {
+  char digits[11];
+  const size_t count = formatUnsignedDecimal(value, digits);
+  writeBytes(out, digits, count);
+}
+
+void writeChapterHrefDirect(Print& out, int index) {
+  writeBytes(out, "text/chapter_");
+  writeDecimal(out, static_cast<uint32_t>(index));
+  writeBytes(out, ".xhtml");
+}
+
+void writeAnchorNameDirect(Print& out, uint64_t hash) {
+  static constexpr char HEX_DIGITS[] = "0123456789abcdef";
+  char value[20] = {'f', 'b', '2', '-'};
+  for (int i = 0; i < 16; ++i) value[4 + i] = HEX_DIGITS[(hash >> ((15 - i) * 4)) & 0x0f];
+  writeBytes(out, value, sizeof(value));
+}
+
+void writeHeadingTag(Print& out, int heading, bool closing) {
+  const char digit = static_cast<char>('0' + heading);
+  if (closing) {
+    const char tag[] = {'<', '/', 'h', digit, '>'};
+    writeBytes(out, tag, sizeof(tag));
+  } else {
+    const char tag[] = {'<', 'h', digit, '>'};
+    writeBytes(out, tag, sizeof(tag));
+  }
+}
 
 void writeXmlEscaped(Print& out, const char* text, size_t length, bool attribute = false) {
   size_t start = 0;
@@ -676,25 +745,32 @@ class StreamSink : public Fb2ContentSink {
   }
 
   void onText(const std::string& text, Fb2InlineStyle style) override {
-    const auto has = [style](Fb2InlineStyle bit) {
-      return (static_cast<uint8_t>(style) & static_cast<uint8_t>(bit)) != 0;
+    const uint8_t bits = static_cast<uint8_t>(style);
+    const auto has = [bits](Fb2InlineStyle bit) {
+      return (bits & static_cast<uint8_t>(bit)) != 0;
     };
-    std::string open, close;
-    auto wrap = [&](bool cond, const char* openTag, const char* closeTag) {
-      if (!cond) return;
-      open += openTag;
-      close = closeTag + close;
-    };
-    wrap(has(Fb2InlineStyle::Bold), "<strong>", "</strong>");
-    wrap(has(Fb2InlineStyle::Italic), "<em>", "</em>");
-    wrap(has(Fb2InlineStyle::Underline), "<span class=\"underline\">", "</span>");
-    wrap(has(Fb2InlineStyle::Strikethrough), "<span class=\"strike\">", "</span>");
-    wrap(has(Fb2InlineStyle::SmallCaps), "<span class=\"smallcaps\">", "</span>");
-    wrap(has(Fb2InlineStyle::Superscript), "<sup>", "</sup>");
-    wrap(has(Fb2InlineStyle::Subscript), "<sub>", "</sub>");
-    writeBytes(out_, open.c_str());
+
+    // This callback is on the per-text-run render hot path. Writing the
+    // wrappers directly avoids constructing/concatenating two temporary
+    // std::strings for every styled run, which fragmented the small C3 heap
+    // in formatting-heavy FB2 chapters. Close in exact reverse order.
+    if (has(Fb2InlineStyle::Bold)) writeBytes(out_, "<strong>");
+    if (has(Fb2InlineStyle::Italic)) writeBytes(out_, "<em>");
+    if (has(Fb2InlineStyle::Underline)) writeBytes(out_, "<span class=\"underline\">");
+    if (has(Fb2InlineStyle::Strikethrough)) writeBytes(out_, "<span class=\"strike\">");
+    if (has(Fb2InlineStyle::SmallCaps)) writeBytes(out_, "<span class=\"smallcaps\">");
+    if (has(Fb2InlineStyle::Superscript)) writeBytes(out_, "<sup>");
+    if (has(Fb2InlineStyle::Subscript)) writeBytes(out_, "<sub>");
+
     writeXmlEscaped(out_, text);
-    writeBytes(out_, close.c_str());
+
+    if (has(Fb2InlineStyle::Subscript)) writeBytes(out_, "</sub>");
+    if (has(Fb2InlineStyle::Superscript)) writeBytes(out_, "</sup>");
+    if (has(Fb2InlineStyle::SmallCaps)) writeBytes(out_, "</span>");
+    if (has(Fb2InlineStyle::Strikethrough)) writeBytes(out_, "</span>");
+    if (has(Fb2InlineStyle::Underline)) writeBytes(out_, "</span>");
+    if (has(Fb2InlineStyle::Italic)) writeBytes(out_, "</em>");
+    if (has(Fb2InlineStyle::Bold)) writeBytes(out_, "</strong>");
   }
 
   void onImage(const std::string& binaryId) override {
@@ -1023,7 +1099,7 @@ class TextRangeFilterSink : public Fb2ContentSink {
     }
     if (!emitting_ && !finished_ && textOrdinal_ >= rangeStart_) {
       // An unusually large single paragraph can span more than one nominal
-      // 20 KiB slice. In that case the intervening slice is intentionally
+      // nominal text slice. In that case the intervening slice is intentionally
       // empty rather than duplicating the paragraph in multiple chapters.
       if (rangeEnd_ != UINT32_MAX && textOrdinal_ >= rangeEnd_) {
         finished_ = true;
@@ -1097,8 +1173,14 @@ bool Fb2::isCompressedFb2() const {
   // real books renamed with e.g. "_fb2.zip" instead of ".fb2.zip", which
   // used to mean prepareSource() skipped extraction entirely and scan()
   // ended up reading raw zip container bytes as if they were the FB2 XML.
-  const std::string name = lowercase(filepath);
-  return name.size() >= 4 && name.compare(name.size() - 4, 4, ".zip") == 0;
+  if (filepath.size() < 4) return false;
+  const size_t offset = filepath.size() - 4;
+  static constexpr char kZip[] = ".zip";
+  for (size_t i = 0; i < 4; ++i) {
+    if (asciiLowerFb2(static_cast<unsigned char>(filepath[offset + i])) !=
+        static_cast<unsigned char>(kZip[i])) return false;
+  }
+  return true;
 }
 
 bool Fb2::prepareSource(const ProgressFn& onProgress) {
@@ -1110,11 +1192,17 @@ bool Fb2::prepareSource(const ProgressFn& onProgress) {
     HalFile zipFile;
     if (!Storage.openFileForRead("FB2", filepath, zipFile)) return false;
     FsFileReader zipReader(zipFile);
+#if defined(ENABLE_SERIAL_LOG)
+    ProfiledByteReader profiledZipReader(zipReader);
+    IByteReader& zipInput = profiledZipReader;
+#else
+    IByteReader& zipInput = zipReader;
+#endif
 
     // Locate the FB2 entry ourselves so its uncompressed size can be exposed
     // to IByteReader::size() in the concurrent parser.
     ZipEntryInfo zipEntry;
-    if (!findFb2EntryInZip(zipReader, zipEntry)) {
+    if (!findFb2EntryInZip(zipInput, zipEntry)) {
       zipFile.close();
       LOG_ERR("FB2", "No FB2 file found in archive: %s", filepath.c_str());
       return false;
@@ -1168,10 +1256,25 @@ bool Fb2::prepareSource(const ProgressFn& onProgress) {
       }
     }
 
-    // Fused mode already spends ~12 KiB on pipe+task, so keep staging at the
-    // proven 8 KiB there. Sequential fallback may use v5's 16 KiB staging.
-    size_t flushBufSize = fusedScanStarted ? 8 * 1024 : 16 * 1024;
+    // Staging must leave room for DEFLATE's mandatory 32 KiB window plus
+    // read-ahead/Huffman state. A successful 32 KiB staging allocation can
+    // otherwise fragment the C3 heap enough for the inflater window to fail.
+    // Use the large staging buffer only with generous contiguous headroom.
+    size_t flushBufSize = 8 * 1024;
+    if (!fusedScanStarted) {
+      const uint32_t freeHeap = ESP.getFreeHeap();
+      const uint32_t maxAlloc = ESP.getMaxAllocHeap();
+      if (freeHeap >= 120 * 1024 && maxAlloc >= 80 * 1024) {
+        flushBufSize = 32 * 1024;
+      } else if (freeHeap >= 88 * 1024 && maxAlloc >= 56 * 1024) {
+        flushBufSize = 16 * 1024;
+      }
+    }
     auto flushBuf = std::unique_ptr<uint8_t[]>(new (std::nothrow) uint8_t[flushBufSize]);
+    if (!flushBuf && flushBufSize > 16 * 1024) {
+      flushBufSize = 16 * 1024;
+      flushBuf.reset(new (std::nothrow) uint8_t[flushBufSize]);
+    }
     if (!flushBuf && flushBufSize > 8 * 1024) {
       flushBufSize = 8 * 1024;
       flushBuf.reset(new (std::nothrow) uint8_t[flushBufSize]);
@@ -1190,13 +1293,19 @@ bool Fb2::prepareSource(const ProgressFn& onProgress) {
 
     size_t flushUsed = 0;
     int flushCount = 0;
-    const uint32_t zipSize = zipReader.size();
+    const uint32_t zipSize = zipInput.size();
     const unsigned long fusedStarted = millis();
+#if defined(ENABLE_SERIAL_LOG)
+    uint32_t outputWriteMs = 0;
+    uint32_t outputWriteCalls = 0;
+    uint64_t outputWriteBytes = 0;
+#endif
+    bool outputWriteOk = true;
     LOG_INF("FB2-PROF", "fused start mem: free=%u max=%u",
             static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
 
     const bool extractedOk = extractZipEntry(
-        zipReader, zipEntry,
+        zipInput, zipEntry,
         [&](const uint8_t* d, size_t n) {
           // Feed the scanner BEFORE staging the same bytes to SD. Backpressure
           // from the 4 KiB pipe bounds memory: producer waits instead of
@@ -1215,17 +1324,37 @@ bool Fb2::prepareSource(const ProgressFn& onProgress) {
             flushUsed += copy;
             offset += copy;
             if (flushUsed < flushBufSize) continue;
-            extracted.write(flushBuf.get(), flushUsed);
+#if defined(ENABLE_SERIAL_LOG)
+            const uint32_t writeStarted = millis();
+#endif
+            const size_t written = extracted.write(flushBuf.get(), flushUsed);
+#if defined(ENABLE_SERIAL_LOG)
+            outputWriteMs += millis() - writeStarted;
+            ++outputWriteCalls;
+            outputWriteBytes += written;
+#endif
+            if (written != flushUsed) outputWriteOk = false;
             flushUsed = 0;
             ++flushCount;
             if (onProgress && zipSize > 0 && flushCount % 8 == 0) {
-              onProgress(static_cast<int>(zipReader.position() * 30 / zipSize));
+              onProgress(static_cast<int>(zipInput.tell() * 30 / zipSize));
             }
             if (flushCount % 128 == 0) vTaskDelay(1);
           }
         });
 
-    if (flushUsed > 0) extracted.write(flushBuf.get(), flushUsed);
+    if (flushUsed > 0) {
+#if defined(ENABLE_SERIAL_LOG)
+      const uint32_t writeStarted = millis();
+#endif
+      const size_t written = extracted.write(flushBuf.get(), flushUsed);
+#if defined(ENABLE_SERIAL_LOG)
+      outputWriteMs += millis() - writeStarted;
+      ++outputWriteCalls;
+      outputWriteBytes += written;
+#endif
+      if (written != flushUsed) outputWriteOk = false;
+    }
     extracted.close();
     zipFile.close();
 
@@ -1242,7 +1371,23 @@ bool Fb2::prepareSource(const ProgressFn& onProgress) {
     if (scanStream) vStreamBufferDelete(scanStream);
     pipeReader.reset();
 
-    if (!extractedOk) {
+#if defined(ENABLE_SERIAL_LOG)
+    const uint32_t zipElapsedMs = millis() - zipStarted;
+    const uint32_t accountedIoMs = profiledZipReader.ioTimeMs() + outputWriteMs;
+    LOG_INF("FB2-PROF",
+            "zip stage io: total=%lums read=%lums calls=%u seeks=%u bytes=%llu write=%lums calls=%u bytes=%llu other=%lums",
+            static_cast<unsigned long>(zipElapsedMs),
+            static_cast<unsigned long>(profiledZipReader.ioTimeMs()),
+            static_cast<unsigned>(profiledZipReader.readCalls()),
+            static_cast<unsigned>(profiledZipReader.seekCalls()),
+            static_cast<unsigned long long>(profiledZipReader.bytesRead()),
+            static_cast<unsigned long>(outputWriteMs),
+            static_cast<unsigned>(outputWriteCalls),
+            static_cast<unsigned long long>(outputWriteBytes),
+            static_cast<unsigned long>(zipElapsedMs > accountedIoMs ? zipElapsedMs - accountedIoMs : 0));
+#endif
+
+    if (!extractedOk || !outputWriteOk) {
       candidateScan.reset();
       Storage.remove(temporarySourcePath.c_str());
       LOG_ERR("FB2", "FB2.ZIP extraction failed: %s", filepath.c_str());
@@ -1531,28 +1676,37 @@ bool Fb2::convertToPackage(const ProgressFn& onProgress) {
     HalFile source;
     if (!Storage.openFileForRead("FB2", sourcePath, source)) return fail();
     FsFileReader rawReader(source);
-    ProfiledByteReader reader(rawReader);
+#if defined(ENABLE_SERIAL_LOG)
+    ProfiledByteReader profiledReader(rawReader);
+    IByteReader& reader = profiledReader;
+#else
+    IByteReader& reader = rawReader;
+#endif
     Fb2Parser parser;
     const unsigned long scanStarted = millis();
     LOG_INF("FB2-PROF", "scan start mem: free=%u max=%u",
             static_cast<unsigned>(ESP.getFreeHeap()),
             static_cast<unsigned>(ESP.getMaxAllocHeap()));
-    if (!parser.scan(reader, scan)) {
+    constexpr size_t scanXmlBufferSize = 8 * 1024;
+    LOG_INF("FB2-PROF", "scan XML buffer: %u bytes", static_cast<unsigned>(scanXmlBufferSize));
+    if (!parser.scan(reader, scan, scanXmlBufferSize)) {
       source.close();
       LOG_ERR("FB2", "FB2 scan failed (not well-formed?): %s", filepath.c_str());
       return fail();
     }
     source.close();
+#if defined(ENABLE_SERIAL_LOG)
     const uint32_t scanElapsed = millis() - scanStarted;
-    const uint32_t scanCpuMs = scanElapsed >= reader.ioTimeMs() ? scanElapsed - reader.ioTimeMs() : 0;
+    const uint32_t scanCpuMs = scanElapsed >= profiledReader.ioTimeMs() ? scanElapsed - profiledReader.ioTimeMs() : 0;
     LOG_INF("FB2-PROF", "scan: %lums", static_cast<unsigned long>(scanElapsed));
     LOG_INF("FB2-PROF", "scan io: %lums calls=%u seeks=%u",
-            static_cast<unsigned long>(reader.ioTimeMs()),
-            static_cast<unsigned>(reader.readCalls()),
-            static_cast<unsigned>(reader.seekCalls()));
+            static_cast<unsigned long>(profiledReader.ioTimeMs()),
+            static_cast<unsigned>(profiledReader.readCalls()),
+            static_cast<unsigned>(profiledReader.seekCalls()));
     LOG_INF("FB2-PROF", "scan bytes=%llu xml/cpu=%lums",
-            static_cast<unsigned long long>(reader.bytesRead()),
+            static_cast<unsigned long long>(profiledReader.bytesRead()),
             static_cast<unsigned long>(scanCpuMs));
+#endif
     LOG_INF("FB2-PROF", "scan tokens=%u textTokens=%u textBytes=%llu binaryTextBytes=%llu",
             static_cast<unsigned>(scan.tokenCount),
             static_cast<unsigned>(scan.textTokenCount),
@@ -1748,14 +1902,17 @@ bool Fb2::persistImageIndex(const Fb2ScanResult& scan) {
   for (const auto& binary : scan.binaries) {
     const std::string mediaType = normalizeImageMediaType(binary.contentType);
     if (mediaType.empty()) continue;
-    const std::string filename =
-        "image_" + std::to_string(imageIndex++) + (mediaType == "image/png" ? ".png" : ".jpg");
+    const bool isPng = mediaType == "image/png";
+    char imageDigits[11];
+    const size_t digitCount = formatUnsignedDecimal(static_cast<uint32_t>(imageIndex++), imageDigits);
     const uint16_t idLen = static_cast<uint16_t>(std::min(binary.id.size(), static_cast<size_t>(4096)));
-    const uint16_t nameLen = static_cast<uint16_t>(std::min(filename.size(), static_cast<size_t>(4096)));
+    const uint16_t nameLen = static_cast<uint16_t>((sizeof("image_") - 1) + digitCount + 4);
     bufferedImages.write(reinterpret_cast<const uint8_t*>(&idLen), sizeof(idLen));
     if (idLen) bufferedImages.write(reinterpret_cast<const uint8_t*>(binary.id.data()), idLen);
     bufferedImages.write(reinterpret_cast<const uint8_t*>(&nameLen), sizeof(nameLen));
-    if (nameLen) bufferedImages.write(reinterpret_cast<const uint8_t*>(filename.data()), nameLen);
+    writeBytes(bufferedImages, "image_");
+    writeBytes(bufferedImages, imageDigits, digitCount);
+    writeBytes(bufferedImages, isPng ? ".png" : ".jpg");
     bufferedImages.write(reinterpret_cast<const uint8_t*>(&binary.payloadStartOffset), sizeof(binary.payloadStartOffset));
     bufferedImages.write(reinterpret_cast<const uint8_t*>(&binary.payloadEndOffset), sizeof(binary.payloadEndOffset));
   }
@@ -1805,6 +1962,11 @@ bool Fb2::decodeImageOnDemand(const std::string& imagePath,
   }
   Fb2BinaryIndexEntry binary;
   bool found = false;
+  // Parser-side binary ids are capped at 192 bytes and generated image names
+  // are far shorter than 96. Keep scan scratch fixed so looking up image_500
+  // does not allocate two std::strings for each of the first 500 records.
+  std::array<char, 192> idScratch{};
+  std::array<char, 96> nameScratch{};
   for (;;) {
     if (cancellationToken && cancellationToken->isCancellationRequested()) {
       imagesIn.close();
@@ -1812,18 +1974,28 @@ bool Fb2::decodeImageOnDemand(const std::string& imagePath,
     }
     uint16_t idLen = 0, nameLen = 0;
     if (imagesIn.read(&idLen, sizeof(idLen)) != sizeof(idLen)) break;
-    std::string id(idLen, '\0');
-    if (idLen && imagesIn.read(id.data(), idLen) != idLen) break;
+    if (idLen > idScratch.size()) {
+      if (!skipCacheBytes(imagesIn, idLen)) break;
+    } else if (idLen && imagesIn.read(idScratch.data(), idLen) != idLen) {
+      break;
+    }
     if (imagesIn.read(&nameLen, sizeof(nameLen)) != sizeof(nameLen)) break;
-    std::string name(nameLen, '\0');
-    if (nameLen && imagesIn.read(name.data(), nameLen) != nameLen) break;
+    bool nameMatches = nameLen == filename.size() && nameLen <= nameScratch.size();
+    if (nameLen > nameScratch.size()) {
+      if (!skipCacheBytes(imagesIn, nameLen)) break;
+      nameMatches = false;
+    } else if (nameLen && imagesIn.read(nameScratch.data(), nameLen) != nameLen) {
+      break;
+    }
+    if (nameMatches && memcmp(nameScratch.data(), filename.data(), nameLen) != 0) nameMatches = false;
+
     uint32_t startOffset = 0, endOffset = 0;
     if (imagesIn.read(&startOffset, sizeof(startOffset)) != sizeof(startOffset) ||
         imagesIn.read(&endOffset, sizeof(endOffset)) != sizeof(endOffset)) {
       break;
     }
-    if (name == filename) {
-      binary.id = std::move(id);
+    if (nameMatches && idLen <= idScratch.size()) {
+      binary.id.assign(idScratch.data(), idLen);
       binary.payloadStartOffset = startOffset;
       binary.payloadEndOffset = endOffset;
       found = true;
@@ -2016,19 +2188,26 @@ bool Fb2::getLogicalChapterBounds(const std::string& packageCachePath, int chapt
   };
 
   uint32_t targetOffset = 0;
+  uint32_t previousOffset = 0;
+  bool havePrevious = false;
   bool targetFound = false;
   int index = 0;
+  int runStart = 0;
   int firstMatch = -1;
   int lastMatch = -1;
 
+  // Track the start of each contiguous innerStartOffset run while walking to
+  // the target. Once the target is reached we already know its first slice,
+  // so there is no need to close/reopen the file and scan from zero again.
   while (true) {
     uint32_t offset = 0;
     if (!readRecordKey(offset)) break;
 
+    if (!havePrevious || offset != previousOffset) runStart = index;
     if (index == chapterIndex) {
       targetOffset = offset;
       targetFound = true;
-      firstMatch = index;
+      firstMatch = runStart;
       lastMatch = index;
     } else if (targetFound) {
       if (offset == targetOffset) {
@@ -2037,42 +2216,19 @@ bool Fb2::getLogicalChapterBounds(const std::string& packageCachePath, int chapt
         break;
       }
     }
-    ++index;
-  }
 
-  if (!targetFound) {
-    sectionsIn.close();
-    return false;
-  }
-
-  // Rewind once to find earlier contiguous slices sharing the same
-  // original section. Re-open and validate instead of depending on the
-  // serialized cache-header byte size here.
-  sectionsIn.close();
-  if (!Storage.openFileForRead("FB2", packageCachePath + SECTIONS_INDEX_FILE, sectionsIn) ||
-      !readAndCheckCacheHeader(sectionsIn)) {
-    if (sectionsIn) sectionsIn.close();
-    return false;
-  }
-
-  index = 0;
-  while (index < chapterIndex) {
-    uint32_t offset = 0;
-    if (!readRecordKey(offset)) break;
-    if (offset == targetOffset) {
-      if (firstMatch == chapterIndex) firstMatch = index;
-    } else if (firstMatch != chapterIndex) {
-      // Only contiguous equal-offset records belong to this section.
-      firstMatch = chapterIndex;
-    }
+    previousOffset = offset;
+    havePrevious = true;
     ++index;
   }
 
   sectionsIn.close();
-  startIndex = firstMatch >= 0 ? firstMatch : chapterIndex;
-  endIndex = lastMatch >= 0 ? lastMatch : chapterIndex;
+  if (!targetFound) return false;
+  startIndex = firstMatch;
+  endIndex = lastMatch;
   return true;
 }
+
 
 // Resolves an FB2 section id only when a link is actually emitted.  Keeping a
 // complete id-to-chapter vector per rendered chapter used many short-lived
@@ -2187,15 +2343,21 @@ bool Fb2::renderChapterOnDemand(const std::string& packageCachePath, int chapter
         sectionsIn.read(&idLen, sizeof(idLen)) != sizeof(idLen)) {
       break;
     }
-    id.assign(idLen, '\0');
-    if (idLen && sectionsIn.read(id.data(), idLen) != idLen) break;
+    const bool targetRecord = i == chapterIndex;
+    if (targetRecord) {
+      id.assign(idLen, '\0');
+      if (idLen && sectionsIn.read(id.data(), idLen) != idLen) break;
+    } else if (idLen && !skipCacheBytes(sectionsIn, idLen)) {
+      break;
+    }
     if (sectionsIn.read(&titleLen, sizeof(titleLen)) != sizeof(titleLen)) break;
-    title.assign(titleLen, '\0');
-    if (titleLen && sectionsIn.read(title.data(), titleLen) != titleLen) break;
-    // Every record ends with approxTextBytes then the image range (see the
-    // write loop building SECTIONS_INDEX_FILE in convertToPackage()) -
-    // always consumed, even for a record we're skipping past, so the read
-    // position doesn't end up misaligned for the next one.
+    if (targetRecord) {
+      title.assign(titleLen, '\0');
+      if (titleLen && sectionsIn.read(title.data(), titleLen) != titleLen) break;
+    } else if (titleLen && !skipCacheBytes(sectionsIn, titleLen)) {
+      break;
+    }
+    // Every record ends with approxTextBytes then the image/text ranges.
     if (sectionsIn.read(&approxTextBytes, sizeof(approxTextBytes)) != sizeof(approxTextBytes) ||
         sectionsIn.read(&imageRangeStart, sizeof(imageRangeStart)) != sizeof(imageRangeStart) ||
         sectionsIn.read(&imageRangeEnd, sizeof(imageRangeEnd)) != sizeof(imageRangeEnd) ||
@@ -2203,7 +2365,7 @@ bool Fb2::renderChapterOnDemand(const std::string& packageCachePath, int chapter
         sectionsIn.read(&textRangeEnd, sizeof(textRangeEnd)) != sizeof(textRangeEnd)) {
       break;
     }
-    if (i == chapterIndex) {
+    if (targetRecord) {
       found = true;
       break;
     }
@@ -2230,14 +2392,14 @@ bool Fb2::renderChapterOnDemand(const std::string& packageCachePath, int chapter
 
   const uint64_t anchor = id.empty() ? automaticAnchor("section", chapterIndex) : fnvHash64(id.data(), id.size());
   writeBytes(out, "<section id=\"");
-  writeXmlEscaped(out, anchorName(anchor), true);
+  writeAnchorNameDirect(out, anchor);
   writeBytes(out, "\">");
 
   if (!title.empty()) {
     const int heading = std::min(std::max(static_cast<int>(level) + 1, 1), 6);
-    writeBytes(out, "<h" + std::to_string(heading) + ">");
+    writeHeadingTag(out, heading, false);
     writeXmlEscaped(out, title);
-    writeBytes(out, "</h" + std::to_string(heading) + ">");
+    writeHeadingTag(out, heading, true);
   }
 
   // An FB2 annotation belongs to <description>, not to a body section.  It
@@ -2340,8 +2502,7 @@ bool Fb2::writeOpfFile() const {
   writeBytes(file, "</dc:creator><dc:language>");
   writeXmlEscaped(file, language);
   writeBytes(file, "</dc:language><dc:identifier id=\"bookid\">fb2-");
-  const std::string identifier = anchorName(hashString(filepath));
-  writeXmlEscaped(file, identifier);
+  writeAnchorNameDirect(file, hashString(filepath));
   writeBytes(file, "</dc:identifier>");
 
   const ImageInfoPublic* cover = findImage(coverImageId);
@@ -2352,14 +2513,20 @@ bool Fb2::writeOpfFile() const {
   writeBytes(file, "<item id=\"ncx\" href=\"toc.ncx\" media-type=\"application/x-dtbncx+xml\"/>");
   writeBytes(file, "<item id=\"style\" href=\"style.css\" media-type=\"text/css\"/>");
   for (int i = 0; i < chapterCount; ++i) {
-    const std::string item = "<item id=\"chapter-" + std::to_string(i) + "\" href=\"" + chapterHref(i) +
-                             "\" media-type=\"application/xhtml+xml\"/>";
-    writeBytes(file, item);
+    writeBytes(file, "<item id=\"chapter-");
+    writeDecimal(file, static_cast<uint32_t>(i));
+    writeBytes(file, "\" href=\"");
+    writeChapterHrefDirect(file, i);
+    writeBytes(file, "\" media-type=\"application/xhtml+xml\"/>");
   }
   for (size_t i = 0; i < images.size(); ++i) {
-    const std::string id = cover && images[i].id == cover->id ? "cover-image" : "image-" + std::to_string(i);
     writeBytes(file, "<item id=\"");
-    writeXmlEscaped(file, id, true);
+    if (cover && images[i].id == cover->id) {
+      writeBytes(file, "cover-image");
+    } else {
+      writeBytes(file, "image-");
+      writeDecimal(file, static_cast<uint32_t>(i));
+    }
     writeBytes(file, "\" href=\"images/");
     writeXmlEscaped(file, images[i].filename, true);
     writeBytes(file, "\" media-type=\"");
@@ -2368,10 +2535,12 @@ bool Fb2::writeOpfFile() const {
   }
   writeBytes(file, "</manifest><spine toc=\"ncx\">");
   for (int i = 0; i < chapterCount; ++i) {
-    writeBytes(file, "<itemref idref=\"chapter-" + std::to_string(i) + "\"/>");
+    writeBytes(file, "<itemref idref=\"chapter-");
+    writeDecimal(file, static_cast<uint32_t>(i));
+    writeBytes(file, "\"/>");
   }
   writeBytes(file, "</spine><guide><reference type=\"text\" title=\"Start\" href=\"");
-  writeBytes(file, chapterHref(0));
+  writeChapterHrefDirect(file, 0);
   writeBytes(file, "\"/></guide></package>\n");
   file.close();
   return true;
@@ -2402,9 +2571,10 @@ bool Fb2::writeNcxFile(const Fb2ScanResult& scan) const {
         isNotesBody(scan.bodies[section.bodyIndex].name)) {
       continue;
     }
-    const std::string_view pooledTitle = scan.sectionTitle(section);
-    std::string sectionTitle(pooledTitle.begin(), pooledTitle.end());
-    normalizeText(sectionTitle);
+    // scan() already stores section titles whitespace-normalized in the
+    // shared string pool. Stream that view directly instead of allocating a
+    // second std::string for every TOC entry.
+    const std::string_view sectionTitle = scan.sectionTitle(section);
     if (sectionTitle.empty()) continue;
 
     const int targetDepth = std::min(std::max(1, static_cast<int>(section.level) + 1), openDepth + 1);
@@ -2417,15 +2587,17 @@ bool Fb2::writeNcxFile(const Fb2ScanResult& scan) const {
     const uint64_t anchor =
         pooledId.empty() ? automaticAnchor("section", static_cast<int>(i))
                          : fnvHash64(pooledId.data(), pooledId.size());
-    writeBytes(file, "<navPoint id=\"nav-" + std::to_string(playOrder) + "\" playOrder=\"" +
-                         std::to_string(playOrder) + "\"><navLabel><text>");
-    writeXmlEscaped(file, sectionTitle);
+    writeBytes(file, "<navPoint id=\"nav-");
+    writeDecimal(file, static_cast<uint32_t>(playOrder));
+    writeBytes(file, "\" playOrder=\"");
+    writeDecimal(file, static_cast<uint32_t>(playOrder));
+    writeBytes(file, "\"><navLabel><text>");
+    writeXmlEscaped(file, sectionTitle.data(), sectionTitle.size());
     writeBytes(file, "</text></navLabel><content src=\"");
-    // A split section's TOC entry always points at its first virtual
-    // chapter (see splitSectionsForImageLoad()) - i may not equal the
-    // chapter index once any earlier section has been split.
-    writeBytes(file, chapterHref(currentFirstChapterIndex));
-    writeBytes(file, "#" + anchorName(anchor));
+    // A split section's TOC entry always points at its first virtual chapter.
+    writeChapterHrefDirect(file, currentFirstChapterIndex);
+    writeBytes(file, "#");
+    writeAnchorNameDirect(file, anchor);
     writeBytes(file, "\"/>\n");
     openDepth = targetDepth;
     ++playOrder;
@@ -2434,10 +2606,20 @@ bool Fb2::writeNcxFile(const Fb2ScanResult& scan) const {
 
   if (!any) {
     for (int chapterIndex = 0; chapterIndex < chapterCount; ++chapterIndex) {
-      writeBytes(file, "<navPoint id=\"nav-" + std::to_string(playOrder) + "\" playOrder=\"" +
-                           std::to_string(playOrder) + "\"><navLabel><text>");
-      writeXmlEscaped(file, chapterIndex == 0 ? title : "Section " + std::to_string(chapterIndex + 1));
-      writeBytes(file, "</text></navLabel><content src=\"" + chapterHref(chapterIndex) + "\"/></navPoint>\n");
+      writeBytes(file, "<navPoint id=\"nav-");
+      writeDecimal(file, static_cast<uint32_t>(playOrder));
+      writeBytes(file, "\" playOrder=\"");
+      writeDecimal(file, static_cast<uint32_t>(playOrder));
+      writeBytes(file, "\"><navLabel><text>");
+      if (chapterIndex == 0) {
+        writeXmlEscaped(file, title);
+      } else {
+        writeBytes(file, "Section ");
+        writeDecimal(file, static_cast<uint32_t>(chapterIndex + 1));
+      }
+      writeBytes(file, "</text></navLabel><content src=\"");
+      writeChapterHrefDirect(file, chapterIndex);
+      writeBytes(file, "\"/></navPoint>\n");
       ++playOrder;
     }
   } else {

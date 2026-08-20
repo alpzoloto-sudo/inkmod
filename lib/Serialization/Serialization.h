@@ -3,6 +3,7 @@
 
 #include <iostream>
 #include <limits>
+#include <string_view>
 
 namespace serialization {
 template <typename T>
@@ -45,6 +46,14 @@ static void writeString(FsFile& file, const std::string& s) {
   const uint32_t len = s.size();
   writePod(file, len);
   file.write(reinterpret_cast<const uint8_t*>(s.data()), len);
+}
+
+static void writeString(FsFile& file, const std::string_view s) {
+  const uint32_t len = static_cast<uint32_t>(s.size());
+  writePod(file, len);
+  if (len != 0) {
+    file.write(reinterpret_cast<const uint8_t*>(s.data()), len);
+  }
 }
 
 static bool tryWriteString(FsFile& file, const std::string& s) {

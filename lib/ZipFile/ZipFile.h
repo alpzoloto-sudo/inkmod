@@ -99,31 +99,41 @@ class ZipFile {
 
     file.seek(zipDetails.centralDirOffset);
 
-    uint32_t sig;
+    constexpr size_t centralHeaderSize = 46;
+    uint8_t header[centralHeaderSize];
     char itemName[256];
 
-    while (file.available()) {
-      file.read(&sig, 4);
-      if (sig != 0x02014b50) {
+    auto readLe16 = [](const uint8_t* p) -> uint16_t {
+      return static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8);
+    };
+    auto readLe32 = [](const uint8_t* p) -> uint32_t {
+      return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+             (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
+    };
+
+    // Central-directory entries have a fixed 46-byte prefix. Read that prefix
+    // once instead of issuing several tiny read()/seekCur() operations for the
+    // signature and length fields. EPUB discovery can touch hundreds of ZIP
+    // entries, so this substantially reduces SD/SPI transactions without
+    // changing enumeration semantics or retaining extra heap memory.
+    while (file.read(header, sizeof(header)) == static_cast<int>(sizeof(header))) {
+      if (readLe32(header) != 0x02014b50) {
         break;
       }
 
-      file.seekCur(24);
-      uint16_t nameLen, m, k;
-      file.read(&nameLen, 2);
-      file.read(&m, 2);
-      file.read(&k, 2);
-      file.seekCur(12);
+      const uint16_t nameLen = readLe16(header + 28);
+      const uint16_t extraLen = readLe16(header + 30);
+      const uint16_t commentLen = readLe16(header + 32);
 
       if (nameLen < sizeof(itemName)) {
-        file.read(itemName, nameLen);
+        if (file.read(itemName, nameLen) != static_cast<int>(nameLen)) break;
         itemName[nameLen] = '\0';
         callback(std::string_view{itemName, nameLen});
-      } else {
-        file.seekCur(nameLen);
+      } else if (!file.seekCur(nameLen)) {
+        break;
       }
 
-      file.seekCur(m + k);
+      if (!file.seekCur(static_cast<int64_t>(extraLen) + commentLen)) break;
     }
 
     if (!wasOpen) {

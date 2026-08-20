@@ -589,8 +589,10 @@ void TxtReaderActivity::renderPage() {
   // BW rendering
   renderLines();
   renderStatusBar();
-  GUI.drawTopStatusBarClock(renderer, UITheme::getInstance().getMetrics().topPadding, nullptr, true, 0,
-                            ReaderUtils::readerDarkModeEnabled());
+  if (ReaderUtils::shouldShowTopClockStatusBar()) {
+    GUI.drawTopStatusBarClock(renderer, UITheme::getInstance().getMetrics().topPadding, nullptr, true, 0,
+                              ReaderUtils::readerDarkModeEnabled());
+  }
 
   ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
 

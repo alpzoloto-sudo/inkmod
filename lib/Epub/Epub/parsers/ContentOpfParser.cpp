@@ -6,6 +6,7 @@
 #include <XmlParserUtils.h>
 
 #include <cctype>
+#include <cstring>
 
 #include "Epub/BookMetadataCache.h"
 
@@ -14,21 +15,68 @@ constexpr char MEDIA_TYPE_NCX[] = "application/x-dtbncx+xml";
 constexpr char MEDIA_TYPE_CSS[] = "text/css";
 constexpr char MEDIA_TYPE_IMAGE_PREFIX[] = "image/";
 constexpr char itemCacheFile[] = "/.items.bin";
+constexpr size_t SERIALIZED_COMPARE_CHUNK = 64;
 
-bool startsWithImageMediaType(const std::string& mediaType) {
+enum class SerializedStringMatch : uint8_t { Error, No, Yes };
+
+bool startsWithImageMediaType(const char* mediaType) {
+  if (!mediaType) return false;
   constexpr size_t prefixLen = sizeof(MEDIA_TYPE_IMAGE_PREFIX) - 1;
-  if (mediaType.size() < prefixLen) {
-    return false;
-  }
-
   for (size_t i = 0; i < prefixLen; ++i) {
+    if (mediaType[i] == '\0') return false;
     const char c = static_cast<char>(std::tolower(static_cast<unsigned char>(mediaType[i])));
-    if (c != MEDIA_TYPE_IMAGE_PREFIX[i]) {
-      return false;
-    }
+    if (c != MEDIA_TYPE_IMAGE_PREFIX[i]) return false;
+  }
+  return true;
+}
+
+bool isPropertyWhitespace(const char c) {
+  return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f';
+}
+
+bool hasPropertyToken(const char* properties, const char* token) {
+  if (!properties || !token || token[0] == '\0') return false;
+  const size_t tokenLen = std::strlen(token);
+  const char* pos = properties;
+  while (*pos != '\0') {
+    while (isPropertyWhitespace(*pos)) ++pos;
+    const char* end = pos;
+    while (*end != '\0' && !isPropertyWhitespace(*end)) ++end;
+    if (static_cast<size_t>(end - pos) == tokenLen && std::memcmp(pos, token, tokenLen) == 0) return true;
+    pos = end;
+  }
+  return false;
+}
+
+SerializedStringMatch serializedStringEquals(FsFile& file, const char* target, const size_t targetLen) {
+  uint32_t storedLen = 0;
+  if (!serialization::tryReadPod(file, storedLen)) {
+    return SerializedStringMatch::Error;
   }
 
-  return true;
+  if (storedLen != targetLen) {
+    return file.seekCur(static_cast<int64_t>(storedLen)) ? SerializedStringMatch::No : SerializedStringMatch::Error;
+  }
+
+  uint8_t buffer[SERIALIZED_COMPARE_CHUNK];
+  size_t offset = 0;
+  bool equal = true;
+  while (offset < storedLen) {
+    const size_t chunk = std::min<size_t>(sizeof(buffer), storedLen - offset);
+    if (file.read(buffer, chunk) != static_cast<int>(chunk)) {
+      return SerializedStringMatch::Error;
+    }
+    if (equal && std::memcmp(buffer, target + offset, chunk) != 0) {
+      equal = false;
+    }
+    offset += chunk;
+  }
+  return equal ? SerializedStringMatch::Yes : SerializedStringMatch::No;
+}
+
+bool skipSerializedString(FsFile& file) {
+  uint32_t len = 0;
+  return serialization::tryReadPod(file, len) && file.seekCur(static_cast<int64_t>(len));
 }
 }  // namespace
 
@@ -65,18 +113,9 @@ size_t ContentOpfParser::write(const uint8_t* buffer, const size_t size) {
   auto remainingInBuffer = size;
 
   while (remainingInBuffer > 0) {
-    void* const buf = XML_GetBuffer(parser, 1024);
-
-    if (!buf) {
-      LOG_ERR("COF", "Couldn't allocate memory for buffer");
-      destroyXmlParser(parser);
-      return 0;
-    }
-
     const auto toRead = remainingInBuffer < 1024 ? remainingInBuffer : 1024;
-    memcpy(buf, currentBufferPos, toRead);
-
-    if (XML_ParseBuffer(parser, static_cast<int>(toRead), remainingSize == toRead) == XML_STATUS_ERROR) {
+    if (XML_Parse(parser, reinterpret_cast<const char*>(currentBufferPos), static_cast<int>(toRead),
+                  remainingSize == toRead) == XML_STATUS_ERROR) {
       LOG_DBG("COF", "Parse error at line %lu: %s", XML_GetCurrentLineNumber(parser),
               XML_ErrorString(XML_GetErrorCode(parser)));
       destroyXmlParser(parser);
@@ -106,7 +145,6 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
   }
 
   if (self->state == IN_METADATA && strcmp(name, "dc:title") == 0) {
-    // Only capture the first dc:title element; subsequent ones are subtitles
     if (self->title.empty()) {
       self->state = IN_BOOK_TITLE;
     }
@@ -137,7 +175,6 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
       LOG_ERR("COF", "Couldn't open temp items file for reading. This is probably going to be a fatal error.");
     }
 
-    // Sort item index for binary search if we have enough items
     if (self->itemIndex.size() >= LARGE_SPINE_THRESHOLD) {
       std::sort(self->itemIndex.begin(), self->itemIndex.end(), [](const ItemIndexEntry& a, const ItemIndexEntry& b) {
         return a.idHash < b.idHash || (a.idHash == b.idHash && a.idLen < b.idLen);
@@ -150,7 +187,6 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
 
   if (self->state == IN_PACKAGE && (strcmp(name, "guide") == 0 || strcmp(name, "opf:guide") == 0)) {
     self->state = IN_GUIDE;
-    // TODO Remove print
     LOG_DBG("COF", "Entering guide state.");
     if (!Storage.openFileForRead("COF", self->cachePath + itemCacheFile, self->tempItemStore)) {
       LOG_ERR("COF", "Couldn't open temp items file for reading. This is probably going to be a fatal error.");
@@ -160,7 +196,7 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
 
   if (self->state == IN_METADATA && (strcmp(name, "meta") == 0 || strcmp(name, "opf:meta") == 0)) {
     bool isCover = false;
-    std::string coverItemId;
+    const char* coverItemId = nullptr;
 
     for (int i = 0; atts[i]; i += 2) {
       if (strcmp(atts[i], "name") == 0 && strcmp(atts[i + 1], "cover") == 0) {
@@ -170,17 +206,17 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
       }
     }
 
-    if (isCover) {
+    if (isCover && coverItemId) {
       self->coverItemId = coverItemId;
     }
     return;
   }
 
   if (self->state == IN_MANIFEST && (strcmp(name, "item") == 0 || strcmp(name, "opf:item") == 0)) {
-    std::string itemId;
+    std::string_view itemId;
     std::string href;
-    std::string mediaType;
-    std::string properties;
+    const char* mediaType = "";
+    const char* properties = "";
 
     for (int i = 0; atts[i]; i += 2) {
       if (strcmp(atts[i], "id") == 0) {
@@ -194,7 +230,6 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
       }
     }
 
-    // Record index entry for fast lookup later
     if (self->tempItemStore) {
       ItemIndexEntry entry;
       entry.idHash = fnvHash(itemId);
@@ -203,22 +238,21 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
       self->itemIndex.push_back(entry);
     }
 
-    // Write items down to SD card
     serialization::writeString(self->tempItemStore, itemId);
     serialization::writeString(self->tempItemStore, href);
 
-    if (itemId == self->coverItemId) {
-      // Some EPUBs set meta name="cover" to an XHTML wrapper item.
-      // Only treat it as a cover image when the manifest media-type is image/*.
+    const bool isCoverItem = itemId.size() == self->coverItemId.size() &&
+                             std::memcmp(itemId.data(), self->coverItemId.data(), itemId.size()) == 0;
+    if (isCoverItem) {
       if (startsWithImageMediaType(mediaType)) {
         self->coverItemHref = href;
       } else {
-        LOG_DBG("COF", "Ignoring meta cover item '%s' with non-image media type: %s", itemId.c_str(),
-                mediaType.c_str());
+        LOG_DBG("COF", "Ignoring meta cover item '%.*s' with non-image media type: %s",
+                static_cast<int>(itemId.size()), itemId.data(), mediaType);
       }
     }
 
-    if (mediaType == MEDIA_TYPE_NCX) {
+    if (strcmp(mediaType, MEDIA_TYPE_NCX) == 0) {
       if (self->tocNcxPath.empty()) {
         self->tocNcxPath = href;
       } else {
@@ -226,57 +260,47 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
       }
     }
 
-    // Collect CSS files
-    if (mediaType == MEDIA_TYPE_CSS) {
+    if (strcmp(mediaType, MEDIA_TYPE_CSS) == 0) {
       self->cssFiles.push_back(href);
     }
 
-    // EPUB 3: Check for nav document (properties contains "nav")
-    if (!properties.empty() && self->tocNavPath.empty()) {
-      // Properties is space-separated, check if "nav" is present as a word
-      if (properties == "nav" || properties.find("nav ") == 0 || properties.find(" nav") != std::string::npos) {
-        self->tocNavPath = href;
-        LOG_DBG("COF", "Found EPUB 3 nav document: %s", href.c_str());
-      }
+    if (self->tocNavPath.empty() && hasPropertyToken(properties, "nav")) {
+      self->tocNavPath = href;
+      LOG_DBG("COF", "Found EPUB 3 nav document: %s", href.c_str());
     }
 
-    // EPUB 3: Check for cover image (properties contains "cover-image")
-    if (!properties.empty() && self->coverItemHref.empty()) {
-      if (properties == "cover-image" || properties.find("cover-image ") == 0 ||
-          properties.find(" cover-image") != std::string::npos) {
-        self->coverItemHref = href;
-      }
+    if (self->coverItemHref.empty() && hasPropertyToken(properties, "cover-image")) {
+      self->coverItemHref = href;
     }
     return;
   }
 
-  // NOTE: This relies on spine appearing after item manifest (which is pretty safe as it's part of the EPUB spec)
-  // Only run the spine parsing if there's a cache to add it to
   if (self->cache) {
     if (self->state == IN_SPINE && (strcmp(name, "itemref") == 0 || strcmp(name, "opf:itemref") == 0)) {
       for (int i = 0; atts[i]; i += 2) {
         if (strcmp(atts[i], "idref") == 0) {
-          const std::string idref = atts[i + 1];
+          const char* idref = atts[i + 1];
+          const size_t targetLen = std::strlen(idref);
+          const uint32_t targetHash = fnvHash(std::string_view{idref, targetLen});
+          const uint16_t targetIndexLen = static_cast<uint16_t>(targetLen);
+
           std::string href;
           bool found = false;
 
           if (self->useItemIndex) {
-            // Fast path: binary search
-            uint32_t targetHash = fnvHash(idref);
-            uint16_t targetLen = static_cast<uint16_t>(idref.size());
-
             auto it = std::lower_bound(self->itemIndex.begin(), self->itemIndex.end(),
-                                       ItemIndexEntry{targetHash, targetLen, 0},
+                                       ItemIndexEntry{targetHash, targetIndexLen, 0},
                                        [](const ItemIndexEntry& a, const ItemIndexEntry& b) {
                                          return a.idHash < b.idHash || (a.idHash == b.idHash && a.idLen < b.idLen);
                                        });
 
-            // Check for match (may need to check a few due to hash collisions)
             while (it != self->itemIndex.end() && it->idHash == targetHash) {
               self->tempItemStore.seek(it->fileOffset);
-              std::string itemId;
-              serialization::readString(self->tempItemStore, itemId);
-              if (itemId == idref) {
+              const auto match = serializedStringEquals(self->tempItemStore, idref, targetLen);
+              if (match == SerializedStringMatch::Error) {
+                break;
+              }
+              if (match == SerializedStringMatch::Yes) {
                 serialization::readString(self->tempItemStore, href);
                 found = true;
                 break;
@@ -284,16 +308,18 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
               ++it;
             }
           } else {
-            // Slow path: linear scan (for small manifests, keeps original behavior)
-            // TODO: This lookup is slow as need to scan through all items each time.
-            //       It can take up to 200ms per item when getting to 1500 items.
             self->tempItemStore.seek(0);
-            std::string itemId;
             while (self->tempItemStore.available()) {
-              serialization::readString(self->tempItemStore, itemId);
-              serialization::readString(self->tempItemStore, href);
-              if (itemId == idref) {
+              const auto match = serializedStringEquals(self->tempItemStore, idref, targetLen);
+              if (match == SerializedStringMatch::Error) {
+                break;
+              }
+              if (match == SerializedStringMatch::Yes) {
+                serialization::readString(self->tempItemStore, href);
                 found = true;
+                break;
+              }
+              if (!skipSerializedString(self->tempItemStore)) {
                 break;
               }
             }
@@ -307,9 +333,9 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
       return;
     }
   }
-  // parse the guide
+
   if (self->state == IN_GUIDE && (strcmp(name, "reference") == 0 || strcmp(name, "opf:reference") == 0)) {
-    std::string type;
+    const char* type = "";
     std::string guideHref;
     for (int i = 0; atts[i]; i += 2) {
       if (strcmp(atts[i], "type") == 0) {
@@ -319,10 +345,10 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
       }
     }
     if (!guideHref.empty()) {
-      if (type == "text" || (type == "start" && !self->textReferenceHref.empty())) {
-        LOG_DBG("COF", "Found %s reference in guide: %s", type.c_str(), guideHref.c_str());
+      if (strcmp(type, "text") == 0 || (strcmp(type, "start") == 0 && !self->textReferenceHref.empty())) {
+        LOG_DBG("COF", "Found %s reference in guide: %s", type, guideHref.c_str());
         self->textReferenceHref = guideHref;
-      } else if ((type == "cover" || type == "cover-page") && self->guideCoverPageHref.empty()) {
+      } else if ((strcmp(type, "cover") == 0 || strcmp(type, "cover-page") == 0) && self->guideCoverPageHref.empty()) {
         LOG_DBG("COF", "Found cover reference in guide: %s", guideHref.c_str());
         self->guideCoverPageHref = guideHref;
       }
@@ -341,7 +367,7 @@ void XMLCALL ContentOpfParser::characterData(void* userData, const XML_Char* s, 
 
   if (self->state == IN_BOOK_AUTHOR) {
     if (!self->author.empty()) {
-      self->author.append(", ");  // Add separator for multiple authors
+      self->author.append(", ");
     }
     self->author.append(s, len);
     return;

@@ -18,6 +18,23 @@ constexpr char tmpBookBinFile[] = "/book.bin.tmp";
 constexpr char bakBookBinFile[] = "/book.bin.bak";
 constexpr char tmpSpineBinFile[] = "/spine.bin.tmp";
 constexpr char tmpTocBinFile[] = "/toc.bin.tmp";
+
+bool skipSerializedString(HalFile& file) {
+  uint32_t length = 0;
+  return serialization::tryReadPod(file, length) &&
+         (length == 0 || file.seekCur(static_cast<int64_t>(length)));
+}
+
+bool skipTempSpineEntry(HalFile& file) {
+  return skipSerializedString(file) &&
+         file.seekCur(static_cast<int64_t>(sizeof(uint32_t) + sizeof(int16_t)));
+}
+
+bool readTempTocSpineIndex(HalFile& file, int16_t& spineIndex) {
+  if (!skipSerializedString(file) || !skipSerializedString(file) || !skipSerializedString(file)) return false;
+  uint8_t level = 0;
+  return serialization::tryReadPod(file, level) && serialization::tryReadPod(file, spineIndex);
+}
 }  // namespace
 
 /* ============= WRITING / BUILDING FUNCTIONS ================ */
@@ -189,8 +206,13 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
   // Loop through spine entries, writing LUT positions
   spineFile.seek(0);
   for (int i = 0; i < spineCount; i++) {
-    uint32_t pos = spineFile.position();
-    auto spineEntry = readSpineEntry(spineFile);
+    const uint32_t pos = spineFile.position();
+    if (!skipTempSpineEntry(spineFile)) {
+      bookFile.close();
+      spineFile.close();
+      tocFile.close();
+      return false;
+    }
     const uint32_t entryOffset = pos + lutOffset + lutSize;
     if (!appendTempBytes(bookFile, outputBuffer, &entryOffset, sizeof(entryOffset))) {
       bookFile.close();
@@ -203,8 +225,14 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
   // Loop through toc entries, writing LUT positions
   tocFile.seek(0);
   for (int i = 0; i < tocCount; i++) {
-    uint32_t pos = tocFile.position();
-    auto tocEntry = readTocEntry(tocFile);
+    const uint32_t pos = tocFile.position();
+    int16_t unusedSpineIndex = -1;
+    if (!readTempTocSpineIndex(tocFile, unusedSpineIndex)) {
+      bookFile.close();
+      spineFile.close();
+      tocFile.close();
+      return false;
+    }
     const uint32_t entryOffset =
         pos + lutOffset + lutSize + static_cast<uint32_t>(spineFile.position());
     if (!appendTempBytes(bookFile, outputBuffer, &entryOffset, sizeof(entryOffset))) {
@@ -223,11 +251,15 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
   std::deque<int16_t> spineToTocIndex(spineCount, -1);
   tocFile.seek(0);
   for (int j = 0; j < tocCount; j++) {
-    auto tocEntry = readTocEntry(tocFile);
-    if (tocEntry.spineIndex >= 0 && tocEntry.spineIndex < spineCount) {
-      if (spineToTocIndex[tocEntry.spineIndex] == -1) {
-        spineToTocIndex[tocEntry.spineIndex] = static_cast<int16_t>(j);
-      }
+    int16_t tocSpineIndex = -1;
+    if (!readTempTocSpineIndex(tocFile, tocSpineIndex)) {
+      bookFile.close();
+      spineFile.close();
+      tocFile.close();
+      return false;
+    }
+    if (tocSpineIndex >= 0 && tocSpineIndex < spineCount && spineToTocIndex[tocSpineIndex] == -1) {
+      spineToTocIndex[tocSpineIndex] = static_cast<int16_t>(j);
     }
   }
 

@@ -1,7 +1,7 @@
 #pragma once
 
 #include <Print.h>
-#include <common/FsApiConstants.h>  // for oflag_t
+#include <common/FsApiConstants.h>
 #include <freertos/semphr.h>
 
 #include <memory>
@@ -16,18 +16,12 @@ class HalStorage {
   bool begin();
   bool ready() const;
   std::vector<String> listFiles(const char* path = "/", int maxFiles = 200);
-  // Read the entire file at `path` into a String. Returns empty string on failure.
   String readFile(const char* path);
-  // Low-memory helpers:
-  // Stream the file contents to a `Print` (e.g. `Serial`, or any `Print`-derived object).
-  // Returns true on success, false on failure.
-  bool readFileToStream(const char* path, Print& out, size_t chunkSize = 256);
-  // Read up to `bufferSize-1` bytes into `buffer`, null-terminating it. Returns bytes read.
+  // SDCardManager already uses a bounded 1 KiB stream buffer; make the HAL
+  // default match it so normal callers don't accidentally fall back to 256 B.
+  bool readFileToStream(const char* path, Print& out, size_t chunkSize = 1024);
   size_t readFileToBuffer(const char* path, char* buffer, size_t bufferSize, size_t maxBytes = 0);
-  // Write a string to `path` on the SD card. Overwrites existing file.
-  // Returns true on success.
   bool writeFile(const char* path, const String& content);
-  // Ensure a directory exists, creating it if necessary. Returns true on success.
   bool ensureDirectoryExists(const char* path);
 
   HalFile open(const char* path, const oflag_t oflag = O_RDONLY);
@@ -45,13 +39,12 @@ class HalStorage {
   bool openFileForWrite(const char* moduleName, const String& path, HalFile& file);
   bool removeDir(const char* path);
 
-  // Total and used SD card capacity in bytes (see SDCardManager::sdTotalBytes()/sdUsedBytes()).
   uint64_t getCardTotalBytes();
   uint64_t getCardUsedBytes();
 
   static HalStorage& getInstance() { return instance; }
 
-  class StorageLock;  // private class, used internally
+  class StorageLock;
 
  private:
   static HalStorage instance;
@@ -88,7 +81,7 @@ class HalFile : public Print {
   int available() const;
   size_t position() const;
   int read(void* buf, size_t count);
-  int read();  // read a single byte
+  int read();
   size_t write(const void* buf, size_t count);
   size_t write(uint8_t b) override;
   bool sync();
@@ -101,13 +94,10 @@ class HalFile : public Print {
   operator bool() const;
 };
 
-// Only rename FsFile to HalFile for downstream code. HalStorage.cpp includes
-// SdFat's real FsFile while implementing the wrapper.
 #ifndef HAL_STORAGE_IMPL
 using FsFile = HalFile;
 #endif
 
-// Downstream code must use Storage instead of SdMan
 #ifdef SdMan
 #undef SdMan
 #endif

@@ -19,6 +19,13 @@ class Section {
   std::string filePath;
   HalFile file;
 
+  // Layout generation is part of the cache filename rather than the binary
+  // record format. This forces one clean repagination after layout-semantics
+  // fixes (notably Paragraph spacing=None preserving structural title/subtitle
+  // spacing) without changing TextBlock/Page serialization or requiring the
+  // user to clear .inkmod manually.
+  static constexpr const char* LAYOUT_CACHE_GENERATION = "_layout53";
+
   bool writeSectionFileHeader(int fontId, float lineCompression, uint8_t extraParagraphSpacing, bool forceParagraphIndents,
                               uint8_t paragraphAlignment, uint16_t viewportWidth, uint16_t viewportHeight,
                               bool hyphenationEnabled, bool embeddedStyle, uint8_t imageRendering,
@@ -34,8 +41,8 @@ class Section {
       : epub(epub),
         spineIndex(spineIndex),
         renderer(renderer),
-        filePath(epub->getCachePath() + "/sections/" + std::to_string(spineIndex) + (cacheSuffix ? cacheSuffix : "") +
-                 ".bin") {}
+        filePath(epub->getCachePath() + "/sections/" + std::to_string(spineIndex) + LAYOUT_CACHE_GENERATION +
+                 (cacheSuffix ? cacheSuffix : "") + ".bin") {}
   ~Section() = default;
   bool loadSectionFile(int fontId, float lineCompression, uint8_t extraParagraphSpacing, bool forceParagraphIndents,
                        uint8_t paragraphAlignment, uint16_t viewportWidth, uint16_t viewportHeight,

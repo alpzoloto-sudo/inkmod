@@ -40,32 +40,29 @@ bool KOReaderCredentialStore::saveToFile() const {
 }
 
 bool KOReaderCredentialStore::loadFromFile() {
-  // Try JSON first
-  if (Storage.exists(KOREADER_FILE_JSON)) {
-    String json = Storage.readFile(KOREADER_FILE_JSON);
-    if (!json.isEmpty()) {
-      bool resave = false;
-      bool result = KOReaderJsonIO::load(*this, json.c_str(), &resave);
-      if (result && resave) {
-        saveToFile();
-        LOG_DBG("KRS", "Resaved KOReader credentials to update format");
-      }
-      return result;
+  // readFile() already opens the path and returns an empty String when absent,
+  // so an exists() probe would only duplicate the FAT directory lookup.
+  String json = Storage.readFile(KOREADER_FILE_JSON);
+  if (!json.isEmpty()) {
+    bool resave = false;
+    bool result = KOReaderJsonIO::load(*this, json.c_str(), &resave);
+    if (result && resave) {
+      saveToFile();
+      LOG_DBG("KRS", "Resaved KOReader credentials to update format");
     }
+    return result;
   }
 
-  // Fall back to binary migration
-  if (Storage.exists(KOREADER_FILE_BIN)) {
-    if (loadFromBinaryFile()) {
-      if (saveToFile()) {
-        Storage.rename(KOREADER_FILE_BIN, KOREADER_FILE_BAK);
-        LOG_DBG("KRS", "Migrated koreader.bin to koreader.json");
-        return true;
-      } else {
-        LOG_ERR("KRS", "Failed to save KOReader credentials during migration");
-        return false;
-      }
+  // The migration loader likewise reports a missing file through open failure;
+  // avoid a second exists()+open pair on every boot without legacy data.
+  if (loadFromBinaryFile()) {
+    if (saveToFile()) {
+      Storage.rename(KOREADER_FILE_BIN, KOREADER_FILE_BAK);
+      LOG_DBG("KRS", "Migrated koreader.bin to koreader.json");
+      return true;
     }
+    LOG_ERR("KRS", "Failed to save KOReader credentials during migration");
+    return false;
   }
 
   LOG_DBG("KRS", "No credentials file found");
@@ -139,6 +136,7 @@ std::string KOReaderCredentialStore::getMd5Password() const {
 bool KOReaderCredentialStore::hasCredentials() const { return !username.empty() && !password.empty(); }
 
 void KOReaderCredentialStore::clearCredentials() {
+  if (username.empty() && password.empty()) return;
   username.clear();
   password.clear();
   saveToFile();
@@ -161,7 +159,7 @@ std::string KOReaderCredentialStore::getBaseUrl() const {
     url = serverUrl;
   }
 
-  // Strip trailing slashes to avoid double-slash in API paths
+  // Strip trailing slashes to avoid double-slash in API path
   while (!url.empty() && url.back() == '/') {
     url.pop_back();
   }

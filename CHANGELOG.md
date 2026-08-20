@@ -1,8 +1,33 @@
 # Changelog
 
+## [v1.1.5] - 2026-08-20
+
+### Added
+- Added safe factory-calibration based display revision selection for Xteink X3/X4 without probing the E-Ink bus before display initialization.
+- Added full X3 UC8279 revision routing through the dedicated `XteinkX3Uc8279` hardware profile while keeping original X3 units on UC8253.
+- Added known X4 UC8179/UC8279 revision selection with fail-safe fallback to SSD1677 when factory calibration is missing or unknown.
+- Added emergency SD-card firmware recovery: place a compatible firmware image named `inkmod-recovery.bin` in the root of the SD card and restart the reader. Successful recovery renames it to `inkmod-recovery.applied.bin` to prevent a reflash loop.
+- Added a dedicated `RECOVERY.md` guide and versioned 1.1.5 release notes.
+
+### Changed
+- X4 EPD SPI now uses the manufacturer-compatible 10 MHz rate for additional signal margin across display revisions.
+- SSD1677-specific booster setup is emitted only when the selected X4 controller is actually SSD1677.
+- Unknown X3/X4 factory display identifiers now fail closed to the original controller for that device family instead of guessing another panel controller.
+
+### Fixed
+- Fixed Lyra Carousel reading-progress percentage clipping at the right edge.
+- Removed the unsafe early display-bus auto-probe path that could leave the reader apparently frozen before normal UI/button processing.
+
+### Recovery
+- Normal manual flashing remains at application offset `0x10000`.
+- Ordinary updates should not use `erase_flash`; preserving factory NVS keeps the display-revision calibration used by 1.1.5.
+- See `RECOVERY.md` for USB and SD-card recovery procedures.
+
 ## [v1.1.4] - 2026-08-14
 
 ### Added
+- Added a separate power-button **Quick Resume sleep** action that uses the same preserved-frame wake path as automatic timeout sleep, without changing the existing normal Sleep action.
+- Added a built-in **DejaVu Sans** reader family using DejaVu Sans 12 pt (regular, bold, italic and bold-italic) as a starter font while preserving existing SD-card font selections.
 - Added an on-device **Diagnostics** screen with firmware variant, device type, free heap, largest allocatable block, SD size, reset reason and crash-report status.
 - Added a low-overhead RTC breadcrumb trail for release builds. OOM-triggered restarts now persist the last reader actions into `/crash_report.txt` on the next boot, even when serial logging is compiled out.
 - Added **Book information** to the File Browser long-press menu with format, source size, cache state and a lightweight load-profile hint.
@@ -166,7 +191,7 @@
 - Changing the reader clock between top and bottom now repaginates the chapter, preventing text from overlapping the status bar.
 - File search now ignores Russian and Ukrainian letter case and starts its keyboard in the interface language.
 - Reset Reader Data now clears every `.inkmod` entry except `wifi.json` and `inkmod-settings.json`.
-- OTA releases now embed their GitHub tag version into the firmware, so a manually re-published update is not offered repeatedly after installation.
+- OTA releases now embed their GitHub release tags to prevent repetitive update prompts.
 - The search keyboard now reserves an additional gutter around the X3/X4 side-button column and wraps its help text inside that safe area; Lyra's selected-value pill has a visible right inset.
 - Large keyboard keys no longer draw their small alternate symbols over the main glyph. Empty subtitle callbacks no longer turn simple system lists into tall two-line rows.
 

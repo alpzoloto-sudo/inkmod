@@ -4,6 +4,8 @@
 #include <Logging.h>
 #include <XmlParserUtils.h>
 
+#include <string_view>
+
 #include "Epub/BookMetadataCache.h"
 
 bool TocNavParser::setup() {
@@ -12,6 +14,11 @@ bool TocNavParser::setup() {
     LOG_DBG("NAV", "Couldn't allocate memory for parser");
     return false;
   }
+
+  currentLabel.reserve(96);
+  currentHref.reserve(128);
+  currentTarget.reserve(baseContentPath.size() + 128);
+  currentAnchor.reserve(48);
 
   XML_SetUserData(parser, this);
   XML_SetElementHandler(parser, startElement, endElement);
@@ -30,17 +37,9 @@ size_t TocNavParser::write(const uint8_t* buffer, const size_t size) {
   auto remainingInBuffer = size;
 
   while (remainingInBuffer > 0) {
-    void* const buf = XML_GetBuffer(parser, 1024);
-    if (!buf) {
-      LOG_DBG("NAV", "Couldn't allocate memory for buffer");
-      destroyXmlParser(parser);
-      return 0;
-    }
-
     const auto toRead = remainingInBuffer < 1024 ? remainingInBuffer : 1024;
-    memcpy(buf, currentBufferPos, toRead);
-
-    if (XML_ParseBuffer(parser, static_cast<int>(toRead), remainingSize == toRead) == XML_STATUS_ERROR) {
+    if (XML_Parse(parser, reinterpret_cast<const char*>(currentBufferPos), static_cast<int>(toRead),
+                  remainingSize == toRead) == XML_STATUS_ERROR) {
       LOG_DBG("NAV", "Parse error at line %lu: %s", XML_GetCurrentLineNumber(parser),
               XML_ErrorString(XML_GetErrorCode(parser)));
       destroyXmlParser(parser);
@@ -57,7 +56,6 @@ size_t TocNavParser::write(const uint8_t* buffer, const size_t size) {
 void XMLCALL TocNavParser::startElement(void* userData, const XML_Char* name, const XML_Char** atts) {
   auto* self = static_cast<TocNavParser*>(userData);
 
-  // Track HTML structure loosely - we mainly care about finding <nav epub:type="toc">
   if (strcmp(name, "html") == 0) {
     self->state = IN_HTML;
     return;
@@ -68,7 +66,6 @@ void XMLCALL TocNavParser::startElement(void* userData, const XML_Char* name, co
     return;
   }
 
-  // Look for <nav epub:type="toc"> anywhere in body (or nested elements)
   if (self->state >= IN_BODY && strcmp(name, "nav") == 0) {
     for (int i = 0; atts[i]; i += 2) {
       if ((strcmp(atts[i], "epub:type") == 0 || strcmp(atts[i], "type") == 0) && strcmp(atts[i + 1], "toc") == 0) {
@@ -80,7 +77,6 @@ void XMLCALL TocNavParser::startElement(void* userData, const XML_Char* name, co
     return;
   }
 
-  // Only process ol/li/a if we're inside the toc nav
   if (self->state < IN_NAV_TOC) {
     return;
   }
@@ -100,7 +96,6 @@ void XMLCALL TocNavParser::startElement(void* userData, const XML_Char* name, co
 
   if (self->state == IN_LI && strcmp(name, "a") == 0) {
     self->state = IN_ANCHOR;
-    // Get href attribute
     for (int i = 0; atts[i]; i += 2) {
       if (strcmp(atts[i], "href") == 0) {
         self->currentHref = atts[i + 1];
@@ -113,8 +108,6 @@ void XMLCALL TocNavParser::startElement(void* userData, const XML_Char* name, co
 
 void XMLCALL TocNavParser::characterData(void* userData, const XML_Char* s, const int len) {
   auto* self = static_cast<TocNavParser*>(userData);
-
-  // Only collect text when inside an anchor within the TOC nav
   if (self->state == IN_ANCHOR) {
     self->currentLabel.append(s, len);
   }
@@ -124,21 +117,21 @@ void XMLCALL TocNavParser::endElement(void* userData, const XML_Char* name) {
   auto* self = static_cast<TocNavParser*>(userData);
 
   if (strcmp(name, "a") == 0 && self->state == IN_ANCHOR) {
-    // Create TOC entry when closing anchor tag (we have all data now)
     if (!self->currentLabel.empty() && !self->currentHref.empty()) {
-      const std::string rawTarget = self->baseContentPath + self->currentHref;
-      const size_t pos = rawTarget.find('#');
-      const std::string rawPath = pos == std::string::npos ? rawTarget : rawTarget.substr(0, pos);
-      std::string href = FsHelpers::normalisePath(FsHelpers::decodeUriEscapes(rawPath));
-      std::string anchor;
+      self->currentTarget.clear();
+      self->currentTarget.append(self->baseContentPath);
+      self->currentTarget.append(self->currentHref);
 
+      const size_t pos = self->currentTarget.find('#');
+      self->currentAnchor.clear();
       if (pos != std::string::npos) {
-        anchor = FsHelpers::decodeUriEscapes(rawTarget.substr(pos + 1));
+        self->currentAnchor = FsHelpers::decodeUriEscapes(std::string_view{self->currentTarget}.substr(pos + 1));
+        self->currentTarget.resize(pos);
       }
+      std::string href = FsHelpers::normalisePath(FsHelpers::decodeUriEscapes(self->currentTarget));
 
       if (self->cache) {
-        // olDepth gives us the nesting level (1-based from the outer ol)
-        self->cache->createTocEntry(self->currentLabel, href, anchor, self->olDepth);
+        self->cache->createTocEntry(self->currentLabel, href, self->currentAnchor, self->olDepth);
       }
 
       self->currentLabel.clear();
@@ -158,7 +151,7 @@ void XMLCALL TocNavParser::endElement(void* userData, const XML_Char* name) {
     if (self->olDepth == 0) {
       self->state = IN_NAV_TOC;
     } else {
-      self->state = IN_LI;  // Back to parent li
+      self->state = IN_LI;
     }
     return;
   }

@@ -20,7 +20,28 @@ class MappedInputManager {
 
   // Enable/disable reader-specific front button mapping.
   // Call with true in reader activity onEnter(), false in onExit().
-  void setReaderMode(bool enabled) { readerMode = enabled; }
+  //
+  // Reader quick actions can replace the reader while the triggering physical
+  // button is still held (for example long-press Join Network). Without
+  // suppressing that outstanding release, the newly-entered activity may
+  // consume it as its own Back/Confirm event and immediately cancel, wedge a
+  // modal flow, or leave the screen looking unresponsive. Capture only buttons
+  // that are actually down at the reader -> non-reader transition so ordinary
+  // navigation remains unaffected.
+  void setReaderMode(bool enabled) {
+    if (readerMode && !enabled) {
+      if (mapButton(Button::Back, &HalGPIO::isPressed)) {
+        suppressBackRelease = true;
+      }
+      if (mapButton(Button::Confirm, &HalGPIO::isPressed)) {
+        suppressConfirmRelease = true;
+      }
+      if (gpio.isPressed(HalGPIO::BTN_POWER)) {
+        suppressPowerConfirmRelease = true;
+      }
+    }
+    readerMode = enabled;
+  }
   void setPowerAsConfirmInReaderMode(bool enabled) { powerAsConfirmInReaderMode = enabled; }
 
   void update() const { gpio.update(); }

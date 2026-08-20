@@ -98,6 +98,19 @@ inline void removeEnumRawValue(SettingInfo& setting, const uint8_t rawValue) {
 }
 
 inline SettingInfo buildFontSizeSetting(const SdCardFontRegistry* registry) {
+  if (SETTINGS.sdFontFamilyName[0] == '\0' && SETTINGS.fontFamily == InkMODSettings::TEST_FONTS) {
+    SettingInfo s;
+    s.nameId = StrId::STR_FONT_SIZE;
+    s.type = SettingType::ENUM;
+    s.valuePtr = &InkMODSettings::fontSize;
+    s.key = "fontSize";
+    s.category = StrId::STR_CAT_READER;
+    s.enumStringValues.push_back("12 pt");
+    const uint8_t stored = InkMODSettings::getStoredReaderFontSize(InkMODSettings::SMALL);
+    s.enumRawValues.push_back(stored == UINT8_MAX ? 0 : stored);
+    return s;
+  }
+
   if (registry && SETTINGS.sdFontFamilyName[0] != '\0') {
     const SdCardFontFamilyInfo* family = registry->findFamily(SETTINGS.sdFontFamilyName);
     if (family && !family->files.empty()) {
@@ -163,15 +176,14 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
   std::vector<std::string> enumStringValues;
 
   // Reserve: first InkMODSettings::BUILTIN_FONT_COUNT entries use StrId, rest use strings
+  enumStringValues.push_back("DejaVu Sans");
   if (registry) {
     const auto& families = registry->getFamilies();
-    enumStringValues.reserve(families.size());
+    enumStringValues.reserve(families.size() + 1);
     std::transform(families.begin(), families.end(), std::back_inserter(enumStringValues),
                    [](const SdCardFontFamilyInfo& f) { return f.name; });
   }
 
-  // Capture the SD font count for the lambdas
-  const int sdFontCount = static_cast<int>(enumStringValues.size());
 
   // Total option count = built-in + SD card families
   // For the combined enumStringValues: we need all entries as strings (built-in names + SD names)
@@ -199,20 +211,20 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
   }
 
   s.valueGetter = [sdFamilyNames]() -> uint8_t {
-    // If an SD card font is selected, find its index
+    if (SETTINGS.sdFontFamilyName[0] == '\0' && SETTINGS.fontFamily == InkMODSettings::TEST_FONTS) return 0;
     if (SETTINGS.sdFontFamilyName[0] != '\0') {
       for (int i = 0; i < static_cast<int>(sdFamilyNames.size()); i++) {
-        if (sdFamilyNames[i] == SETTINGS.sdFontFamilyName) {
-          return static_cast<uint8_t>(i);
-        }
+        if (sdFamilyNames[i] == SETTINGS.sdFontFamilyName) return static_cast<uint8_t>(i + 1);
       }
-      // SD font name not found in registry — fall through to built-in
     }
     return 0;
   };
 
   s.valueSetter = [sdFamilyNames, sdFamilySizes](uint8_t v) {
-    uint8_t targetPointSize = InkMODSettings::getReaderFontPointSize(SETTINGS.getEffectiveReaderFontSize());
+    uint8_t targetPointSize =
+        (SETTINGS.sdFontFamilyName[0] == '\0' && SETTINGS.fontFamily == InkMODSettings::TEST_FONTS)
+            ? 12
+            : InkMODSettings::getReaderFontPointSize(SETTINGS.getEffectiveReaderFontSize());
     if (SETTINGS.sdFontFamilyName[0] != '\0') {
       for (size_t i = 0; i < sdFamilyNames.size(); i++) {
         if (sdFamilyNames[i] == SETTINGS.sdFontFamilyName && SETTINGS.fontSize < sdFamilySizes[i].size()) {
@@ -222,10 +234,19 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
       }
     }
 
-    if (v < sdFamilyNames.size()) {
-        SETTINGS.fontSize = closestPointSizeIndex(sdFamilySizes[v], targetPointSize);
-        strncpy(SETTINGS.sdFontFamilyName, sdFamilyNames[v].c_str(), sizeof(SETTINGS.sdFontFamilyName) - 1);
-        SETTINGS.sdFontFamilyName[sizeof(SETTINGS.sdFontFamilyName) - 1] = '\0';
+    if (v == 0) {
+      SETTINGS.fontFamily = InkMODSettings::TEST_FONTS;
+      const uint8_t stored = InkMODSettings::getStoredReaderFontSize(InkMODSettings::SMALL);
+      SETTINGS.fontSize = stored == UINT8_MAX ? 0 : stored;
+      SETTINGS.sdFontFamilyName[0] = '\0';
+      return;
+    }
+
+    const size_t sdIndex = static_cast<size_t>(v - 1);
+    if (sdIndex < sdFamilyNames.size()) {
+      SETTINGS.fontSize = closestPointSizeIndex(sdFamilySizes[sdIndex], targetPointSize);
+      strncpy(SETTINGS.sdFontFamilyName, sdFamilyNames[sdIndex].c_str(), sizeof(SETTINGS.sdFontFamilyName) - 1);
+      SETTINGS.sdFontFamilyName[sizeof(SETTINGS.sdFontFamilyName) - 1] = '\0';
     }
   };
 
@@ -389,24 +410,26 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     add(SettingInfo::Enum(StrId::STR_ORIENTATION_AWARE, &InkMODSettings::sideButtonOrientationAware,
                           {StrId::STR_NO, StrId::STR_YES}, "sideButtonOrientationAware", StrId::STR_CAT_CONTROLS));
     add(SettingInfo::Enum(StrId::STR_SIDE_BTN_LONG_PRESS, &InkMODSettings::sideButtonLongPress,
-                          {StrId::STR_IGNORE, StrId::STR_CHAPTER_SKIP_OPT, StrId::STR_CHANGE_FONT_SIZE,
-                           StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION},
+                          {StrId::STR_IGNORE, StrId::STR_CHAPTER_SKIP_OPT, StrId::STR_PAGES_10,
+                           StrId::STR_CHANGE_FONT_SIZE, StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION},
                           "sideButtonLongPress", StrId::STR_CAT_CONTROLS)
             .withEnumRawValues({InkMODSettings::SIDE_LONG_OFF, InkMODSettings::SIDE_LONG_CHAPTER_SKIP,
-                                InkMODSettings::SIDE_LONG_FONT_SIZE,
+                                InkMODSettings::SIDE_LONG_PAGE_SKIP_10, InkMODSettings::SIDE_LONG_FONT_SIZE,
                                 InkMODSettings::SIDE_LONG_ORIENTATION_CHANGE}));
     add(SettingInfo::Enum(StrId::STR_ORIENTATION_AWARE, &InkMODSettings::frontButtonOrientationAware,
                           {StrId::STR_NO, StrId::STR_NAV_BUTTONS, StrId::STR_ALL_BUTTONS},
                           "frontButtonOrientationAware", StrId::STR_CAT_CONTROLS));
     add(SettingInfo::Enum(StrId::STR_LONG_PRESS_BEHAVIOR, &InkMODSettings::longPressButtonBehavior,
                           {StrId::STR_LONG_PRESS_BEHAVIOR_OFF, StrId::STR_LONG_PRESS_BEHAVIOR_SKIP,
-                           StrId::STR_CHANGE_FONT_SIZE, StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION},
+                           StrId::STR_PAGES_10, StrId::STR_CHANGE_FONT_SIZE,
+                           StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION},
                           "longPressButtonBehavior", StrId::STR_CAT_CONTROLS)
-            .withEnumRawValues({InkMODSettings::OFF, InkMODSettings::CHAPTER_SKIP,
+            .withEnumRawValues({InkMODSettings::OFF, InkMODSettings::CHAPTER_SKIP, InkMODSettings::PAGE_SKIP_10,
                                 InkMODSettings::FONT_SIZE_CHANGE, InkMODSettings::ORIENTATION_CHANGE}));
     add(SettingInfo::Enum(StrId::STR_SHORT_PWR_BTN, &InkMODSettings::shortPwrBtn,
                           {StrId::STR_IGNORE,
                            StrId::STR_SLEEP,
+                           StrId::STR_QUICK_RESUME_TIMEOUT,
                            StrId::STR_PAGE_TURN,
                            StrId::STR_TOGGLE_BOOKMARK,
                            StrId::STR_READING_STATS,
@@ -429,6 +452,7 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                           "shortPwrBtn", StrId::STR_CAT_CONTROLS)
             .withEnumRawValues({InkMODSettings::IGNORE,
                                 InkMODSettings::SLEEP,
+                                InkMODSettings::QUICK_RESUME_SLEEP,
                                 InkMODSettings::PAGE_TURN,
                                 InkMODSettings::TOGGLE_BOOKMARK,
                                 InkMODSettings::READING_STATS,
@@ -451,6 +475,7 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     add(SettingInfo::Enum(StrId::STR_LONG_PRESS_ACTION, &InkMODSettings::longPwrBtn,
                           {StrId::STR_IGNORE,
                            StrId::STR_SLEEP,
+                           StrId::STR_QUICK_RESUME_TIMEOUT,
                            StrId::STR_PAGE_TURN,
                            StrId::STR_TOGGLE_BOOKMARK,
                            StrId::STR_READING_STATS,
@@ -473,6 +498,7 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                           "longPwrBtn", StrId::STR_CAT_CONTROLS)
             .withEnumRawValues({InkMODSettings::IGNORE,
                                 InkMODSettings::SLEEP,
+                                InkMODSettings::QUICK_RESUME_SLEEP,
                                 InkMODSettings::PAGE_TURN,
                                 InkMODSettings::TOGGLE_BOOKMARK,
                                 InkMODSettings::READING_STATS,

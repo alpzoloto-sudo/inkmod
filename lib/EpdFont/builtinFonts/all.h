@@ -16,5 +16,11 @@
 #include <builtinFonts/inter_14_regular.h>
 #include <builtinFonts/inter_8_regular.h>
 
+// Built-in reader starter family (DejaVu Sans), exposed as "DejaVu Sans".
+#include <builtinFonts/dejavu_sans_12_regular.h>
+#include <builtinFonts/dejavu_sans_12_bold.h>
+#include <builtinFonts/dejavu_sans_12_italic.h>
+#include <builtinFonts/dejavu_sans_12_bolditalic.h>
+
 #include <builtinFonts/inter_12_ipa_fallback.h>
 #include <builtinFonts/inter_14_ipa_fallback.h>

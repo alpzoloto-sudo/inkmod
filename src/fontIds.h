@@ -7,6 +7,7 @@
 #define SMALL_FONT_ID (-1620540724)
 #define IPA_FALLBACK_12_FONT_ID (12025120)
 #define IPA_FALLBACK_14_FONT_ID (14025140)
+#define TEST_FONTS_12_FONT_ID (-1180011997)
 
 // Font ID 0 is reserved as the "not found" sentinel.
 // Guard against any hash accidentally producing 0.
@@ -17,3 +18,4 @@ static_assert(SMALL_FONT_ID != 0, "Font ID collision with sentinel");
 
 static_assert(IPA_FALLBACK_12_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(IPA_FALLBACK_14_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(TEST_FONTS_12_FONT_ID != 0, "Font ID collision with sentinel");

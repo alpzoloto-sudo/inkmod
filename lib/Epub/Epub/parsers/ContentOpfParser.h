@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <deque>
+#include <string_view>
 #include <vector>
 
 #include "Epub.h"
@@ -32,7 +33,9 @@ class ContentOpfParser final : public Print {
   HalFile tempItemStore;
   std::string coverItemId;
 
-  // Index for fast idref→href lookup (used only for large EPUBs)
+  // Index for fast idref→href lookup. The index is populated for every
+  // manifest anyway, so enabling it for medium-size books costs no extra
+  // persistent RAM and avoids repeated linear scans of .items.bin.
   struct ItemIndexEntry {
     uint32_t idHash;      // FNV-1a hash of itemId
     uint16_t idLen;       // length for collision reduction
@@ -41,10 +44,10 @@ class ContentOpfParser final : public Print {
   std::deque<ItemIndexEntry> itemIndex;
   bool useItemIndex = false;
 
-  static constexpr uint16_t LARGE_SPINE_THRESHOLD = 400;
+  static constexpr uint16_t LARGE_SPINE_THRESHOLD = 64;
 
-  // FNV-1a hash function
-  static uint32_t fnvHash(const std::string& s) {
+  // FNV-1a hash function over non-owning manifest/spine ids.
+  static uint32_t fnvHash(const std::string_view s) {
     uint32_t hash = 2166136261u;
     for (char c : s) {
       hash ^= static_cast<uint8_t>(c);

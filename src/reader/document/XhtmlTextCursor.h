@@ -13,10 +13,13 @@ namespace reader {
 
 class XhtmlTextCursor final : public DocumentCursor {
  public:
-  // 384 B text + 96 B input are activity-lifetime scratch, not stack data.
-  // Long paragraphs are emitted as consecutive nodes rather than allocated.
+  // Activity-lifetime scratch, not task-stack data. Cached EPUB chapters are
+  // consumed sequentially from SD, so a 2 KiB input window halves storage
+  // transactions versus the previous 1 KiB window while adding only 1 KiB of
+  // bounded cursor-lifetime RAM. This stays deliberately below the 4 KiB
+  // temporary buffers used by chapter copy / ZIP streaming paths.
   static constexpr size_t kTextCapacity = 384;
-  static constexpr size_t kInputCapacity = 96;
+  static constexpr size_t kInputCapacity = 2048;
   static constexpr size_t kTagCapacity = 64;
 
   explicit XhtmlTextCursor(IByteReader& source) : source_(source) {}

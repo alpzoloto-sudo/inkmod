@@ -11,6 +11,7 @@ HOME_CPP = ROOT / "src/activities/home/HomeActivity.cpp"
 SLEEP_CPP = ROOT / "src/activities/boot_sleep/SleepActivity.cpp"
 LYRA_CAROUSEL_CPP = ROOT / "src/components/themes/lyra/LyraCarouselTheme.cpp"
 MAIN_CPP = ROOT / "src/main.cpp"
+CHAPTER_HTML_CPP = ROOT / "lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp"
 
 
 def replace_once(path: Path, old: str, new: str) -> None:
@@ -93,6 +94,23 @@ if not has_marker(MAIN_CPP, "Headless emergency recovery"):
         MAIN_CPP,
         '''  if (!Storage.begin()) {\n    LOG_ERR("MAIN", "SD card initialization failed");\n    setupDisplayAndFonts(isSilentReboot);\n    activityManager.goToFullScreenMessage("SD card error", EpdFontFamily::BOLD);\n    return;\n  }\n''',
         '''  if (!Storage.begin()) {\n    LOG_ERR("MAIN", "SD card initialization failed");\n    setupDisplayAndFonts(isSilentReboot);\n    activityManager.goToFullScreenMessage("SD card error", EpdFontFamily::BOLD);\n    return;\n  }\n\n  // Headless emergency recovery: root-of-SD /inkmod-recovery.bin is validated\n  // and flashed before display/UI initialization.\n  tryEmergencyFirmwareUpdate();\n''',
+    )
+
+# Apply the universal inkMOD Classic Book profile after both embedded stylesheet
+# rules and inline style="...". This gives the profile CSS-!important semantics
+# without disabling author typography or increasing the runtime CSS rule table.
+if not has_marker(CHAPTER_HTML_CPP, '"Epub/css/ClassicBookProfile.h"'):
+    replace_once(
+        CHAPTER_HTML_CPP,
+        '''#include "Epub/htmlEntities.h"\n''',
+        '''#include "Epub/htmlEntities.h"\n#include "Epub/css/ClassicBookProfile.h"\n''',
+    )
+
+if not has_marker(CHAPTER_HTML_CPP, "applyInkmodClassicBookProfile(name"):
+    replace_once(
+        CHAPTER_HTML_CPP,
+        '''    if (!styleAttr.empty()) {\n      CssStyle inlineStyle = CssParser::parseInlineStyle(styleAttr);\n      cssStyle.applyOver(inlineStyle);\n    }\n    if (self->shouldAbortForLowMemory("CSS style resolution")) {\n''',
+        '''    if (!styleAttr.empty()) {\n      CssStyle inlineStyle = CssParser::parseInlineStyle(styleAttr);\n      cssStyle.applyOver(inlineStyle);\n    }\n    applyInkmodClassicBookProfile(name, classAttr, self->ancestorStack_, cssStyle);\n    if (self->shouldAbortForLowMemory("CSS style resolution")) {\n''',
     )
 
 print("Feedback fixes applied")

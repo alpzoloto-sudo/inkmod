@@ -1,0 +1,51 @@
+name: Build OTA 1.1.4 test firmware
+
+on:
+  push:
+    branches:
+      - test/ota-1.1.4-apple-folders
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout test branch
+        uses: actions/checkout@v4
+        with:
+          ref: test/ota-1.1.4-apple-folders
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO and dependencies
+        run: |
+          pip install -U platformio
+          pip install -r requirements.txt
+
+      - name: Verify OTA partition layout
+        run: |
+          grep -q 'app0,     app,  ota_0,   0x10000, 0x640000' partitions.csv
+          grep -q 'app1,     app,  ota_1,   0x650000,0x640000' partitions.csv
+
+      - name: Build release firmware
+        run: pio run -e release
+
+      - name: Show artifacts
+        run: ls -lah .pio/build/release/
+
+      - name: Upload OTA firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: inkMOD-1.1.4-OTA-X4-apple-folder-fix
+          path: |
+            .pio/build/release/firmware-release*.bin
+            .pio/build/release/firmware.bin
+          if-no-files-found: error

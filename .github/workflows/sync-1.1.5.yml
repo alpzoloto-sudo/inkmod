@@ -33,8 +33,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rsync -a --delete --exclude='.git/' source/ target/
-          rm -f target/.github/workflows/sync-1.1.5.yml
+          rsync -a --delete \
+            --exclude='.git/' \
+            --exclude='.github/workflows/' \
+            source/ target/
+          # Keep the target repository's own CI/release workflows intact.
+          rm -f target/.github/sync-1.1.5-trigger.txt
 
           cd target
           git config user.name "github-actions[bot]"

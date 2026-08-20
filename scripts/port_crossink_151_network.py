@@ -76,17 +76,20 @@ for rel in FILES:
     dst.write_text(upstream, encoding="utf-8")
     print(f"[inkMOD] Ported CrossInk {CROSSINK_TAG} network file: {rel}")
 
-# Compatibility shims for the older inkMOD credential store. CrossInk rc3's
-# client can talk to the normal KOReader server without the optional CrossPoint
-# protocol extensions; these methods intentionally disable only those extras.
+# Compatibility shims for the older inkMOD credential store. Keep its on-disk
+# format/default KOReader server intact, while exposing the small rc3 API surface
+# expected by the newer client. CrossPoint rich-position extensions are enabled
+# only when that server was explicitly configured by the user.
 cred = ROOT / "lib" / "KOReaderSync" / "KOReaderCredentialStore.h"
 text = cred.read_text(encoding="utf-8")
 if "usesCrossPointSyncServer() const" not in text:
     needle = "  // Document matching method\n"
     shim = (
-        "  // CrossInk v1.5.1-rc-3 client compatibility. inkMOD keeps its existing\\n"
-        "  // credential format and disables CrossPoint-only protocol extras.\\n"
-        "  bool usesCrossPointSyncServer() const { return false; }\\n"
+        "  // CrossInk v1.5.1-rc-3 client compatibility without changing inkMOD's\\n"
+        "  // persisted credential format or its legacy default sync server.\\n"
+        "  bool usesCrossPointSyncServer() const {\\n"
+        "    return getBaseUrl() == \"https://sync.crosspointreader.com\";\\n"
+        "  }\\n"
         "  bool getSendMetadata() const { return false; }\\n\\n"
     ).replace("\\n", "\n")
     if needle not in text:

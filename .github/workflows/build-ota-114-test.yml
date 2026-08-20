@@ -9,10 +9,11 @@ on:
       - main
   workflow_dispatch:
 
-# This branch is intentionally iterative. Do not waste runners compiling stale
-# OTA test commits after a newer fix has already been pushed.
+# One queue for every trigger of this isolated test branch. A push and its PR
+# event must not compile the same firmware twice, and a newer fix cancels stale
+# OTA builds immediately.
 concurrency:
-  group: ota-1.1.4-apple-folders-${{ github.event.pull_request.number || github.ref }}
+  group: ota-1.1.4-apple-folders
   cancel-in-progress: true
 
 permissions:

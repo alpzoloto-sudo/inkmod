@@ -9,6 +9,12 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: rebuild-inkmod-1.1.5-classic-reader
+  cancel-in-progress: true
 
 jobs:
   rebuild-release:
@@ -42,11 +48,14 @@ jobs:
         run: pio run -e release
 
       - name: Verify release asset
+        id: asset
         run: |
           FILE='.pio/build/release/firmware-release-v1.1.5.bin'
           test -s "$FILE"
           ls -lh "$FILE"
-          sha256sum "$FILE"
+          SHA=$(sha256sum "$FILE" | awk '{print $1}')
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "SHA256=$SHA"
 
       - name: Replace v1.1.5 firmware asset
         env:
@@ -56,3 +65,10 @@ jobs:
           gh release view v1.1.5 --repo "${{ github.repository }}"
           gh release upload v1.1.5 "$FILE" --clobber --repo "${{ github.repository }}"
           echo 'Re-uploaded firmware-release-v1.1.5.bin'
+
+      - name: Report successful rebuild
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET_SHA: ${{ steps.asset.outputs.sha }}
+        run: |
+          gh pr comment 10 --repo "${{ github.repository }}" --body "RELEASE_115_CLASSIC_OK commit=${GITHUB_SHA} asset=firmware-release-v1.1.5.bin sha256=${ASSET_SHA}"

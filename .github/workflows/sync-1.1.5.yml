@@ -1,5 +1,6 @@
 name: One-shot sync inkMOD 1.1.5
 
+# Second push intentionally triggers this already-installed one-shot workflow.
 on:
   push:
     branches:

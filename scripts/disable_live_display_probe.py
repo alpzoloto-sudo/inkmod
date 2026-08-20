@@ -2,10 +2,12 @@
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-if "__file__" in globals():
-    ROOT = Path(__file__).resolve().parents[1]
-else:
+try:
+    Import("env")  # type: ignore[name-defined]
+    ROOT = Path(env["PROJECT_DIR"]).resolve()  # type: ignore[name-defined]
+except NameError:
     ROOT = Path.cwd().resolve()
+
 HAL_DISPLAY_CPP = ROOT / "lib/hal/HalDisplay.cpp"
 
 # Pin the Xteink display stack to one immutable FreeInk SDK snapshot. Do not

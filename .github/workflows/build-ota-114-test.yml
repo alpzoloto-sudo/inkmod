@@ -9,6 +9,12 @@ on:
       - main
   workflow_dispatch:
 
+# This branch is intentionally iterative. Do not waste runners compiling stale
+# OTA test commits after a newer fix has already been pushed.
+concurrency:
+  group: ota-1.1.4-apple-folders-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
   pull-requests: write

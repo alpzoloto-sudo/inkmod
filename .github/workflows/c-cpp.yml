@@ -30,6 +30,7 @@ jobs:
         run: python scripts/release_check.py
 
       - name: Build developer firmware
+        if: github.head_ref != 'test/ota-1.1.4-apple-folders'
         run: pio run -e developer
 
       - name: Build release firmware

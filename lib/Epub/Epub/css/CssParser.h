@@ -41,11 +41,11 @@ struct CssAncestorEntry {
 
 class CssParser {
  public:
-  // v13: paragraph vertical margins/padding are now owned by the reader's
-  // Paragraph spacing setting. Bumping the cache also invalidates existing
-  // section caches through the normal CSS-rebuild path.
+  // v14: inkMOD Classic Book changes final paragraph/quote/poem geometry.
+  // Bumping the CSS cache also invalidates existing section/page caches through
+  // the normal CSS-rebuild path so 1.1.5 cannot keep stale pre-profile pages.
   static constexpr uint32_t CSS_CACHE_MAGIC = 0x435843FF;
-  static constexpr uint8_t CSS_CACHE_VERSION = 13;
+  static constexpr uint8_t CSS_CACHE_VERSION = 14;
 
   static constexpr size_t MAX_DESCENDANT_RULES = 100;
 

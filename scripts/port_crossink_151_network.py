@@ -4,7 +4,11 @@ from urllib.request import Request, urlopen
 Import("env")
 
 ROOT = Path(env.subst("$PROJECT_DIR"))
-UPSTREAM = "https://raw.githubusercontent.com/uxjulia/CrossInk/release/v1.5.1/"
+# Pin the OTA/KOReader network port to the exact CrossInk release candidate
+# validated for this inkMOD 1.1.4 test branch. Do not follow a moving release
+# branch: a rebuild must always compile the same upstream sources.
+CROSSINK_TAG = "v1.5.1-rc-3"
+UPSTREAM = f"https://raw.githubusercontent.com/uxjulia/CrossInk/{CROSSINK_TAG}/"
 FILES = [
     "src/network/HttpDownloader.cpp",
     "src/network/HttpDownloader.h",
@@ -24,8 +28,8 @@ def download(path: str) -> str:
 
 
 def adapt(path: str, text: str) -> str:
-    # Keep the upstream 1.5.1 implementation while preserving inkMOD branding,
-    # release endpoint and build-variant asset naming.
+    # Keep the exact CrossInk v1.5.1-rc-3 implementation while preserving
+    # inkMOD branding, release endpoint and build-variant asset naming.
     text = text.replace("CROSSINK_VERSION", "INKMOD_VERSION")
     text = text.replace("CROSSINK_OTA_RELEASE_URL", "INKMOD_OTA_RELEASE_URL")
     text = text.replace("CROSSINK_FIRMWARE_DEVICE_TYPE", "INKMOD_FIRMWARE_VARIANT")
@@ -44,7 +48,7 @@ def adapt(path: str, text: str) -> str:
             "const uint16_t runningChipId = firmware_flash::runningPartitionChipId();",
             "const uint16_t runningChipId = 0xFFFF;")
         # Always use the wolfSSL streaming transport for the firmware asset.
-        # This is the key CrossInk 1.5.1 behavior that avoids esp_https_ota's
+        # This is the key rc3 behavior that avoids esp_https_ota's
         # ESP_ERR_HTTP_CONNECT failures on the memory-constrained X4.
         text = text.replace(
             "if (hasManifestSha256) downloadOptions.transport = HttpDownloader::Transport::WOLFSSL;",
@@ -57,9 +61,9 @@ for rel in FILES:
     dst = ROOT / rel
     upstream = adapt(rel, download(rel))
     dst.write_text(upstream, encoding="utf-8")
-    print(f"[inkMOD] Ported CrossInk 1.5.1 network file: {rel}")
+    print(f"[inkMOD] Ported CrossInk {CROSSINK_TAG} network file: {rel}")
 
-# Compatibility shims for the older inkMOD credential store. CrossInk 1.5.1's
+# Compatibility shims for the older inkMOD credential store. CrossInk rc3's
 # client can talk to the normal KOReader server without the optional CrossPoint
 # protocol extensions; these methods intentionally disable only those extras.
 cred = ROOT / "lib" / "KOReaderSync" / "KOReaderCredentialStore.h"
@@ -67,7 +71,7 @@ text = cred.read_text(encoding="utf-8")
 if "usesCrossPointSyncServer() const" not in text:
     needle = "  // Document matching method\n"
     shim = (
-        "  // CrossInk 1.5.1 client compatibility. inkMOD keeps its existing\\n"
+        "  // CrossInk v1.5.1-rc-3 client compatibility. inkMOD keeps its existing\\n"
         "  // credential format and disables CrossPoint-only protocol extras.\\n"
         "  bool usesCrossPointSyncServer() const { return false; }\\n"
         "  bool getSendMetadata() const { return false; }\\n\\n"
@@ -78,4 +82,4 @@ if "usesCrossPointSyncServer() const" not in text:
     cred.write_text(text, encoding="utf-8")
     print("[inkMOD] Added KOReader credential compatibility shims")
 
-print("[inkMOD] CrossInk 1.5.1 OTA + KOReader network port applied")
+print(f"[inkMOD] CrossInk {CROSSINK_TAG} OTA + KOReader network port applied")

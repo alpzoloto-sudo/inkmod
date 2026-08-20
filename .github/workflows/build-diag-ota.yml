@@ -1,0 +1,39 @@
+name: Build OTA diagnostic artifact
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build-diag:
+    if: github.head_ref == 'diag/ota-partitions'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout diagnostic branch
+        uses: actions/checkout@v4
+        with:
+          ref: diag/ota-partitions
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO and dependencies
+        run: |
+          pip install -U platformio
+          pip install -r requirements.txt
+
+      - name: Build release firmware
+        run: pio run -e release
+
+      - name: Upload diagnostic firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: inkmod-ota-diagnostic
+          path: .pio/build/release/firmware-release-v1.1.5.bin
+          if-no-files-found: error

@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - test/ota-1.1.4-apple-folders
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:

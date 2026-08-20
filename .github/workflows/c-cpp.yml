@@ -34,3 +34,13 @@ jobs:
 
       - name: Build release firmware
         run: pio run -e release
+
+      - name: Upload PR test firmware
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: inkMOD-1.1.4-OTA-X4-PR-${{ github.event.pull_request.number }}
+          path: |
+            .pio/build/release/firmware-release*.bin
+            .pio/build/release/firmware.bin
+          if-no-files-found: error

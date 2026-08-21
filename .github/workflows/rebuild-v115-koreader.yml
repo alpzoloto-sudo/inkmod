@@ -1,0 +1,38 @@
+name: Rebuild v1.1.5 KOReader fix
+
+on:
+  push:
+    branches: [ "main" ]
+    paths: [ ".github/workflows/rebuild-v115-koreader.yml" ]
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -U platformio
+          pip install -r requirements.txt
+      - name: Validate release metadata
+        run: python scripts/release_check.py
+      - name: Build production firmware
+        run: pio run -e release
+      - name: Publish v1.1.5 asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp .pio/build/release/firmware-release.bin firmware-release-v1.1.5.bin
+          sha256sum firmware-release-v1.1.5.bin | tee SHA256SUMS-v1.1.5.txt
+          gh release upload v1.1.5 firmware-release-v1.1.5.bin --clobber
+          rm -f verify.bin
+          gh release download v1.1.5 -p firmware-release-v1.1.5.bin -O verify.bin
+          test "$(sha256sum firmware-release-v1.1.5.bin | cut -d' ' -f1)" = "$(sha256sum verify.bin | cut -d' ' -f1)"

@@ -34,3 +34,19 @@ jobs:
 
       - name: Build release firmware
         run: pio run -e release
+
+      - name: Prepare X3 CrossPoint test BIN
+        if: github.event_name == 'pull_request' && github.event.pull_request.number == 15
+        run: |
+          cp .pio/build/release/firmware-release.bin inkMOD-1.1.5-X3-CrossPoint-1.5.0-test.bin
+          sha256sum inkMOD-1.1.5-X3-CrossPoint-1.5.0-test.bin > SHA256SUMS.txt
+
+      - name: Upload X3 CrossPoint test BIN
+        if: github.event_name == 'pull_request' && github.event.pull_request.number == 15
+        uses: actions/upload-artifact@v4
+        with:
+          name: inkMOD-X3-CrossPoint-1.5.0-test
+          path: |
+            inkMOD-1.1.5-X3-CrossPoint-1.5.0-test.bin
+            SHA256SUMS.txt
+          if-no-files-found: error

@@ -30,8 +30,14 @@ void EpdBus::begin(const EpdPins& pins, uint32_t spiHz, BusyPolarity busy, int8_
   _coCs = coCs;
   _spi = SPISettings(spiHz, MSBFIRST, SPI_MODE0);
 
+  // One-shot semaphore backing waitRefreshComplete()'s ISR wait (created once).
   if (!s_epdRefreshDone) s_epdRefreshDone = xSemaphoreCreateBinary();
 
+  // Power the EPD rail first (boards that gate it, e.g. Sticky's EP_PWR_EN), so the
+  // panel is alive before SPI bring-up and the reset pulse. No-op when unassigned.
+  // gpio_hold_dis first: PowerManager::powerDownRailsForSleep() holds this pin LOW
+  // for deep sleep, and the hold survives the wake reset — without releasing it,
+  // the HIGH write silently bounces off the latch and the rail stays off.
   if (pins.powerEnable >= 0) {
     gpio_hold_dis(static_cast<gpio_num_t>(pins.powerEnable));
     pinMode(pins.powerEnable, OUTPUT);
@@ -43,7 +49,6 @@ void EpdBus::begin(const EpdPins& pins, uint32_t spiHz, BusyPolarity busy, int8_
 
   pinMode(pins.cs, OUTPUT);
   pinMode(pins.dc, OUTPUT);
-  gpio_hold_dis(static_cast<gpio_num_t>(pins.rst));
   pinMode(pins.rst, OUTPUT);
   pinMode(pins.busy, busy == BusyPolarity::ActiveLow ? INPUT_PULLUP : INPUT);
   if (_coCs >= 0) {
@@ -144,6 +149,9 @@ void EpdBus::waitBusy(const char* tag) { waitBusy(_busy, tag); }
 
 void EpdBus::waitBusy(BusyPolarity p, const char* tag) {
   const unsigned long start = millis();
+  // Both hooks engage lazily, only once the wait has proven long (see
+  // setBusyWaitHooks). longWait gates the slice hook independently of the
+  // begin hook's presence; hookFired guarantees the end hook is balanced.
   bool longWait = false;
   bool hookFired = false;
   bool x3SawLow = false;
@@ -184,7 +192,7 @@ void EpdBus::waitBusy(BusyPolarity p, const char* tag) {
         if (millis() - start > 30000) break;
       } while (digitalRead(_pins.busy) == LOW);
     }
-  } else {
+  } else {  // X3TwoPhase: wait for the LOW edge, then wait back to HIGH
     while (digitalRead(_pins.busy) == HIGH) {
       delay(1);
       if (millis() - start > 1000) break;
@@ -208,63 +216,80 @@ void EpdBus::waitBusy(BusyPolarity p, const char* tag) {
   if (hookFired && _busyWaitEndHook != nullptr) _busyWaitEndHook();
   if (p == BusyPolarity::X3TwoPhase && !x3SawLow) return;
 
-#ifdef ENABLE_SERIAL_LOG
   if (tag && Serial) {
     Serial.printf("[%lu]   Wait complete: %s (%lu ms)\n", millis(), tag, millis() - start);
   }
-#else
-  (void)tag;
-#endif
 }
 
 void EpdBus::waitRefreshComplete(const char* tag) {
+  // A host that installed a busy-wait slice hook (e.g. CrossPoint light-sleeping
+  // through the refresh) must keep the polling path: waitBusy() invokes the slice
+  // hook on each idle step, while this ISR path sleeps the task on a semaphore and
+  // never calls it. Bypassing the hook costs that host its power policy (~9% more
+  // per refresh, measured ~29 mC vs ~26.5 mC on X3), and is a latent hazard: edge
+  // interrupts do not fire during light sleep, so a completion edge taken while the
+  // host is slept would be missed and the wait would stall to its 30 s timeout. The
+  // slice hook already delivers GPIO-precise wake, so the ISR path buys these hosts
+  // nothing — fall back to the hooked poll.
   if (_busyWaitSliceHook != nullptr) {
     waitBusy(tag);
     return;
   }
+  // ISR-driven completion wait: sleep the task on a semaphore and wake on the
+  // exact BUSY completion edge, instead of polling every 1 ms. Falls back to
+  // polling if the semaphore could not be created.
   if (!s_epdRefreshDone) {
     waitBusy(tag);
     return;
   }
+  // Levels/edge by polarity. X4 (ActiveHigh): working HIGH, done on the HIGH->LOW
+  // (FALLING) edge. X3 (X3TwoPhase) / ActiveLow: working LOW, done on the LOW->HIGH
+  // (RISING) edge.
   const bool activeHigh = (_busy == BusyPolarity::ActiveHigh);
   const int doneEdge = activeHigh ? FALLING : RISING;
   const int doneLevel = activeHigh ? LOW : HIGH;
   const int workingLevel = activeHigh ? HIGH : LOW;
   const unsigned long start = millis();
 
+  // Confirm the waveform is actually running (BUSY at the working level) before
+  // arming, so the already-done fast path below can't mistake the pre-start idle
+  // level for completion. Bounded poll: if BUSY never shows the working level the
+  // refresh was a no-op or already finished, and the fast path handles it. This
+  // is a no-op for X3 (displayStart already drove BUSY to LOW) and ~instant for
+  // X4 (SSD1677 asserts BUSY within microseconds of MASTER_ACTIVATION).
   {
     const unsigned long c0 = millis();
     while (digitalRead(_pins.busy) != workingLevel && millis() - c0 < 20) delay(1);
   }
 
-  xSemaphoreTake(s_epdRefreshDone, 0);
+  xSemaphoreTake(s_epdRefreshDone, 0);  // drain any stale token
   attachInterrupt(digitalPinToInterrupt(_pins.busy), epdBusyIsr, doneEdge);
 
+  // Fast path: the waveform already finished (edge passed before we armed, or a
+  // no-op refresh) — BUSY sits at the done level. Nothing to wait for. Safe
+  // against the arm/edge race: the binary semaphore latches a give from the ISR,
+  // so a take below returns immediately if the edge fired just after arming.
   if (digitalRead(_pins.busy) == doneLevel) {
     detachInterrupt(digitalPinToInterrupt(_pins.busy));
     xSemaphoreTake(s_epdRefreshDone, 0);
     return;
   }
 
+  // Long sleep — fire the power hooks (if any) around it, matching the poll path.
   const bool hook = (_busyWaitBeginHook != nullptr);
   if (hook) _busyWaitBeginHook();
   xSemaphoreTake(s_epdRefreshDone, pdMS_TO_TICKS(30000));
   if (hook && _busyWaitEndHook != nullptr) _busyWaitEndHook();
 
   detachInterrupt(digitalPinToInterrupt(_pins.busy));
-#ifdef ENABLE_SERIAL_LOG
   if (tag && Serial) {
     Serial.printf("[%lu]   Wait complete: %s (%lu ms)\n", millis(), tag, millis() - start);
   }
-#else
-  (void)tag;
-  (void)start;
-#endif
 }
 
 void EpdBus::sendPlaneFlipped(uint8_t ramCmd, const uint8_t* plane, uint16_t height, uint16_t widthBytes) {
-  cmd(ramCmd);
-  beginTxn();
+  cmd(ramCmd);  // own CS pulse
+  beginTxn();   // single CS-low burst for the whole plane
   for (int y = static_cast<int>(height) - 1; y >= 0; y--) {
     rawWriteBytes(plane + static_cast<uint32_t>(y) * widthBytes, widthBytes);
   }
@@ -272,6 +297,8 @@ void EpdBus::sendPlaneFlipped(uint8_t ramCmd, const uint8_t* plane, uint16_t hei
 }
 
 void EpdBus::fillPlane(uint8_t ramCmd, uint8_t fillByte, uint16_t height, uint16_t widthBytes) {
+  // Reusable constant-fill chunk; wide rows are written in multiple bursts so a
+  // widthBytes larger than the chunk is streamed in full (no silent truncation).
   uint8_t chunk[128];
   memset(chunk, fillByte, sizeof(chunk));
   cmd(ramCmd);

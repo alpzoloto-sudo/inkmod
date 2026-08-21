@@ -176,15 +176,7 @@ bool Uc8279X4Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t*
   // Same differential model as the UC8179 sibling: full OTP flash on an explicit
   // Full request or the forced first clear, otherwise a PTIN/PTOUT partial whose
   // OLD plane (0x10) holds the previous displayed frame (synced in displayFinish).
-  // FIX (ghosting on periodic "clean" refresh): Half was previously grouped with
-  // Fast here (`mode != Full`), so the reader's periodic ghost-clearing pass
-  // (ReaderUtils::displayWithRefreshCycle, which alternates Fast/Half and never
-  // requests Full) silently ran the same DIFFERENTIAL partial waveform as every
-  // other page. The absolute GC-from-white waveform below — the only thing that
-  // actually clears accumulated ghosts on this controller — never fired. Only
-  // Fast should take the differential path; Half now gets the same full flash as
-  // Full, matching the SSD1677 sibling's already-correct Half handling.
-  const bool fast = (mode == RefreshMode::Fast) && !_needFullClear && _oldPlaneValid;
+  const bool fast = (mode != RefreshMode::Full) && !_needFullClear && _oldPlaneValid;
 
   streamPlane(bus, CMD_DTM2, fb);
   if (!fast) {

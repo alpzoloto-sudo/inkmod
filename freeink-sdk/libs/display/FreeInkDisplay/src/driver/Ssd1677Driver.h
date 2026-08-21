@@ -120,10 +120,6 @@ class Ssd1677Driver : public PanelDriver {
   bool _mirrorY = false;
 
   bool _isScreenOn = false;
-  // Sunlight fading fix: stock X4 FAST sequence 0xFC does not contain the
-  // ANALOG_OFF/CLOCK_OFF bits. For async refreshes, defer the explicit 0x03
-  // power-down until displayFinish(), after BUSY has completed.
-  bool _pendingSunlightPowerOff = false;
   bool _inGrayscaleMode = false;
   bool _customLutActive = false;
   // First paint after begin() (boot or deep-sleep wake) must be a full refresh to

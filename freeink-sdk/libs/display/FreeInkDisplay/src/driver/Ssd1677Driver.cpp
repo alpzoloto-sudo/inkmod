@@ -280,33 +280,15 @@ void Ssd1677Driver::refresh(EpdBus& bus, RefreshMode mode, bool turnOff, bool as
     bus.cmd(CMD_DISPLAY_UPDATE_CTRL2);
     bus.data(seqOverride);
     bus.cmd(CMD_MASTER_ACTIVATION);
-
-    const bool sequencePowersOff = (seqOverride & 0x03) != 0;
-    _pendingSunlightPowerOff = false;
-
-    if (!async) {
-      bus.waitRefreshComplete("refresh");
-
-      // Real X4 sunlight-fading fix, without an extra image refresh:
-      // stock FAST is 0xFC and does NOT request ANALOG_OFF/CLOCK_OFF. When
-      // turnOff=true (SETTINGS.fadingFix), explicitly shut the panel rails down
-      // after the completed waveform. FULL/HALF already contain 0x03, so they
-      // are left untouched and pay no extra delay.
-      if (turnOff && !sequencePowersOff) {
-        bus.cmd(CMD_DISPLAY_UPDATE_CTRL2);
-        bus.data(0x03);  // ANALOG_OFF_PHASE | CLOCK_OFF
-        bus.cmd(CMD_MASTER_ACTIVATION);
-        bus.waitBusy("sunlight power-down");
-      }
-    } else {
-      // Never send 0x03 while a waveform is still running. displayFinish()
-      // performs the shutdown after BUSY completes.
-      _pendingSunlightPowerOff = turnOff && !sequencePowersOff;
-    }
-
-    // Track the real electrical state. Sequences with 0x03 self-power-down;
-    // the sunlight fix explicitly powers down non-self-off sequences.
-    _isScreenOn = (sequencePowersOff || turnOff) ? false : true;
+    if (!async) bus.waitRefreshComplete("refresh");
+    // The sequence powered the panel down at the end, but keep the flag truthful
+    // to intent: leave it "on" between active updates so display() doesn't force a
+    // full HALF refresh next time (which would defeat fast refresh). turnOff marks
+    // it off for the sleep path. The vendor sequences self-cycle power: if they
+    // include the disable bits (0x03) the panel is OFF afterward — track that so the
+    // next refresh (e.g. the custom-LUT grayscale path) powers it back on instead of
+    // issuing a display command against a powered-down panel (which hangs BUSY).
+    _isScreenOn = (seqOverride & 0x03) ? false : !turnOff;
 #if defined(SSD1677_PROBE_DEBUG) && SSD1677_PROBE_DEBUG
     esp_rom_printf("[SSD1677] %s refresh %ums (ctrl2=0x%x, seq)\n", dbgMode, (unsigned)(millis() - dbgStart),
                    seqOverride);
@@ -380,19 +362,6 @@ bool Ssd1677Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* 
 void Ssd1677Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
   (void)fb;  // X4 post-waveform needs nothing from the host frame
   bus.waitRefreshComplete("refresh");
-
-  // The X4 stock FAST sequence is 0xFC. Unlike FULL/HALF (0xF7/0xD7),
-  // its low power-off bits are clear, so turnOff=true used to change only the
-  // driver's bookkeeping while the panel rails could remain enabled.
-  // Finish the sunlight-fading fix only after the async waveform is complete.
-  if (_pendingSunlightPowerOff) {
-    _pendingSunlightPowerOff = false;
-    bus.cmd(CMD_DISPLAY_UPDATE_CTRL2);
-    bus.data(0x03);  // ANALOG_OFF_PHASE | CLOCK_OFF
-    bus.cmd(CMD_MASTER_ACTIVATION);
-    bus.waitBusy("sunlight power-down");
-    _isScreenOn = false;
-  }
 }
 
 void Ssd1677Driver::displayImpl(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
@@ -628,8 +597,6 @@ void Ssd1677Driver::setCustomLut(EpdBus& bus, bool enabled, const unsigned char*
 }
 
 void Ssd1677Driver::deepSleep(EpdBus& bus) {
-  _pendingSunlightPowerOff = false;
-
   // Stock parity (_powerOff): park the border at its init value so it is not left
   // driven with the full-refresh waveform through deep sleep, then power down
   // analog/clock. Stock does not touch CTRL1 here.

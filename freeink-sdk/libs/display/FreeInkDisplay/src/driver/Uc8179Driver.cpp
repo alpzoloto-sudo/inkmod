@@ -35,9 +35,7 @@ constexpr uint8_t CDI_INTERVAL = 0x07;  // CDI byte1, constant
 // here the register command is sent SEPARATELY — blob byte0 is DATA, not the cmd.
 // Each LUT is 42 (0x2A) data bytes; only the first ~12 are non-zero. Level select
 // by (old=0x10/LSB, new=0x13/MSB): (0,0)=LUTKK black, (0,1)=LUTKW, (1,0)=LUTWK,
-// (1,1)=LUTWW white. This is the byte-exact stock set from the known-good 6662faf
-// build; the "white-push"/"reset-phase" experiments were chasing a symptom whose
-// real cause was the AA-CDI regression (see displayGray) — leave this as stock.
+// (1,1)=LUTWW white.
 constexpr uint8_t GRAY_LUT_LEN = 42;  // 0x2A data bytes, command sent separately
 struct GrayLut {
   uint8_t cmd;
@@ -161,15 +159,7 @@ bool Uc8179Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* p
   // KW (black->white) NEVER runs and last page's text is never erased = heavy
   // ghosting. Feeding the previous frame lets KW clear it. (0x10 is synced to the
   // just-displayed frame in displayFinish; a full refresh reseeds it to white.)
-  // FIX (ghosting on periodic "clean" refresh): Half was previously grouped with
-  // Fast here (`mode != Full`), so the reader's periodic ghost-clearing pass
-  // (ReaderUtils::displayWithRefreshCycle, which alternates Fast/Half and never
-  // requests Full) silently ran the same DIFFERENTIAL partial waveform as every
-  // other page. The absolute GC-from-white waveform below — the only thing that
-  // actually clears accumulated ghosts on this controller — never fired. Only
-  // Fast should take the differential path; Half now gets the same full flash as
-  // Full, matching the SSD1677 sibling's already-correct Half handling.
-  const bool fast = (mode == RefreshMode::Fast) && !_needFullClear && _oldPlaneValid;
+  const bool fast = (mode != RefreshMode::Full) && !_needFullClear && _oldPlaneValid;
 
   // NEW plane (0x13) = new frame.
   streamPlane(bus, CMD_DTM2, fb);
@@ -300,14 +290,10 @@ void Uc8179Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, con
     bus.cmd(l.cmd);
     bus.data(l.data, GRAY_LUT_LEN);
   }
-  // The AA refresh CDI is a CONSTANT 0x29 (app1 vtable[0x118] returns 0x29 every
-  // refresh; the known-good 6662faf build used 0x29 unconditionally). The
-  // "first 0x29 / later 0xA9" variant from the display-cleanups audit REGRESSED
-  // this: 0xA9 (bit7 set) changes the border/VCOM handling on every AA page after
-  // the first, which accumulates as ghosting under fast paging and smears when a
-  // partial (menu) refresh follows — do NOT reintroduce it.
+  // Vendor reference: the FIRST AA refresh after init drives the border (0x29);
+  // later AA refreshes hold it (0xA9) so the border doesn't flash on every page.
   bus.cmd(CMD_VCOM_DATA_INTERVAL);
-  bus.data(_cfg.cdiActive);  // 0x29, always
+  bus.data(_grayRefreshedOnce ? _cfg.cdiIdle : _cfg.cdiActive);  // first 0x29, later 0xA9
   bus.data(CDI_INTERVAL);
   _grayRefreshedOnce = true;
 

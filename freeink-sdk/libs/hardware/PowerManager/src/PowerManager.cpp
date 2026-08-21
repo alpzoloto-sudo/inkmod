@@ -72,16 +72,6 @@ void holdRailOff(int8_t pin, uint8_t offLevel) {
 
 void PowerManager::powerDownRailsForSleep() {
   const auto& b = BoardConfig::ACTIVE;
-  // Hold the display RESET line at its idle level (HIGH) through deep sleep.
-  // esp_sleep_config_gpio_isolate() otherwise floats it high-Z; a drifting
-  // active-low RST can pull a controller out of its deep-sleep hold. The SSD1677
-  // tolerates that (no external booster, and its deepSleep actively discharges),
-  // but the UC8179 — which runs an explicit BTST-programmed DC-DC booster — does
-  // not stay collapsed, so its analog restarts and drains the pack through "off"
-  // (field report: dead in ~36 h). Holding RST high is the controller's normal
-  // idle level, so it's harmless for the SSD1677 batch. Released on wake in
-  // EpdBus::begin() before the reset pulse. (holdRailOff no-ops if RST unassigned.)
-  holdRailOff(b.display.rst, HIGH);
   holdRailOff(b.display.powerEnable, LOW);
   // SD enable OFF = the inactive level: LOW for active-high enables, HIGH for the
   // active-low ones (e.g. X4 Pro's GPIO5, which powers the card while held LOW).

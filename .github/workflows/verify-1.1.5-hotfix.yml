@@ -1,0 +1,58 @@
+name: Verify 1.1.5 hotfix asset
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - ".github/workflows/verify-1.1.5-hotfix.yml"
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Wait for replaced release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          OLD=0983d754182597b1235f12874db944dea1f09df991e181c968aded138a0bd5f7
+          mkdir -p /tmp/verify115
+          for i in $(seq 1 40); do
+            rm -f /tmp/verify115/firmware-release-v1.1.5.bin
+            if gh release download v1.1.5 --repo "${{ github.repository }}" --pattern firmware-release-v1.1.5.bin --dir /tmp/verify115 --clobber; then
+              SHA=$(sha256sum /tmp/verify115/firmware-release-v1.1.5.bin | awk '{print $1}')
+              if [ "$SHA" != "$OLD" ]; then
+                echo "NEW_SHA=$SHA" >> "$GITHUB_ENV"
+                exit 0
+              fi
+            fi
+            sleep 30
+          done
+          echo "Release asset is still the old problematic binary" >&2
+          exit 1
+
+      - name: Report verified SHA on PR 12
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment 12 --repo "${{ github.repository }}" --body "[release-hotfix-verified] firmware-release-v1.1.5.bin SHA-256: ${NEW_SHA}"
+
+      - name: Remove this one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/verify-1.1.5-hotfix.yml
+          git commit -m "chore(ci): remove 1.1.5 hotfix verifier"
+          git push origin HEAD:main

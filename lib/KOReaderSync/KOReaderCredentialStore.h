@@ -60,6 +60,11 @@ class KOReaderCredentialStore {
   // Get base URL for API calls (with http:// normalization if no protocol, falls back to default)
   std::string getBaseUrl() const;
 
+  // CrossPoint sync supports the extended rich-position object used by the
+  // CrossInk KOReader client. Keep this as a pure URL capability check so the
+  // existing inkMOD credential file format and default server stay untouched.
+  bool usesCrossPointSyncServer() const { return getBaseUrl() == "https://sync.crosspointreader.com"; }
+
   // Document matching method
   void setMatchMethod(DocumentMatchMethod method);
   DocumentMatchMethod getMatchMethod() const { return matchMethod; }

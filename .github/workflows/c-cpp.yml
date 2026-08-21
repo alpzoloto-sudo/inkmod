@@ -30,9 +30,11 @@ jobs:
         run: python scripts/release_check.py
 
       - name: Build developer firmware
+        if: github.event_name != 'pull_request' || github.event.pull_request.number != 14
         run: pio run -e developer
 
       - name: Build release firmware
+        if: github.event_name != 'pull_request' || github.event.pull_request.number != 14
         run: pio run -e release
 
       - name: Build X3 display diagnostic firmware

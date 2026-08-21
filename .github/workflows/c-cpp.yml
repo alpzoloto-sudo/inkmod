@@ -34,18 +34,3 @@ jobs:
 
       - name: Build release firmware
         run: pio run -e release
-
-      - name: Prepare KOReader hotfix test binary
-        if: github.event_name == 'pull_request' && github.event.pull_request.number == 13
-        run: |
-          mkdir -p koreader-hotfix
-          cp .pio/build/release/firmware-release.bin koreader-hotfix/firmware-release-v1.1.5-koreader-hotfix.bin
-          sha256sum koreader-hotfix/*.bin > koreader-hotfix/SHA256SUMS.txt
-
-      - name: Upload KOReader hotfix test binary
-        if: github.event_name == 'pull_request' && github.event.pull_request.number == 13
-        uses: actions/upload-artifact@v4
-        with:
-          name: inkMOD-1.1.5-koreader-wolfssl-test
-          path: koreader-hotfix/
-          if-no-files-found: error

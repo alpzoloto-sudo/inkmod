@@ -1,0 +1,55 @@
+name: Vendor CrossPoint 1.5.0 hardware
+
+on:
+  push:
+    branches: [ "fix/x3-crosspoint-1.5.0-hardware" ]
+    paths: [ ".github/workflows/vendor-crosspoint-150-hardware.yml" ]
+
+jobs:
+  vendor:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/x3-crosspoint-1.5.0-hardware
+          fetch-depth: 0
+      - name: Fetch exact FreeInk SDK used by CrossPoint v1.5.0
+        run: |
+          set -euxo pipefail
+          SDK_SHA=a485dc46ef5fb2283e4bdb674002ddbef97a9268
+          curl -L --fail --retry 3 "https://github.com/Free-Ink/freeink-sdk/archive/${SDK_SHA}.tar.gz" -o /tmp/freeink-sdk.tar.gz
+          rm -rf /tmp/freeink-sdk-src
+          mkdir -p /tmp/freeink-sdk-src
+          tar -xzf /tmp/freeink-sdk.tar.gz -C /tmp/freeink-sdk-src --strip-components=1
+
+          for d in \
+            libs/display/FreeInkDisplay \
+            libs/hardware/BoardConfig \
+            libs/hardware/XteinkDetect \
+            libs/hardware/InputManager \
+            libs/hardware/BatteryMonitor \
+            libs/hardware/SDCardManager \
+            libs/hardware/PowerManager; do
+            rm -rf "freeink-sdk/$d"
+            mkdir -p "$(dirname "freeink-sdk/$d")"
+            cp -a "/tmp/freeink-sdk-src/$d" "freeink-sdk/$d"
+          done
+
+          printf '%s\n' "$SDK_SHA" > freeink-sdk/INKMOD_CROSSPOINT_1_5_0_SDK_PIN
+
+      - name: Commit vendored hardware stack
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add freeink-sdk/libs/display/FreeInkDisplay \
+                  freeink-sdk/libs/hardware/BoardConfig \
+                  freeink-sdk/libs/hardware/XteinkDetect \
+                  freeink-sdk/libs/hardware/InputManager \
+                  freeink-sdk/libs/hardware/BatteryMonitor \
+                  freeink-sdk/libs/hardware/SDCardManager \
+                  freeink-sdk/libs/hardware/PowerManager \
+                  freeink-sdk/INKMOD_CROSSPOINT_1_5_0_SDK_PIN
+          git commit -m "hardware: sync CrossPoint 1.5.0 FreeInk stack" || exit 0
+          git push origin HEAD:fix/x3-crosspoint-1.5.0-hardware

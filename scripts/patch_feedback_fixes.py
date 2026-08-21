@@ -11,7 +11,6 @@ HOME_CPP = ROOT / "src/activities/home/HomeActivity.cpp"
 SLEEP_CPP = ROOT / "src/activities/boot_sleep/SleepActivity.cpp"
 LYRA_CAROUSEL_CPP = ROOT / "src/components/themes/lyra/LyraCarouselTheme.cpp"
 MAIN_CPP = ROOT / "src/main.cpp"
-HAL_DISPLAY_CPP = ROOT / "lib/hal/HalDisplay.cpp"
 CHAPTER_HTML_CPP = ROOT / "lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp"
 
 
@@ -72,26 +71,9 @@ if not has_marker(LYRA_CAROUSEL_CPP, "kFooterPercentRightInset"):
         '''      const int progressLabelW = renderer.getTextWidth(footerLabelFontId, progressLabel, EpdFontFamily::REGULAR);\n      const int progressLabelY = progressBarY + kFooterProgressBarHeight + kFooterPercentTopGap;\n      const int progressLabelX =\n          std::max(footerX, footerX + footerWidth - progressLabelW - kFooterPercentRightInset);\n      renderer.drawText(footerLabelFontId, progressLabelX, progressLabelY, progressLabel, true,\n                        EpdFontFamily::REGULAR);\n''',
     )
 
-# Restore live display-controller detection. Device-family detection (X3 vs X4)
-# happens earlier in HalGPIO via two I2C fingerprint passes. Once the right board
-# profile is selected, the display itself must be fingerprinted from the live
-# UC81xx bus before FreeInkDisplay::begin(). This is deliberately authoritative:
-# OEM NVS can be stale after a full-flash from another unit, while the physical
-# controller cannot lie. applyXteinkDisplayController() leaves the stock
-# SSD1677/UC8253 profile untouched when no UltraChip sibling is confirmed.
-if not has_marker(HAL_DISPLAY_CPP, "<XteinkDetect.h>"):
-    replace_once(
-        HAL_DISPLAY_CPP,
-        '''#include <BoardConfig.h>\n''',
-        '''#include <BoardConfig.h>\n#include <XteinkDetect.h>\n''',
-    )
-
-if not has_marker(HAL_DISPLAY_CPP, "Live display-bus fingerprint is the ground truth"):
-    replace_once(
-        HAL_DISPLAY_CPP,
-        '''  // Safe revision selection from factory calibration only. Unknown/missing data\n  // leaves the stock controller untouched and boot continues normally.\n  applyOemNvsDisplayController(isX3);\n\n  einkDisplay.begin();\n''',
-        '''  // Live display-bus fingerprint is the ground truth for panel revision.\n  // It promotes stock X4 SSD1677 -> UC8179/UC8279 or X3 UC8253 -> UC8279\n  // only after two-pass confirmation; otherwise the stock profile remains.\n  // Do not let OEM NVS override this decision: full-chip images can carry\n  // calibration from another unit, while the live controller is authoritative.\n  freeink::applyXteinkDisplayController();\n\n  einkDisplay.begin();\n''',
-    )
+# Display-controller autodetection now lives directly in lib/hal/HalDisplay.cpp.
+# Do not mutate display selection from a build-time feedback patch: the source
+# tree itself must show the same live-probe logic that ships in the firmware.
 
 # Emergency recovery intentionally reuses the normal SD firmware flasher so it
 # gets the exact same ESP image validation, partition selection and write path as

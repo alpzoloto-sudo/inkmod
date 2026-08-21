@@ -1,0 +1,36 @@
+name: Cleanup CrossPoint hardware port
+
+on:
+  push:
+    branches: [ "fix/x3-crosspoint-1.5.0-hardware" ]
+    paths: [ ".github/workflows/cleanup-crosspoint-hardware-port.yml" ]
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/x3-crosspoint-1.5.0-hardware
+          fetch-depth: 0
+      - name: Remove obsolete HalDisplay build-time patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/patch_feedback_fixes.py')
+          t = p.read_text(encoding='utf-8')
+          t = t.replace('HAL_DISPLAY_CPP = ROOT / "lib/hal/HalDisplay.cpp"\n', '')
+          start = t.index('# Restore live display-controller detection.')
+          end = t.index('# Emergency recovery intentionally reuses the normal SD firmware flasher')
+          t = t[:start] + t[end:]
+          p.write_text(t, encoding='utf-8')
+          PY
+      - name: Commit cleanup
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/patch_feedback_fixes.py
+          git commit -m "hardware: remove obsolete HalDisplay probe patch"
+          git push origin HEAD:fix/x3-crosspoint-1.5.0-hardware

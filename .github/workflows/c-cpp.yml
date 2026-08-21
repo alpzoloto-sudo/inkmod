@@ -34,3 +34,32 @@ jobs:
 
       - name: Build release firmware
         run: pio run -e release
+
+      - name: Build X3 display diagnostic firmware
+        if: github.event_name == 'pull_request' && github.event.pull_request.number == 14
+        run: pio run -e x3diag
+
+      - name: Prepare X3 diagnostic artifact
+        if: github.event_name == 'pull_request' && github.event.pull_request.number == 14
+        run: |
+          mkdir -p x3diag-artifact
+          cp .pio/build/x3diag/firmware-release.bin x3diag-artifact/inkMOD-X3-display-diagnostic.bin
+          sha256sum x3diag-artifact/*.bin > x3diag-artifact/SHA256SUMS.txt
+          cat > x3diag-artifact/README.txt <<'EOF'
+          inkMOD X3 display diagnostic
+
+          After flashing and booting with an SD card inserted, the firmware writes:
+            /x3-display-report.txt
+
+          It intentionally does not initialize the normal display/UI driver.
+          Remove the SD card after 10-15 seconds and send x3-display-report.txt back for analysis.
+          Restore a normal firmware afterwards.
+          EOF
+
+      - name: Upload X3 diagnostic artifact
+        if: github.event_name == 'pull_request' && github.event.pull_request.number == 14
+        uses: actions/upload-artifact@v4
+        with:
+          name: inkMOD-X3-display-diagnostic
+          path: x3diag-artifact/
+          if-no-files-found: error

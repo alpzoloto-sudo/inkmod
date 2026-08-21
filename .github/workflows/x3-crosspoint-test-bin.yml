@@ -1,0 +1,38 @@
+name: X3 CrossPoint hardware test BIN
+
+on:
+  push:
+    branches: [ "fix/x3-crosspoint-1.5.0-hardware" ]
+    paths: [ ".github/workflows/x3-crosspoint-test-bin.yml" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/x3-crosspoint-1.5.0-hardware
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -U platformio
+          pip install -r requirements.txt
+      - name: Validate metadata
+        run: python scripts/release_check.py
+      - name: Build release test firmware
+        run: pio run -e release
+      - name: Prepare BIN
+        run: |
+          cp .pio/build/release/firmware-release.bin inkMOD-1.1.5-X3-CrossPoint-1.5.0-test.bin
+          sha256sum inkMOD-1.1.5-X3-CrossPoint-1.5.0-test.bin > SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inkMOD-X3-CrossPoint-1.5.0-test
+          path: |
+            inkMOD-1.1.5-X3-CrossPoint-1.5.0-test.bin
+            SHA256SUMS.txt
+          if-no-files-found: error

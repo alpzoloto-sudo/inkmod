@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
+      issues: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,13 +28,23 @@ jobs:
         run: python scripts/release_check.py
       - name: Build production firmware
         run: pio run -e release
-      - name: Publish v1.1.5 asset
+      - name: Publish and verify v1.1.5 asset
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp .pio/build/release/firmware-release.bin firmware-release-v1.1.5.bin
-          sha256sum firmware-release-v1.1.5.bin | tee SHA256SUMS-v1.1.5.txt
+          LOCAL_SHA="$(sha256sum firmware-release-v1.1.5.bin | cut -d' ' -f1)"
           gh release upload v1.1.5 firmware-release-v1.1.5.bin --clobber
           rm -f verify.bin
           gh release download v1.1.5 -p firmware-release-v1.1.5.bin -O verify.bin
-          test "$(sha256sum firmware-release-v1.1.5.bin | cut -d' ' -f1)" = "$(sha256sum verify.bin | cut -d' ' -f1)"
+          PUBLIC_SHA="$(sha256sum verify.bin | cut -d' ' -f1)"
+          test "$LOCAL_SHA" = "$PUBLIC_SHA"
+          gh pr comment 13 --body "✅ Published and re-downloaded firmware-release-v1.1.5.bin verified. SHA-256: \`$PUBLIC_SHA\`"
+      - name: Remove one-shot workflow
+        if: success()
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/rebuild-v115-koreader.yml
+          git commit -m "ci: remove one-shot v1.1.5 rebuild workflow"
+          git push origin HEAD:main

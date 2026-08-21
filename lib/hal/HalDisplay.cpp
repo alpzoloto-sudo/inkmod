@@ -1,9 +1,9 @@
 #include <HalDisplay.h>
 #include <HalGPIO.h>
 #include <BoardConfig.h>
-#include <XteinkDetect.h>
 
 #include "HalSpiBus.h"
+#include "nvs.h"
 
 // Global HalDisplay instance
 HalDisplay display;
@@ -11,6 +11,85 @@ HalDisplay display;
 #define SD_SPI_MISO 7
 
 namespace {
+
+// Read the controller type written by the factory without touching the EPD bus.
+// App-only flashes at 0x10000 leave this NVS calibration partition intact. If the
+// key is missing/unknown (for example after a full erase), fail closed to the
+// profile's stock controller.
+bool applyOemNvsDisplayController(bool isX3) {
+  nvs_handle_t h;
+  if (nvs_open("hw_calib", NVS_READONLY, &h) != ESP_OK) {
+#ifdef ENABLE_SERIAL_LOG
+    if (Serial) Serial.printf("[%lu] [EPD] hw_calib missing; keep stock controller\n", millis());
+#endif
+    return false;
+  }
+
+  uint8_t screenType = 0;
+  const esp_err_t err = nvs_get_u8(h, "screenType", &screenType);
+  nvs_close(h);
+  if (err != ESP_OK) {
+#ifdef ENABLE_SERIAL_LOG
+    if (Serial) Serial.printf("[%lu] [EPD] screenType missing; keep stock controller\n", millis());
+#endif
+    return false;
+  }
+
+  // Factory encodings recovered from the Xteink hardware-selection code:
+  //   1 / 0x0B = UC8179 family (X4 only)
+  //   2 / 0x0C = UC8279 family (new X3/X4 production runs)
+  //   3         = original controller for the device family
+  // Multiple board/display revisions can therefore share one controller driver.
+  // We select the full X3 sibling profile for UC8279, not just its controller
+  // field, so every revision-specific profile setting stays coherent.
+  if (isX3) {
+    if (screenType == 2 || screenType == 0x0C) {
+      BoardConfig::selectDevice(BoardConfig::Board::XteinkX3Uc8279);
+#ifdef ENABLE_SERIAL_LOG
+      if (Serial) Serial.printf("[%lu] [EPD] X3 screenType=%u -> XteinkX3Uc8279 profile\n", millis(), screenType);
+#endif
+      return true;
+    }
+
+    // 1/0x0B identify the UC8179 family used by X4. Do not ever promote an X3
+    // to an X4 controller/profile from that value; an unknown/corrupted NVS key
+    // must leave the known-working X3 UC8253 profile intact.
+#ifdef ENABLE_SERIAL_LOG
+    if (Serial) {
+      if (screenType == 1 || screenType == 0x0B)
+        Serial.printf("[%lu] [EPD] X3 screenType=%u is not a known X3 mapping; keep UC8253\n", millis(), screenType);
+      else
+        Serial.printf("[%lu] [EPD] X3 screenType=%u -> stock UC8253 profile\n", millis(), screenType);
+    }
+#endif
+    return false;
+  }
+
+  if (screenType == 1 || screenType == 0x0B) {
+    BoardConfig::ACTIVE.displayController = BoardConfig::DisplayController::UC8179;
+    BoardConfig::ACTIVE.displayControllerVariant = 0x01;
+#ifdef ENABLE_SERIAL_LOG
+    if (Serial) Serial.printf("[%lu] [EPD] X4 factory screenType=%u -> UC8179\n", millis(), screenType);
+#endif
+    return true;
+  }
+
+  if (screenType == 2 || screenType == 0x0C) {
+    BoardConfig::ACTIVE.displayController = BoardConfig::DisplayController::UC8279;
+    // UC8279 X4 uses the 0x68 waveform set as its safe default when the exact
+    // LUT revision is not available without probing the live display bus.
+    BoardConfig::ACTIVE.displayControllerVariant = 0x68;
+#ifdef ENABLE_SERIAL_LOG
+    if (Serial) Serial.printf("[%lu] [EPD] X4 factory screenType=%u -> UC8279 (safe LUT 68)\n", millis(), screenType);
+#endif
+    return true;
+  }
+
+#ifdef ENABLE_SERIAL_LOG
+  if (Serial) Serial.printf("[%lu] [EPD] X4 factory screenType=%u -> stock SSD1677\n", millis(), screenType);
+#endif
+  return false;
+}
 
 // Official Xteink X4 6.2.4 production firmware identifies the production
 // panel as GDEQ0426T82 (QY 4.26). Re-apply the vendor booster soft-start
@@ -48,7 +127,7 @@ void HalDisplay::begin(bool seamless) {
   HalSpiBus::Lock spiLock;
 
   // Select the device family first. This only chooses the X3/X4 board profile;
-  // the physical display controller is detected immediately afterwards.
+  // no display-bus probing is performed.
   const bool isX3 = gpio.deviceIsX3();
   if (isX3) {
     einkDisplay.setDisplayX3();
@@ -58,16 +137,14 @@ void HalDisplay::begin(bool seamless) {
     BoardConfig::ACTIVE.displaySpiHz = 10000000;
   }
 
-  // The physical EPD bus is the source of truth for panel revision. This keeps
-  // the stock X4 SSD1677 / X3 UC8253 profile when no UltraChip sibling is
-  // confirmed, and promotes it to X4 UC8179/UC8279 or X3 UC8279 only after the
-  // SDK's two-pass live probe. OEM hw_calib/screenType is diagnostics-only.
-  freeink::applyXteinkDisplayController();
+  // Safe revision selection from factory calibration only. Unknown/missing data
+  // leaves the stock controller untouched and boot continues normally.
+  applyOemNvsDisplayController(isX3);
 
   einkDisplay.begin();
 
-  // The QY booster belongs to SSD1677 only. Never emit SSD commands after a
-  // live-probe-selected UC8179/UC8279 begin.
+  // The QY booster belongs to SSD1677 only. Never emit SSD commands after an
+  // NVS-selected UC8179/UC8279 begin.
   if (!isX3 && BoardConfig::ACTIVE.displayController == BoardConfig::DisplayController::SSD1677) {
     applyX4QyPanelCompatibilityProfile();
   }

@@ -34,3 +34,19 @@ jobs:
 
       - name: Build release firmware
         run: pio run -e release
+
+      - name: Prepare hotfix recovery files
+        if: github.event_name == 'pull_request' && github.event.pull_request.number == 12
+        run: |
+          mkdir -p hotfix-artifact
+          cp .pio/build/release/firmware-release.bin hotfix-artifact/firmware-release-v1.1.5-hotfix.bin
+          cp .pio/build/release/firmware-release.bin hotfix-artifact/inkmod-recovery.bin
+          sha256sum hotfix-artifact/*.bin | tee hotfix-artifact/SHA256SUMS.txt
+
+      - name: Upload hotfix recovery artifact
+        if: github.event_name == 'pull_request' && github.event.pull_request.number == 12
+        uses: actions/upload-artifact@v4
+        with:
+          name: inkMOD-1.1.5-hotfix-recovery
+          path: hotfix-artifact/
+          if-no-files-found: error

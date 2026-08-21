@@ -1,0 +1,36 @@
+name: Build KOReader wolfSSL test binary
+
+on:
+  push:
+    branches: [ "hotfix/1.1.5-koreader-wolfssl" ]
+    paths:
+      - ".github/workflows/build-koreader-hotfix-test.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: hotfix/1.1.5-koreader-wolfssl
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install PlatformIO and build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -U platformio
+          pip install -r requirements.txt
+      - name: Build release test
+        run: pio run -e release
+      - name: Prepare artifact
+        run: |
+          mkdir -p koreader-hotfix
+          cp .pio/build/release/firmware-release.bin koreader-hotfix/firmware-release-v1.1.5-koreader-hotfix.bin
+          sha256sum koreader-hotfix/*.bin > koreader-hotfix/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inkMOD-1.1.5-koreader-wolfssl-test
+          path: koreader-hotfix/
+          if-no-files-found: error

@@ -34,3 +34,10 @@ jobs:
 
       - name: Build release firmware
         run: pio run -e release
+
+      - name: Upload exact CrossInk X3 test binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: inkmod-x3-crossink-exact-bin
+          path: .pio/build/release/firmware.bin
+          if-no-files-found: error

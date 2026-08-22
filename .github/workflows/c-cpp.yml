@@ -34,3 +34,10 @@ jobs:
 
       - name: Build release firmware
         run: pio run -e release
+
+      - name: Upload X3 first Home HALF test binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: inkmod-x3-first-home-half-bin
+          path: .pio/build/release/firmware-release.bin
+          if-no-files-found: error

@@ -2,6 +2,7 @@
 #include <HalGPIO.h>
 #include <BoardConfig.h>
 
+#include "BootLog.h"
 #include "HalSpiBus.h"
 
 // Global HalDisplay instance
@@ -46,23 +47,29 @@ HalDisplay::~HalDisplay() {}
 void HalDisplay::begin(bool seamless) {
   HalSpiBus::Lock spiLock;
 
-  // Match CrossInk: device family and panel-controller selection already ran in
-  // HalGPIO::begin(), before SPI.begin() claimed the EPD pins. HalDisplay only
-  // switches the FreeInkDisplay facade to X3 geometry when needed.
+  // Device family AND panel controller were already resolved in
+  // HalGPIO::begin(), before SPI.begin() claimed the EPD pins (matching
+  // CrossInk's ordering - see the comment there). This only switches the
+  // FreeInkDisplay facade to X3 geometry when needed and sets the X4 SPI
+  // clock; no controller decision happens here anymore.
   const bool isX3 = gpio.deviceIsX3();
   if (isX3) {
     einkDisplay.setDisplayX3();
   } else {
-    // Keep inkMOD's proven X4/QY timing; controller choice itself was already
-    // resolved by the CrossInk-style pre-SPI detection path.
+    // X4 OEM 6.2.4 uses a 10 MHz display SPI clock. The E-Ink waveform itself
+    // dominates refresh time, so this adds signal margin with negligible UI cost.
     BoardConfig::ACTIVE.displaySpiHz = 10000000;
   }
 
-  einkDisplay.begin();
+  BootLog::stepf("EPD", "family=%s resolvedController=%d variant=0x%02X", isX3 ? "X3" : "X4",
+                  static_cast<int>(BoardConfig::ACTIVE.displayController), BoardConfig::ACTIVE.displayControllerVariant);
 
-  // inkMOD-specific compatibility profile for the original X4 SSD1677/QY panel.
-  // Never send these SSD1677 commands when CrossInk-style detection selected an
-  // UltraChip controller.
+  BootLog::step("EPD", "calling einkDisplay.begin() - panel init/reset/BUSY sequence starts here");
+  einkDisplay.begin();
+  BootLog::step("EPD", "einkDisplay.begin() returned OK");
+
+  // The QY booster belongs to SSD1677 only. Never emit SSD commands after a
+  // probe-selected UC8179/UC8279 begin.
   if (!isX3 && BoardConfig::ACTIVE.displayController == BoardConfig::DisplayController::SSD1677) {
     applyX4QyPanelCompatibilityProfile();
   }
@@ -74,7 +81,6 @@ void HalDisplay::begin(bool seamless) {
     einkDisplay.skipInitialResync();
     return;
   }
-
   // Request resync after specific wakeup events to ensure clean display state.
   const auto wakeupReason = gpio.getWakeupReason();
   if (wakeupReason == HalGPIO::WakeupReason::PowerButton || wakeupReason == HalGPIO::WakeupReason::AfterFlash ||

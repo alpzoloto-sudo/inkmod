@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "nvs.h"
+#include "BootLog.h"
 
 // Two independent capabilities live in this file:
 //   * FREEINK_XTEINK_C3 — the X3-vs-X4 I2C fingerprint on SDA=20 / SCL=0. Only
@@ -140,6 +141,7 @@ bool runDisplayProbePass(const EpdProbePins& p, uint8_t ver[5], uint8_t* flg, ui
   if (p.rst >= 0) {
     // Deep-sleep GPIO hold can survive wake and keep EPD RESET latched.
     // Release it before probing the physical display controller.
+    BootLog::stepf("EPD", "probe pass: releasing RST hold (pin %d), reset pulse rstLowMs=%u", p.rst, rstLowMs);
     gpio_hold_dis(static_cast<gpio_num_t>(p.rst));
 
     pinMode(p.rst, OUTPUT);
@@ -149,11 +151,15 @@ bool runDisplayProbePass(const EpdProbePins& p, uint8_t ver[5], uint8_t* flg, ui
     delay(rstLowMs);
     digitalWrite(p.rst, HIGH);
   }
+  BootLog::step("EPD", "probe pass: reset pulse done, settling 30ms");
   delay(30);
 
   uint8_t flgByte = 0;
+  BootLog::stepf("EPD", "probe pass: reading FLG (0x71) rstLowMs=%u", rstLowMs);
   epdCmdRead(p, UC81XX_CMD_FLG, &flgByte, 1);
+  BootLog::stepf("EPD", "probe pass: FLG=0x%02X, reading VER (0x70)", flgByte);
   epdCmdRead(p, UC81XX_CMD_VER, ver, 5);
+  BootLog::stepf("EPD", "probe pass done: VER=%02X %02X %02X %02X %02X", ver[0], ver[1], ver[2], ver[3], ver[4]);
   if (flg) *flg = flgByte;
   return matchUc81xx(ver, flgByte);
 }
@@ -181,10 +187,14 @@ void releaseDisplayPins(const EpdProbePins& p) {
 // two 50 ms resets on every boot and wake.
 DisplayControllerVerdict probeDisplayController(const EpdProbePins& p, uint8_t verBytes[5], uint8_t* flg,
                                                 bool escalateReset) {
+  BootLog::stepf("EPD", "probeDisplayController: pins sclk=%d mosi=%d cs=%d dc=%d rst=%d busy=%d escalate=%d", p.sclk,
+                  p.mosi, p.cs, p.dc, p.rst, p.busy, escalateReset ? 1 : 0);
   uint8_t ver1[5] = {0};
   uint8_t ver2[5] = {0};
   uint8_t flg1 = 0;
+  BootLog::step("EPD", "pass 1 (screening, 1ms reset) starting");
   bool pass1 = runDisplayProbePass(p, ver1, &flg1, /*rstLowMs=*/1);
+  BootLog::stepf("EPD", "pass 1 done: match=%d", pass1 ? 1 : 0);
   if (!pass1 && escalateReset) {
     // Escalation for boards whose UC sibling might only answer the vendor's
     // identification timing (RST low 50 ms): a failed short screening pass is
@@ -192,10 +202,14 @@ DisplayControllerVerdict probeDisplayController(const EpdProbePins& p, uint8_t v
     // X3-family boards (their boot budget tolerates it); the X4 family keeps
     // the cheap path — its UC8179 is bench-proven to answer the 1 ms pulse.
     delay(2);
+    BootLog::step("EPD", "pass 1 escalating to 50ms reset");
     pass1 = runDisplayProbePass(p, ver1, &flg1, /*rstLowMs=*/50);
+    BootLog::stepf("EPD", "pass 1 (escalated) done: match=%d", pass1 ? 1 : 0);
   }
   delay(2);
+  BootLog::step("EPD", "pass 2 (confirm) starting");
   const bool pass2 = runDisplayProbePass(p, ver2, nullptr, /*rstLowMs=*/pass1 ? 50 : 1);
+  BootLog::stepf("EPD", "pass 2 done: match=%d", pass2 ? 1 : 0);
 
   const bool verAgree = memcmp(ver1, ver2, 5) == 0;
   bool confirmed = pass1 && pass2 && verAgree;

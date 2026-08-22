@@ -32,5 +32,12 @@ jobs:
       - name: Build developer firmware
         run: pio run -e developer
 
+      - name: Upload X3 USB trace developer binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: inkmod-x3-usb-trace-developer-bin
+          path: .pio/build/developer/firmware.bin
+          if-no-files-found: error
+
       - name: Build release firmware
         run: pio run -e release

@@ -43,7 +43,13 @@ constexpr char HW_NAMESPACE[] = "cphw";
 constexpr char NVS_KEY_DEV_OVERRIDE[] = "dev_ovr";  // 0=auto, 1=x4, 2=x3
 constexpr char NVS_KEY_DEV_CACHED[] = "dev_det";    // 0=unknown, 1=x4, 2=x3
 constexpr char NVS_KEY_EPD_OVERRIDE[] = "epd_ovr";  // 0=auto, 1=uc8253, 2=uc8279
-constexpr char NVS_KEY_EPD_CACHED[] = "epd_det";    // 0=unknown, 1=uc8253, 2=uc8279
+// Renamed from "epd_det" -> "epd_det2": firmware built before the boot-order
+// fix below could probe with BoardConfig::ACTIVE still pointing at the X4
+// profile and cache a wrong UC8253/UC8279 verdict for X3 units. Bumping the
+// key name makes any such stale cache simply miss (readNvsDeviceValue()
+// returns Unknown) so the panel is re-probed correctly on the first boot of
+// this build, with no UART access or manual NVS erase required.
+constexpr char NVS_KEY_EPD_CACHED[] = "epd_det2";   // 0=unknown, 1=uc8253, 2=uc8279
 
 enum class NvsDeviceValue : uint8_t { Unknown = 0, X4 = 1, X3 = 2 };
 
@@ -141,10 +147,23 @@ void HalGPIO::begin() {
 
   // Ported from CrossInk: the EPD controller probes bit-bang the display pins,
   // therefore every display-controller decision must happen BEFORE SPI.begin().
+  //
+  // IMPORTANT: select the base board profile FIRST, before probing the panel.
+  // detectX3DisplayIsUc8279() (via detectXteinkDisplayController()) reads
+  // BoardConfig::ACTIVE.displayController to decide whether to escalate the
+  // probe's reset pulse to the 50ms vendor-ID timing that a real UC8279d needs
+  // to answer. If ACTIVE is still the X4 default (SSD1677) at probe time, that
+  // escalation never happens, a genuine UC8279d X3 panel fails the screening
+  // pass, and the firmware wrongly falls back to (and caches) UC8253 — which
+  // then hangs on the loading screen because the wrong command set is sent to
+  // the panel. Selecting the X3 profile first makes ACTIVE.displayController
+  // == UC8253 during the probe, enabling the escalation, matching the X4 path
+  // below and upstream's ordering.
+  BoardConfig::selectDevice(deviceIsX3() ? BoardConfig::Board::XteinkX3 : BoardConfig::Board::XteinkX4);
   const bool x3IsUc8279 = deviceIsX3() && detectX3DisplayIsUc8279();
-  BoardConfig::selectDevice(!deviceIsX3() ? BoardConfig::Board::XteinkX4
-                            : x3IsUc8279  ? BoardConfig::Board::XteinkX3Uc8279
-                                          : BoardConfig::Board::XteinkX3);
+  if (x3IsUc8279) {
+    BoardConfig::selectDevice(BoardConfig::Board::XteinkX3Uc8279);
+  }
 
   // Match CrossInk ordering exactly for X4: select the X4 profile first, let the
   // SDK resolve its controller while the EPD pins are still free, then attach SPI.

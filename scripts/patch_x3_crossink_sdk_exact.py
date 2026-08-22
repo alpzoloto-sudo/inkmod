@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+if "__file__" in globals():
+    ROOT = Path(__file__).resolve().parents[1]
+else:
+    ROOT = Path.cwd().resolve()
+
 XTEINK = ROOT / "freeink-sdk/libs/hardware/XteinkDetect/src/XteinkDetect.cpp"
 UC8253 = ROOT / "freeink-sdk/libs/display/FreeInkDisplay/src/driver/Uc8253X3Driver.cpp"
 

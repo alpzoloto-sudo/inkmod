@@ -120,18 +120,21 @@ inline void apply(const char* tagName, const std::string& classAttr,
 
   // Container geometry is inherited by the existing block-style stack.
   if (heading || subtitle) {
-    setLayout(style, CssTextAlign::Center, 0.0f, 1.0f, 0.5f, 0.0f, 0.0f);
+    // No external top/bottom margin: FB2/EPUB source markup usually already
+    // wraps these in a blank line, so an added margin here doubles the gap.
+    setLayout(style, CssTextAlign::Center, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
     setBoldNormal(style);
   } else if (quoteContainer) {
     setLayout(style, CssTextAlign::Justify, 0.0f, 0.6f, 0.6f, 1.2f, 1.2f);
-    setItalic(style);
+    // font-style intentionally left alone here: don't force italic over
+    // whatever the source markup/publisher stylesheet already set.
   } else if (poemContainer) {
     setLayout(style, CssTextAlign::Left, 0.0f, 0.6f, 0.6f, 1.2f, 1.2f);
   } else if (stanzaContainer) {
     setLayout(style, CssTextAlign::Left, 0.0f, 0.0f, 0.6f, 0.0f, 0.0f);
   }
 
-  // Ordinary prose: no inter-paragraph holes, 1.5em red line, justified.
+  // Ordinary prose: no inter-paragraph holes, 1.2em red line, justified.
   // Structural book paragraphs override this below.
   if (tag != "p") return;
 
@@ -154,13 +157,18 @@ inline void apply(const char* tagName, const std::string& classAttr,
 
   const bool verseLine = has("v") || has("verse") || has("line");
   if (verseLine || inPoem) {
-    setLayout(style, CssTextAlign::Left, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+    // Hanging indent: the line's own start sits at the left edge (textIndent
+    // pulls it back by the same amount marginLeft pushed the block in), but
+    // if the line is long enough to wrap, the wrapped continuation lands
+    // indented under marginLeft instead of collapsing back to the margin.
+    setLayout(style, CssTextAlign::Left, -1.5f, 0.0f, 0.0f, 1.5f, 0.0f);
     return;
   }
 
   if (inQuote) {
-    setLayout(style, CssTextAlign::Justify, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f);
-    setItalic(style);
+    setLayout(style, CssTextAlign::Justify, 1.2f, 0.0f, 0.0f, 0.0f, 0.0f);
+    // font-style intentionally left alone here too, same reasoning as the
+    // quoteContainer case above.
     return;
   }
 
@@ -175,7 +183,7 @@ inline void apply(const char* tagName, const std::string& classAttr,
     return;
   }
 
-  setLayout(style, CssTextAlign::Justify, 1.5f, 0.0f, 0.0f, 0.0f, 0.0f);
+  setLayout(style, CssTextAlign::Justify, 1.2f, 0.0f, 0.0f, 0.0f, 0.0f);
 }
 
 }  // namespace inkmod_book_style

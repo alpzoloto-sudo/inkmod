@@ -4,6 +4,8 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+#include "BootLog.h"
+
 namespace freeink {
 
 // ── ISR-driven waveform-completion notification ──────────────────────────────
@@ -147,6 +149,7 @@ void EpdBus::waitBusy(BusyPolarity p, const char* tag) {
   bool longWait = false;
   bool hookFired = false;
   bool x3SawLow = false;
+  BootLog::stepf("EPD", "waitBusy start: %s (polarity=%d)", tag ? tag : "?", static_cast<int>(p));
 
   if (p == BusyPolarity::ActiveHigh) {
     while (digitalRead(_pins.busy) == HIGH) {
@@ -206,11 +209,20 @@ void EpdBus::waitBusy(BusyPolarity p, const char* tag) {
   }
 
   if (hookFired && _busyWaitEndHook != nullptr) _busyWaitEndHook();
-  if (p == BusyPolarity::X3TwoPhase && !x3SawLow) return;
+  const unsigned long elapsed = millis() - start;
+  if (p == BusyPolarity::X3TwoPhase && !x3SawLow) {
+    BootLog::stepf("EPD", "waitBusy end: %s never saw phase-2 LOW (%lums, X3TwoPhase)", tag ? tag : "?", elapsed);
+    return;
+  }
+
+  // >=29000ms means this call almost certainly hit the internal 30s hard cap
+  // instead of the panel genuinely finishing - i.e. the panel never
+  // acknowledged BUSY the way this driver/controller pairing expects.
+  BootLog::stepf("EPD", "waitBusy end: %s (%lums)%s", tag ? tag : "?", elapsed, elapsed >= 29000 ? " *** LIKELY TIMEOUT ***" : "");
 
 #ifdef ENABLE_SERIAL_LOG
   if (tag && Serial) {
-    Serial.printf("[%lu]   Wait complete: %s (%lu ms)\n", millis(), tag, millis() - start);
+    Serial.printf("[%lu]   Wait complete: %s (%lu ms)\n", millis(), tag, elapsed);
   }
 #else
   (void)tag;
@@ -248,10 +260,12 @@ void EpdBus::waitRefreshComplete(const char* tag) {
 
   const bool hook = (_busyWaitBeginHook != nullptr);
   if (hook) _busyWaitBeginHook();
-  xSemaphoreTake(s_epdRefreshDone, pdMS_TO_TICKS(30000));
+  const bool gotSemaphore = xSemaphoreTake(s_epdRefreshDone, pdMS_TO_TICKS(30000)) == pdTRUE;
   if (hook && _busyWaitEndHook != nullptr) _busyWaitEndHook();
 
   detachInterrupt(digitalPinToInterrupt(_pins.busy));
+  BootLog::stepf("EPD", "waitRefreshComplete: %s (%lums)%s", tag ? tag : "?", millis() - start,
+                  gotSemaphore ? "" : " *** ISR TIMEOUT - BUSY edge never fired ***");
 #ifdef ENABLE_SERIAL_LOG
   if (tag && Serial) {
     Serial.printf("[%lu]   Wait complete: %s (%lu ms)\n", millis(), tag, millis() - start);

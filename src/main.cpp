@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <BootLog.h>
 #include <Epub.h>
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
@@ -83,6 +84,9 @@ inline esp_sleep_wakeup_cause_t esp_sleep_get_wakeup_cause() { return ESP_SLEEP_
 #include "activities/reader/StatsBackup.h"
 #include "activities/settings/KOReaderSettingsActivity.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
+#ifndef SIMULATOR
+#include "network/FirmwareFlasher.h"
+#endif
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "UiTextSize.h"
@@ -323,6 +327,43 @@ void silentRestartToReader() {
   GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
   delay(50);
   ESP.restart();
+}
+
+static constexpr char EMERGENCY_FIRMWARE_PATH[] = "/inkmod-recovery.bin";
+static constexpr char EMERGENCY_FIRMWARE_APPLIED_PATH[] = "/inkmod-recovery.applied.bin";
+static constexpr char EMERGENCY_FIRMWARE_FAILED_PATH[] = "/inkmod-recovery.failed.bin";
+
+static void tryEmergencyFirmwareUpdate() {
+#ifndef SIMULATOR
+  if (!Storage.exists(EMERGENCY_FIRMWARE_PATH)) {
+    return;
+  }
+
+  LOG_INF("FW", "Emergency SD firmware detected: %s", EMERGENCY_FIRMWARE_PATH);
+  const auto result = firmware_flash::flashFromSdPath(EMERGENCY_FIRMWARE_PATH, nullptr, nullptr);
+  if (result != firmware_flash::Result::OK) {
+    LOG_ERR("FW", "Emergency SD firmware failed: %s", firmware_flash::resultName(result));
+    Storage.remove(EMERGENCY_FIRMWARE_FAILED_PATH);
+    if (!Storage.rename(EMERGENCY_FIRMWARE_PATH, EMERGENCY_FIRMWARE_FAILED_PATH)) {
+      Storage.remove(EMERGENCY_FIRMWARE_PATH);
+    }
+    return;
+  }
+
+  Storage.remove(EMERGENCY_FIRMWARE_APPLIED_PATH);
+  bool disarmed = Storage.rename(EMERGENCY_FIRMWARE_PATH, EMERGENCY_FIRMWARE_APPLIED_PATH);
+  if (!disarmed) {
+    disarmed = Storage.remove(EMERGENCY_FIRMWARE_PATH);
+  }
+  if (!disarmed) {
+    LOG_ERR("FW", "Emergency firmware applied but trigger could not be disarmed; refusing auto-restart");
+    return;
+  }
+
+  LOG_INF("FW", "Emergency SD firmware applied; restarting");
+  delay(500);
+  ESP.restart();
+#endif
 }
 
 void waitForPowerRelease() {
@@ -572,15 +613,18 @@ void enterDeepSleep(bool fromTimeout) {
 }
 
 void setupDisplayAndFonts(bool seamless = false) {
+  BootLog::step("MAIN", "setupDisplayAndFonts: calling display.begin()");
 #ifdef SIMULATOR
   (void)seamless;
   display.begin();
 #else
   display.begin(seamless);
 #endif
+  BootLog::step("MAIN", "setupDisplayAndFonts: display.begin() returned");
   renderer.begin();
   activityManager.begin();
   LOG_DBG("MAIN", "Display initialized");
+  BootLog::step("MAIN", "renderer/activityManager begin() returned");
 
   // Initialize font decompressor for compressed reader fonts
   if (!fontDecompressor.init()) {
@@ -792,6 +836,14 @@ void setup() {
     return;
   }
 
+  // Headless emergency recovery: root-of-SD /inkmod-recovery.bin is validated
+  // and flashed before display/UI initialization.
+  tryEmergencyFirmwareUpdate();
+
+  BootLog::begin();
+  BootLog::stepf("MAIN", "SD mounted; device=%s usb=%d silentReboot=%d", gpio.deviceIsX3() ? "X3" : "X4",
+                  gpio.isUsbConnected() ? 1 : 0, isSilentReboot ? 1 : 0);
+
   HalSystem::checkPanic();
 
   SETTINGS.loadFromFile();
@@ -864,7 +916,9 @@ void setup() {
                             : !APP_STATE.showBootScreen ? BootResume::QuickResume
                                                         : BootResume::Splash;
 
+  BootLog::step("MAIN", "entering setupDisplayAndFonts() from setup()");
   setupDisplayAndFonts(resume != BootResume::Splash);
+  BootLog::step("MAIN", "back from setupDisplayAndFonts() in setup() - display/fonts OK");
 
   switch (resume) {
     case BootResume::Silent:

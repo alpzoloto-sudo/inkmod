@@ -8,6 +8,7 @@ else:
 
 XTEINK = ROOT / "freeink-sdk/libs/hardware/XteinkDetect/src/XteinkDetect.cpp"
 UC8253 = ROOT / "freeink-sdk/libs/display/FreeInkDisplay/src/driver/Uc8253X3Driver.cpp"
+HAL_GPIO = ROOT / "lib/hal/HalGPIO.cpp"
 
 
 def replace_once(path: Path, old: str, new: str) -> None:
@@ -41,4 +42,14 @@ replace_once(
     "  _initialFullSyncsRemaining = 1;\n",
 )
 
-print("CrossInk exact X3 SDK behavior applied")
+# Invalidate only inkMOD's old X3 panel-controller cache. Earlier experimental
+# builds could have stored a wrong UC8253/UC8279 result in cphw/epd_det; CrossInk
+# trusts a valid cache and would therefore never execute the corrected live probe.
+# A new key forces one fresh hardware probe, then caches that result normally.
+replace_once(
+    HAL_GPIO,
+    'constexpr char NVS_KEY_EPD_CACHED[] = "epd_det";    // 0=unknown, 1=uc8253, 2=uc8279\n',
+    'constexpr char NVS_KEY_EPD_CACHED[] = "epd_det2";   // v2: fresh CrossInk probe cache\n',
+)
+
+print("CrossInk exact X3 SDK behavior applied with fresh EPD cache")

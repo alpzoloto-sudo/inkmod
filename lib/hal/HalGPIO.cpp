@@ -43,7 +43,9 @@ constexpr char HW_NAMESPACE[] = "cphw";
 constexpr char NVS_KEY_DEV_OVERRIDE[] = "dev_ovr";  // 0=auto, 1=x4, 2=x3
 constexpr char NVS_KEY_DEV_CACHED[] = "dev_det";    // 0=unknown, 1=x4, 2=x3
 constexpr char NVS_KEY_EPD_OVERRIDE[] = "epd_ovr";  // 0=auto, 1=uc8253, 2=uc8279
-constexpr char NVS_KEY_EPD_CACHED[] = "epd_det";    // 0=unknown, 1=uc8253, 2=uc8279
+// Version the X3 panel cache so units that ran the earlier experimental probe
+// do one clean re-detection instead of trusting a possibly poisoned epd_det.
+constexpr char NVS_KEY_EPD_CACHED[] = "epd_det2";   // 0=unknown, 1=uc8253, 2=uc8279
 
 enum class NvsDeviceValue : uint8_t { Unknown = 0, X4 = 1, X3 = 2 };
 

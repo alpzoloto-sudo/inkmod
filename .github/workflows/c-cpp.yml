@@ -34,3 +34,10 @@ jobs:
 
       - name: Build release firmware
         run: pio run -e release
+
+      - name: Upload X3 test release binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: inkmod-x3-test-bin
+          path: .pio/build/release/firmware.bin
+          if-no-files-found: error

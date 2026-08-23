@@ -6,6 +6,7 @@
 
 #include "InkMODSettings.h"
 #include "MappedInputManager.h"
+#include "SdCardFontSystem.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -81,7 +82,36 @@ void FontSelectionActivity::onEnter() {
   requestUpdate();
 }
 
-void FontSelectionActivity::onExit() { Activity::onExit(); }
+void FontSelectionActivity::onExit() {
+  // previewFontId() may have swapped the real active SD reader font out for
+  // a preview of a different family while browsing - SdCardFontManager only
+  // keeps one family resident at a time, so restore the actual saved
+  // selection now rather than leaving whatever was last previewed active.
+  sdFontSystem.ensureLoaded(renderer);
+  Activity::onExit();
+}
+
+int FontSelectionActivity::previewFontId() {
+  if (selectedIndex_ == previewedIndex_) return previewFontId_;
+  previewedIndex_ = selectedIndex_;
+
+  if (fonts_.empty()) {
+    previewFontId_ = 0;
+    return previewFontId_;
+  }
+
+  const auto& font = fonts_[selectedIndex_];
+  if (font.isBuiltin) {
+    previewFontId_ = TEST_FONTS_12_FONT_ID;
+  } else {
+    // Fixed preview size rather than the user's configured reading size:
+    // this screen exists to compare typefaces, not to show the exact final
+    // reading layout, and a fixed size keeps line count/wrapping consistent
+    // while scrolling through very differently-sized font families.
+    previewFontId_ = sdFontSystem.loadPreviewFamily(font.name, renderer, /*targetPointSize=*/14);
+  }
+  return previewFontId_;
+}
 
 void FontSelectionActivity::loop() {
   if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
@@ -159,7 +189,46 @@ void FontSelectionActivity::render(RenderLock&&) {
   GUI.drawHeader(renderer, Rect{safeArea.x, metrics.topPadding, safeArea.width, metrics.headerHeight},
                  tr(STR_FONT_FAMILY));
 
-  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+  // Sample sentence in the current interface language - each is a standard
+  // pangram-style sentence covering that language's full alphabet, so any
+  // missing/unsupported glyphs in a candidate font show up immediately.
+  const char* previewText = nullptr;
+  switch (I18N.getLanguage()) {
+    case Language::RU:
+      previewText = "Съешь же ещё этих мягких французских булок, да выпей чаю.";
+      break;
+    case Language::UK:
+      previewText = "Жебракують філософи при ґанку церкви в Гадячі, ще й шатро їхнє знаємо.";
+      break;
+    case Language::EN:
+    default:
+      previewText = "The quick brown fox jumps over the lazy dog.";
+      break;
+  }
+
+  // Fixed-height preview band: always reserves the same two-line space
+  // regardless of which font/text is shown, so switching the highlighted
+  // font never shifts the list below it - unlike shrinking/growing the
+  // preview to fit its content, which would otherwise shove every row down
+  // by a different amount on every keypress.
+  const int previewFontId = this->previewFontId();
+  const int previewLineHeight = renderer.getLineHeight(previewFontId);
+  const int previewTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+  const int previewPadding = 6;
+  const int previewHeight = previewLineHeight * 2 + previewPadding * 2;
+
+  renderer.fillRect(safeArea.x, previewTop, safeArea.width, previewHeight, false);
+  const auto previewLines =
+      renderer.wrappedText(previewFontId, previewText, safeArea.width - 2 * previewPadding, 2, EpdFontFamily::REGULAR);
+  int previewY = previewTop + previewPadding;
+  for (const auto& line : previewLines) {
+    renderer.drawText(previewFontId, safeArea.x + previewPadding, previewY, line.c_str());
+    previewY += previewLineHeight;
+  }
+  renderer.drawLine(safeArea.x, previewTop + previewHeight, safeArea.x + safeArea.width, previewTop + previewHeight,
+                    true);
+
+  const int contentTop = previewTop + previewHeight + metrics.verticalSpacing;
   const int contentHeight = safeArea.y + safeArea.height - contentTop - metrics.verticalSpacing;
 
   // Determine which font index is currently active (to mark as "Selected").

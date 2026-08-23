@@ -112,6 +112,19 @@ int SdCardFontSystem::resolveFontId(const char* familyName, uint8_t /*fontSizeEn
   return manager_.getFontId(familyName);
 }
 
+int SdCardFontSystem::loadPreviewFamily(const std::string& familyName, GfxRenderer& renderer,
+                                        const uint8_t targetPointSize) {
+  refreshIfDirty();
+  const auto* family = registry_.findFamily(familyName);
+  if (!family) return 0;
+  // sizeStep only matters when a family offers multiple files per size
+  // (SETTINGS.fontSize picks among them for the real reader font) - for a
+  // preview at one fixed size, 0 just takes the closest match to
+  // targetPointSize with no further preference.
+  if (!manager_.loadFamily(*family, renderer, targetPointSize, /*sizeStep=*/0)) return 0;
+  return manager_.getFontId(familyName);
+}
+
 bool SdCardFontSystem::changeReaderFontSize(const bool larger) {
   refreshIfDirty();
 

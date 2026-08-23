@@ -30,6 +30,16 @@ class SdCardFontSystem {
   /// Returns 0 if not found. Used by InkMODSettings::getReaderFontId().
   int resolveFontId(const char* familyName, uint8_t fontSizeEnum) const;
 
+  /// Load an arbitrary family at a fixed point size for a one-off preview
+  /// (e.g. the font picker), independent of the user's saved selection.
+  /// Returns the resolved font ID, or 0 if the family isn't found or fails
+  /// to load. SdCardFontManager only ever keeps one family resident at a
+  /// time, so this transparently replaces whatever was loaded before it -
+  /// including the real active reader font. Callers MUST call
+  /// ensureLoaded() again before returning to the reader / relying on the
+  /// real active font, since this does not restore it automatically.
+  int loadPreviewFamily(const std::string& familyName, GfxRenderer& renderer, uint8_t targetPointSize);
+
   /// Change the reader font size using the active SD family when one is selected.
   bool changeReaderFontSize(bool larger);
 

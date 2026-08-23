@@ -321,7 +321,13 @@ void ActivityManager::releaseCurrentActivityHeavyResources() {
   // activity keeps holding its memory until the ActivityManager loop
   // processes that queued action later, by which point the caller's own
   // heavy work has often already run.
+  //
+  // Takes the RenderLock itself: this is called from contexts (e.g. the main
+  // loop, before pushActivity()) that don't already hold one, unlike
+  // pushActivity()'s own internal call to the same override, which runs
+  // inside a lock the caller there already holds.
   if (currentActivity) {
+    RenderLock lock;
     currentActivity->releaseHeavyResourcesForBackgroundActivity();
   }
 }

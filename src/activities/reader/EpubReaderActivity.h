@@ -231,9 +231,14 @@ class EpubReaderActivity final : public Activity {
   // handleMenuAction()) - free the heavy per-chapter Section now rather than
   // leaving it resident for the whole time a pushed activity runs on top.
   // It gets rebuilt normally from currentSpineIndex/nextPageNumber on return.
+  //
+  // Does NOT take a RenderLock itself: every caller already holds one (see
+  // ActivityManager::pushActivity()'s processing, and
+  // ActivityManager::releaseCurrentActivityHeavyResources()) - renderingMutex
+  // is a plain FreeRTOS mutex, not recursive, so taking a second one here
+  // deadlocks the calling task against itself.
   void releaseHeavyResourcesForBackgroundActivity() override {
     if (!section) return;
-    RenderLock lock(*this);
     nextPageNumber = section->currentPage;
     section.reset();
   }

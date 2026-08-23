@@ -110,6 +110,17 @@ class Fb2 {
   static bool getLogicalChapterBounds(const std::string& packageCachePath, int chapterIndex, int& startIndex,
                                       int& endIndex);
 
+  // Given the path to a converted package (e.g. ".../package.epub"),
+  // returns the real original .fb2/.zip location recorded in
+  // ORIGINAL_PATH_MARKER_FILE alongside it, or packagePath unchanged if
+  // that marker doesn't exist (i.e. this is a real EPUB, not an FB2
+  // conversion, or the marker is missing/corrupt). Callers that need the
+  // user's actual book file - the file browser's "show this book" action,
+  // KOReader document-hash calculation - must resolve through this first:
+  // the package path is an internal cache artifact, not something another
+  // device or a real folder listing would ever recognize as the book.
+  static std::string resolveOriginalPath(const std::string& packagePath);
+
   // The marker file's name, relative to a package's cache dir. Its presence
   // is what tells Epub::readItemContentsToStream() this package's chapters
   // need to be rendered through renderChapterOnDemand() instead of read as

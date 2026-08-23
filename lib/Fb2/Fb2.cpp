@@ -169,7 +169,7 @@ void fb2ZipScanTask(void* arg) {
 }
 
 
-constexpr uint8_t PACKAGE_VERSION = 14;  // 24 KiB virtual text chunks; invalidates older package indexes
+constexpr uint8_t PACKAGE_VERSION = 16;  // dedicated first cover page; invalidates older package indexes
 // A single FB2 <section> with more inline images than this gets split into
 // several virtual chapters while its SD-card index is written, so a chapter
 // that's actually opened never needs to extract more than this many images
@@ -2149,6 +2149,16 @@ bool Fb2::loadApproxChapterSizes(const std::string& packageCachePath, std::deque
 
 
 // static
+std::string Fb2::resolveOriginalPath(const std::string& packagePath) {
+  const size_t lastSlash = packagePath.find_last_of('/');
+  if (lastSlash == std::string::npos) return packagePath;
+  const std::string packageDir = packagePath.substr(0, lastSlash);
+  char buf[600] = {};
+  const size_t len = Storage.readFileToBuffer((packageDir + ORIGINAL_PATH_MARKER_FILE).c_str(), buf, sizeof(buf));
+  if (len == 0 || len >= sizeof(buf)) return packagePath;
+  return std::string(buf, len);
+}
+
 bool Fb2::getLogicalChapterBounds(const std::string& packageCachePath, int chapterIndex, int& startIndex,
                                   int& endIndex) {
   startIndex = chapterIndex;
@@ -2395,6 +2405,20 @@ bool Fb2::renderChapterOnDemand(const std::string& packageCachePath, int chapter
   writeAnchorNameDirect(out, anchor);
   writeBytes(out, "\">");
 
+  Fb2SectionIndexEntry section;  // only innerStartOffset is read by renderSection()
+  section.innerStartOffset = innerStartOffset;
+  section.level = level;
+  Fb2Parser parser;
+  StreamSink sink(out, packageCachePath + IMAGES_INDEX_FILE, buildLinkResolver(packageCachePath));
+
+  // FB2 stores coverpage in <description>, outside the body. Emit it as the
+  // very first visual content, matching normal EPUB opening behaviour. If a
+  // real cover was emitted, the private marker below gives it a dedicated
+  // first page before generated title/annotation/body content.
+  if (chapterIndex == 0 && parser.renderCoverForFirstSection(reader, section, sink)) {
+    writeBytes(out, "<div class=\"inkmod-fb2-cover-page-break\"></div>");
+  }
+
   if (!title.empty()) {
     const int heading = std::min(std::max(static_cast<int>(level) + 1, 1), 6);
     writeHeadingTag(out, heading, false);
@@ -2443,11 +2467,6 @@ bool Fb2::renderChapterOnDemand(const std::string& packageCachePath, int chapter
     }
   }
 
-  Fb2SectionIndexEntry section;  // only innerStartOffset is read by renderSection()
-  section.innerStartOffset = innerStartOffset;
-  section.level = level;
-  Fb2Parser parser;
-  StreamSink sink(out, packageCachePath + IMAGES_INDEX_FILE, buildLinkResolver(packageCachePath));
   RangeFilterSink imageRangeSink(sink, imageRangeStart, imageRangeEnd);
   TextRangeFilterSink textRangeSink(imageRangeSink, textRangeStart, textRangeEnd);
   const bool renderOk = parser.renderSection(reader, section, textRangeSink, cancellationToken);

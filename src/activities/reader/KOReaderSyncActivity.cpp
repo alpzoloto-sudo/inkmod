@@ -1,5 +1,6 @@
 #include "KOReaderSyncActivity.h"
 
+#include "BootLog.h"
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
@@ -14,6 +15,7 @@
 #include "InkMODSettings.h"
 #include "Epub/Section.h"
 #include "EpubReaderUtils.h"
+#include "Fb2.h"
 #include "KOReaderCredentialStore.h"
 #include "KOReaderDocumentId.h"
 #include "MappedInputManager.h"
@@ -65,16 +67,19 @@ void wifiOff() {
 
 void KOReaderSyncActivity::ensureEpubLoaded() {
   if (!epub) {
+    BootLog::step("SYNC", "ensureEpubLoaded: epub is null, loading");
     LOG_DBG("KOSync", "Loading epub for progress mapping (heap: %u)", (unsigned)ESP.getFreeHeap());
     epub = std::make_shared<Epub>(epubPath, "/.inkmod");
     epub->setupCacheDir();
     // Load metadata only (no CSS needed for progress mapping, don't rebuild if cache is missing).
     if (!epub->load(false, true)) {
       LOG_ERR("KOSync", "Failed to load epub for progress mapping");
+      BootLog::step("SYNC", "ensureEpubLoaded: epub->load() FAILED");
       epub.reset();
       return;
     }
     LOG_DBG("KOSync", "Epub loaded (heap: %u)", (unsigned)ESP.getFreeHeap());
+    BootLog::step("SYNC", "ensureEpubLoaded: epub->load() done");
   }
 }
 
@@ -102,6 +107,7 @@ void KOReaderSyncActivity::saveProgressAndReturn(const InkMODPosition& position)
 void KOReaderSyncActivity::returnToReader() { activityManager.goToReader(epubPath); }
 
 void KOReaderSyncActivity::onWifiSelectionComplete(const bool success) {
+  BootLog::stepf("SYNC", "onWifiSelectionComplete(success=%d)", success ? 1 : 0);
   if (!success) {
     LOG_DBG("KOSync", "WiFi connection failed, exiting");
     returnToReader();
@@ -118,7 +124,9 @@ void KOReaderSyncActivity::onWifiSelectionComplete(const bool success) {
   requestUpdate(true);
 
   // Sync time with NTP before making API requests
+  BootLog::step("SYNC", "calling syncTimeWithNTP (bounded, max 5s)");
   syncTimeWithNTP();
+  BootLog::step("SYNC", "syncTimeWithNTP returned");
 
   {
     RenderLock lock(*this);
@@ -126,16 +134,21 @@ void KOReaderSyncActivity::onWifiSelectionComplete(const bool success) {
   }
   requestUpdate(true);
 
+  BootLog::step("SYNC", "calling performSync()");
   performSync();
+  BootLog::step("SYNC", "performSync() returned");
 }
 
 void KOReaderSyncActivity::performSync() {
   // Calculate document hash based on user's preferred method
+  BootLog::step("SYNC", "performSync: calculating document hash");
+  const std::string hashSourcePath = Fb2::resolveOriginalPath(epubPath);
   if (KOREADER_STORE.getMatchMethod() == DocumentMatchMethod::FILENAME) {
-    documentHash = KOReaderDocumentId::calculateFromFilename(epubPath);
+    documentHash = KOReaderDocumentId::calculateFromFilename(hashSourcePath);
   } else {
-    documentHash = KOReaderDocumentId::calculate(epubPath);
+    documentHash = KOReaderDocumentId::calculate(hashSourcePath);
   }
+  BootLog::step("SYNC", "performSync: document hash done");
   if (documentHash.empty()) {
     {
       RenderLock lock(*this);
@@ -165,7 +178,9 @@ void KOReaderSyncActivity::performSync() {
   }
 
   // Fetch remote progress
+  BootLog::step("SYNC", "performSync: calling KOReaderSyncClient::getProgress() - network call, bounded ~15s per attempt");
   const auto result = KOReaderSyncClient::getProgress(documentHash, remoteProgress);
+  BootLog::stepf("SYNC", "performSync: getProgress() returned result=%d", static_cast<int>(result));
 
   if (result == KOReaderSyncClient::NOT_FOUND) {
     // No remote progress - offer to upload
@@ -320,11 +335,13 @@ void KOReaderSyncActivity::performUpload() {
 }
 
 void KOReaderSyncActivity::onEnter() {
+  BootLog::step("SYNC", "KOReaderSyncActivity::onEnter() start");
   Activity::onEnter();
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
 
   // Check for credentials first
   if (!KOREADER_STORE.hasCredentials()) {
+    BootLog::step("SYNC", "onEnter: no credentials, showing NO_CREDENTIALS");
     state = NO_CREDENTIALS;
     requestUpdate();
     return;
@@ -337,14 +354,18 @@ void KOReaderSyncActivity::onEnter() {
   // Check if already connected (e.g. from settings page auth)
   if (WiFi.status() == WL_CONNECTED) {
     LOG_DBG("KOSync", "Already connected to WiFi");
+    BootLog::step("SYNC", "onEnter: already WL_CONNECTED, calling onWifiSelectionComplete(true)");
     onWifiSelectionComplete(true);
+    BootLog::step("SYNC", "onEnter: onWifiSelectionComplete(true) returned");
     return;
   }
 
   // Launch WiFi selection subactivity
   LOG_DBG("KOSync", "Launching WifiSelectionActivity...");
+  BootLog::step("SYNC", "onEnter: not connected, pushing WifiSelectionActivity");
   startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
                          [this](const ActivityResult& result) { onWifiSelectionComplete(!result.isCancelled); });
+  BootLog::step("SYNC", "onEnter: startActivityForResult(WifiSelectionActivity) queued, onEnter returning");
 }
 
 void KOReaderSyncActivity::onExit() {
@@ -525,10 +546,11 @@ void KOReaderSyncActivity::loop() {
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
       // Calculate hash if not done yet
       if (documentHash.empty()) {
+        const std::string hashSourcePath = Fb2::resolveOriginalPath(epubPath);
         if (KOREADER_STORE.getMatchMethod() == DocumentMatchMethod::FILENAME) {
-          documentHash = KOReaderDocumentId::calculateFromFilename(epubPath);
+          documentHash = KOReaderDocumentId::calculateFromFilename(hashSourcePath);
         } else {
-          documentHash = KOReaderDocumentId::calculate(epubPath);
+          documentHash = KOReaderDocumentId::calculate(hashSourcePath);
         }
       }
       performUpload();

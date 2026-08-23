@@ -378,6 +378,17 @@ bool isGlobalPowerButtonAction(const InkMODSettings::SHORT_PWRBTN action) {
   return isPowerButtonActionAvailableOutsideReader(action);
 }
 
+// UNUSED as of the SYNC_PROGRESS removal from the power-button action lists
+// (see SettingsList.h and the SYNC_PROGRESS case in
+// handleGlobalPowerButtonAction() below) - kept only in case a
+// reader-independent sync entry point is worth revisiting later. Do not wire
+// this back up to a button without also re-solving why it kept hanging: it
+// went through peak-memory OOM, then a RenderLock deadlock, then a
+// render-task SD-card race, each fixed in turn and each still followed by a
+// hang on real hardware. The safe, working equivalent is
+// EpubReaderMenuActivity::MenuAction::SYNC, reached only from inside the
+// reader, which reuses the already-loaded Epub instead of loading a second
+// one and never leaves the reader running in the background while it does.
 bool startGlobalSyncProgress() {
   // If a reader is currently open (e.g. this was triggered by a long-press
   // while reading, not from the in-reader menu), its decoded Section is
@@ -504,10 +515,17 @@ bool handleGlobalPowerButtonAction(const InkMODSettings::SHORT_PWRBTN action) {
       return true;
     }
     case InkMODSettings::SHORT_PWRBTN::SYNC_PROGRESS:
-      if (activityManager.canSnapshotForSleepOverlay()) {
-        return false;
-      }
-      return startGlobalSyncProgress();
+      // No longer assignable from Settings (see SettingsList.h) after
+      // repeated hangs on this path despite several attempted fixes
+      // (peak-memory OOM, then a RenderLock deadlock, then a render-task
+      // race - all specific to reaching sync from *outside* the reader).
+      // A pre-existing saved setting could still carry this raw value, so
+      // handle it explicitly rather than relying on it simply not being
+      // selectable going forward: do nothing, same as IGNORE. The identical
+      // sync action remains available and reliable from the in-reader menu
+      // (EpubReaderMenuActivity::MenuAction::SYNC), which reuses the
+      // already-loaded Epub instead of loading a second one.
+      return false;
     case InkMODSettings::SHORT_PWRBTN::FILE_TRANSFER:
       if (activityManager.canSnapshotForSleepOverlay()) {
         return false;

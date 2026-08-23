@@ -1,8 +1,10 @@
 #include "EpubReaderActivity.h"
 
+#include "BootLog.h"
 #include <Arduino.h>
 #include <Epub/Page.h>
 #include <Epub/blocks/TextBlock.h>
+#include <Fb2.h>
 #include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
@@ -1353,7 +1355,9 @@ void EpubReaderActivity::loop() {
   if (!longPressBackHandled && mappedInput.isPressed(MappedInputManager::Button::Back) &&
       mappedInput.getHeldTime() >= ReaderUtils::GO_HOME_MS) {
     longPressBackHandled = true;
+    BootLog::stepf("SYNC", "long-press Back triggered, action=%d", static_cast<int>(SETTINGS.longPressBackAction));
     executeReaderQuickAction(static_cast<InkMODSettings::LONG_PRESS_MENU_ACTION>(SETTINGS.longPressBackAction));
+    BootLog::step("SYNC", "executeReaderQuickAction() returned");
     return;
   }
 
@@ -2049,6 +2053,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
     }
     case EpubReaderMenuActivity::MenuAction::SYNC: {
       if (KOREADER_STORE.hasCredentials()) {
+        BootLog::stepf("SYNC", "onReaderMenuConfirm(SYNC) start, section=%s", section ? "alive" : "null");
         const int currentPage = section ? section->currentPage : nextPageNumber;
         const int totalPages = section ? section->pageCount : cachedChapterTotalPageCount;
         std::optional<uint16_t> paragraphIndex;
@@ -2066,33 +2071,41 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           localPos.paragraphIndex = *paragraphIndex;
           localPos.hasParagraphIndex = true;
         }
+        BootLog::step("SYNC", "calling ProgressMapper::toKOReader");
         KOReaderPosition localKoPos = ProgressMapper::toKOReader(epub, localPos);
+        BootLog::step("SYNC", "ProgressMapper::toKOReader returned");
         const int tocIdx = epub->getTocIndexForSpineIndex(currentSpineIndex);
         std::string localChapterName = (tocIdx >= 0) ? epub->getTocItem(tocIdx).title : "";
         const std::string savedEpubPath = epub->getPath();
 
         // Persist current position so the reader resumes at the right page on return.
         // goToReader() depends on this file, so abort the sync if the write fails.
+        BootLog::step("SYNC", "onReaderMenuConfirm(SYNC): saveProgress start");
         if (!saveProgress(currentSpineIndex, currentPage, totalPages)) {
           LOG_ERR("KOSync", "Aborting sync because current progress could not be saved");
+          BootLog::step("SYNC", "onReaderMenuConfirm(SYNC): saveProgress FAILED, aborting");
           pendingSyncSaveError = true;
           requestUpdate();
           return;
         }
+        BootLog::step("SYNC", "onReaderMenuConfirm(SYNC): saveProgress done");
 
         // Release the heavy Section now. Keep Epub alive until onExit(), which still
         // needs it for stats/cache cleanup before the sync activity starts.
         LOG_DBG("KOSync", "Releasing section for sync (heap before: %u)", (unsigned)ESP.getFreeHeap());
         {
+          BootLog::step("SYNC", "onReaderMenuConfirm(SYNC): taking RenderLock to reset section");
           RenderLock lock(*this);
           if (section) {
             nextPageNumber = section->currentPage;
           }
           section.reset();
+          BootLog::step("SYNC", "onReaderMenuConfirm(SYNC): section reset, RenderLock released");
         }
         LOG_DBG("KOSync", "Section released for sync (heap after: %u)", (unsigned)ESP.getFreeHeap());
 
         pauseReadingPaceTimer("sync_progress");
+        BootLog::step("SYNC", "constructing KOReaderSyncActivity + replaceActivity");
         activityManager.replaceActivity(std::make_unique<KOReaderSyncActivity>(
             renderer, mappedInput, savedEpubPath, currentSpineIndex, currentPage, totalPages, std::move(localKoPos),
             std::move(localChapterName), paragraphIndex));
@@ -2344,19 +2357,24 @@ void EpubReaderActivity::resetCurrentBookStatsAfterDelete() {
 
 void EpubReaderActivity::executeReaderQuickAction(InkMODSettings::LONG_PRESS_MENU_ACTION action) {
   auto prepareForNetworkTransition = [this](const char* reason) {
+    BootLog::stepf("SYNC", "prepareForNetworkTransition(%s) start", reason);
     pauseReadingPaceTimer(reason);
     readerWork.cancel();
     coalescedPageDelta.store(0, std::memory_order_relaxed);
     coalescedSpineDelta.store(0, std::memory_order_relaxed);
     navigationSettleUntilMs.store(0, std::memory_order_relaxed);
     if (epub && section) {
+      BootLog::step("SYNC", "prepareForNetworkTransition: saveProgress start");
       saveProgress(currentSpineIndex, section->currentPage, section->pageCount);
+      BootLog::step("SYNC", "prepareForNetworkTransition: saveProgress done");
       cachedChapterTotalPageCount = section->pageCount;
       nextPageNumber = section->currentPage;
     }
     {
+      BootLog::step("SYNC", "prepareForNetworkTransition: taking RenderLock to reset section");
       RenderLock lock(*this);
       section.reset();
+      BootLog::step("SYNC", "prepareForNetworkTransition: section reset, RenderLock released");
     }
     mappedInput.suppressNextBackRelease();
     mappedInput.suppressNextConfirmRelease();
@@ -2366,6 +2384,7 @@ void EpubReaderActivity::executeReaderQuickAction(InkMODSettings::LONG_PRESS_MEN
     longPressMenuHandled = false;
     longPressBackHandled = false;
     longPowerButtonHandled = false;
+    BootLog::stepf("SYNC", "prepareForNetworkTransition(%s) done", reason);
   };
 
   switch (action) {
@@ -2414,22 +2433,16 @@ void EpubReaderActivity::executeReaderQuickAction(InkMODSettings::LONG_PRESS_MEN
       requestUpdate();
       break;
     case InkMODSettings::LONG_MENU_SYNC_PROGRESS:
-      if (KOREADER_STORE.hasCredentials()) {
-        // Matches every other network-transitioning case below
-        // (FILE_TRANSFER/CALIBRE_WIRELESS/JOIN_NETWORK/CREATE_HOTSPOT) - this
-        // was the one case that skipped it. Without cancelling readerWork
-        // first, any in-flight chapter load/layout keeps running alongside
-        // KOReaderSyncActivity's own SD and network work, racing it.
-        prepareForNetworkTransition("sync_progress");
-        onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction::SYNC);
-      } else {
-        pauseReadingPaceTimer("koreader_settings");
-        startActivityForResult(std::make_unique<KOReaderSettingsActivity>(renderer, mappedInput),
-                               [this](const ActivityResult&) {
-                                 resumeReadingPaceTimer("koreader_settings_return");
-                                 SETTINGS.saveToFile();
-                               });
-      }
+      // No longer assignable from Settings (see SettingsList.h) - this was
+      // the one path that kept hanging despite many attempted fixes
+      // (readerWork cancellation, RenderLock ordering, a render-task race,
+      // several rounds of ESP32 WiFi-driver-specific hardening). A
+      // pre-existing saved setting could still carry this raw value, so
+      // handle it explicitly: do nothing, same as IGNORE. The identical
+      // sync action remains available and reliable from the in-reader menu
+      // (Menu -> Sync), which is what triggers it here anyway - it was
+      // never the sync logic itself at fault, only reaching it from outside
+      // the reader with a button held.
       break;
     case InkMODSettings::LONG_MENU_MARK_FINISHED: {
       const bool newCompleted = !stats.isCompleted;
@@ -2482,7 +2495,15 @@ void EpubReaderActivity::executeReaderQuickAction(InkMODSettings::LONG_PRESS_MEN
       executeFootnoteQuickAction();
       break;
     case InkMODSettings::LONG_MENU_FILE_BROWSER:
-      activityManager.goToFileBrowser(epub ? epub->getPath() : "");
+      // FB2-derived books are opened from a converted package.epub living
+      // inside an FB2 cache dir (see HomeActivity::openSearchResultPath())
+      // - epub->getPath() points at that package, not at the user's actual
+      // book file, so this would otherwise open the browser in the cache
+      // instead of the real book's folder. resolveOriginalPath() reads back
+      // the marker Fb2 writes alongside the package recording the true
+      // original .fb2/.zip location, and returns the path unchanged for a
+      // real (non-FB2) EPUB.
+      activityManager.goToFileBrowser(epub ? Fb2::resolveOriginalPath(epub->getPath()) : "");
       break;
     case InkMODSettings::LONG_MENU_DICTIONARY_LOOKUP:
       onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction::DICTIONARY);

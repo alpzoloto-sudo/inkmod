@@ -979,6 +979,33 @@ void setup() {
   // function) happens behind a visible screen instead of a black/frozen one.
   attemptSilentBootTimeSync(bootTimeSyncCandidate);
 
+  // Pre-warm WiFi into a stable STA/disconnected state here, in the quiet
+  // early-boot window, rather than lazily inside
+  // WifiSelectionActivity::attemptConnection() when the user actually
+  // triggers a connection. Several boot-log captures now confirm
+  // WiFi.mode(WIFI_STA)/WiFi.persistent(false) can hang the whole device -
+  // even an independent esp_timer watchdog, armed and confirmed running,
+  // never fires when it happens, which points to something disabling
+  // interrupts/the scheduler inside the call itself rather than just one
+  // task getting stuck. Every one of those hangs happened during
+  // interactive use (button held, render task active, hours into a
+  // session); the identical calls have never once hung here, run fresh
+  // during boot, across dozens of captures. Doing it once now means
+  // attemptConnection() later finds WiFi.getMode() already == WIFI_STA and
+  // skips this exact call pair entirely (see its own skip-if-already-STA
+  // check) - trading a small amount of extra idle-radio power draw for the
+  // rest of the session against not touching this call again outside of
+  // boot's quiet window.
+  if (WiFi.getMode() != WIFI_STA) {
+    BootLog::step("WIFI", "boot pre-warm: WiFi.mode(WIFI_OFF) -> persistent(false) -> mode(WIFI_STA) -> disconnect(true)");
+    WiFi.mode(WIFI_OFF);
+    delay(100);
+    WiFi.persistent(false);
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect(true);
+    BootLog::step("WIFI", "boot pre-warm: done");
+  }
+
   if (recoveryFirmwareMode) {
     // Skip normal home/reader routing: jump straight into the SD firmware picker.
     activityManager.replaceActivity(

@@ -1,5 +1,6 @@
 #include "WifiSelectionActivity.h"
 
+#include "BootLog.h"
 #include <GfxRenderer.h>
 #include <HalClock.h>
 #include <I18n.h>
@@ -7,6 +8,8 @@
 #include <WiFi.h>
 #ifndef SIMULATOR
 #include <esp_mac.h>
+#include <esp_system.h>
+#include <esp_timer.h>
 #endif
 
 #include <algorithm>
@@ -26,6 +29,50 @@ namespace {
 uint8_t sLastStaDisconnectReason = 0;
 bool sConnectionAttemptLoggingActive = false;
 bool sWifiEventLoggingRegistered = false;
+
+// Repeated boot-log captures have shown WiFi.persistent(false), WiFi.mode(),
+// WiFi.disconnect() and (once) even the gap before WiFi.begin() each hang
+// indefinitely in turn, on different attempts, with nothing else recovering
+// the device - the main loop task isn't registered with the system task
+// watchdog (see sdkconfig.defaults' CONFIG_ESP_TASK_WDT_*, which is 5s but
+// only reset from a couple of network-server tasks elsewhere, never from
+// here), so a hang in this specific block otherwise requires a physical
+// power cycle. This is a narrowly-scoped, self-contained backstop: armed
+// immediately before that whole call sequence and disarmed right after, it
+// force-restarts the device if 10 real seconds pass without ever touching
+// anything else the app does (a normal attempt completes this whole block in
+// well under 1s per every successful capture so far).
+esp_timer_handle_t sWifiHangWatchdog = nullptr;
+
+void wifiHangWatchdogFired(void*) {
+  BootLog::step("WIFI", "*** WiFi reinit watchdog fired after 10s - forcing restart ***");
+  // esp_restart() directly, not ESP.restart(): this fires from the esp_timer
+  // task while some *other* task may be deeply wedged, so skip any
+  // Arduino-layer wrapping and go straight to the bare IDF reset call.
+  esp_restart();
+}
+
+void armWifiHangWatchdog() {
+  if (!sWifiHangWatchdog) {
+    const esp_timer_create_args_t args = {
+        .callback = &wifiHangWatchdogFired,
+        .arg = nullptr,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "wifi_hang_wd",
+    };
+    const esp_err_t createErr = esp_timer_create(&args, &sWifiHangWatchdog);
+    BootLog::stepf("WIFI", "wifi hang watchdog: esp_timer_create err=%d", static_cast<int>(createErr));
+  }
+  const esp_err_t startErr = esp_timer_start_once(sWifiHangWatchdog, 20000000ULL);  // 20s: covers setup + CONNECTION_TIMEOUT_MS(15s)
+  BootLog::stepf("WIFI", "wifi hang watchdog: armed (esp_timer_start_once err=%d)", static_cast<int>(startErr));
+}
+
+void disarmWifiHangWatchdog() {
+  if (sWifiHangWatchdog) {
+    esp_timer_stop(sWifiHangWatchdog);  // Safe no-op if it isn't currently running.
+    BootLog::step("WIFI", "wifi hang watchdog: disarmed");
+  }
+}
 #endif
 
 std::string getDisplayMacAddress() {
@@ -168,6 +215,7 @@ const char* wifiAuthName(const int authMode) {
 }  // namespace
 
 void WifiSelectionActivity::onEnter() {
+  BootLog::step("WIFI", "onEnter start");
   Activity::onEnter();
   sdFontSystem.releaseLoadedFont(renderer);
   ensureWifiEventLoggingRegistered();
@@ -175,8 +223,10 @@ void WifiSelectionActivity::onEnter() {
   // Load saved WiFi credentials - SD card operations need lock as we use SPI
   // for both
   {
+    BootLog::step("WIFI", "onEnter: taking RenderLock to load WIFI_STORE from SD");
     RenderLock lock(*this);
     WIFI_STORE.loadFromFile();
+    BootLog::step("WIFI", "onEnter: WIFI_STORE loaded, RenderLock released");
   }
 
   // Reset state
@@ -204,16 +254,19 @@ void WifiSelectionActivity::onEnter() {
   // Attempt to auto-connect to the last network
   if (allowAutoConnect) {
     const std::string lastSsid = WIFI_STORE.getLastConnectedSsid();
+    BootLog::stepf("WIFI", "onEnter: allowAutoConnect=1, lastSsid=%s", lastSsid.empty() ? "(none)" : lastSsid.c_str());
     if (!lastSsid.empty()) {
       const auto* cred = WIFI_STORE.findCredential(lastSsid);
       if (cred) {
         LOG_INF("WIFI", "Auto-connect candidate: ssid=%s saved=1", lastSsid.c_str());
+        BootLog::step("WIFI", "onEnter: found saved credential, calling attemptConnection()");
         selectedSSID = cred->ssid;
         enteredPassword = cred->password;
         selectedRequiresPassword = !cred->password.empty();
         usedSavedPassword = true;
         autoConnecting = true;
         attemptConnection();
+        BootLog::step("WIFI", "onEnter: attemptConnection() returned, requesting update");
         requestUpdate();
         return;
       }
@@ -221,6 +274,7 @@ void WifiSelectionActivity::onEnter() {
   }
 
   // Fallback to scanning
+  BootLog::step("WIFI", "onEnter: no auto-connect candidate, calling startWifiScan()");
   startWifiScan();
 }
 
@@ -389,6 +443,30 @@ void WifiSelectionActivity::selectNetwork(const int index) {
 }
 
 void WifiSelectionActivity::attemptConnection() {
+  BootLog::stepf("WIFI", "attemptConnection start: ssid=%s auto=%d saved=%d", selectedSSID.c_str(),
+                  autoConnecting ? 1 : 0, usedSavedPassword ? 1 : 0);
+
+  // If already connected to the target network, skip the reinit sequence
+  // below entirely. Three separate boot-log captures have now shown the hang
+  // moving between WiFi.disconnect(true,true), WiFi.mode(WIFI_STA), and
+  // WiFi.persistent(false) - different calls each time, all inside this one
+  // reinit block, all only on a *repeat* attempt (every capture that hung
+  // was not the WiFi stack's first use since boot). That points at the
+  // reinit itself being the risk, not any single call in it. The cheapest
+  // fix is to not need it: if the radio is already connected to the SSID we
+  // want, there is nothing to reinitialize.
+  if (WiFi.status() == WL_CONNECTED && WiFi.SSID() == selectedSSID.c_str()) {
+    BootLog::step("WIFI", "attemptConnection: already WL_CONNECTED to target SSID, skipping WiFi reinit entirely");
+    state = autoConnecting ? WifiSelectionState::AUTO_CONNECTING : WifiSelectionState::CONNECTING;
+    connectionStartTime = millis();
+    connectedIP.clear();
+    connectionError.clear();
+    lastConnectionStatusLogTime = 0;
+    lastLoggedWifiStatus = -1;
+    requestUpdate();
+    return;
+  }
+
   state = autoConnecting ? WifiSelectionState::AUTO_CONNECTING : WifiSelectionState::CONNECTING;
   connectionStartTime = millis();
   connectedIP.clear();
@@ -405,9 +483,61 @@ void WifiSelectionActivity::attemptConnection() {
           selectedSSID.c_str(), autoConnecting, usedSavedPassword, selectedRequiresPassword, !enteredPassword.empty(),
           ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
-  WiFi.persistent(false);  // Credentials are managed by WifiCredentialStore; suppress SDK NVS auto-connect
-  WiFi.mode(WIFI_STA);
-  WiFi.disconnect(true, true);  // Abort any in-progress SDK auto-connect and clear NVS-saved SSID
+  // Every hang so far was reached via a long-press of Back (the same button
+  // that's still physically held down when this method runs, since the
+  // trigger fires *while* held, not on release - see EpubReaderActivity's
+  // long-press detection). The in-reader Sync *menu item* never hangs, and
+  // the one mechanical difference between the two paths is that the menu
+  // click involves no button held down at all during this exact WiFi
+  // sequence. Wait out any still-held Back before touching the radio, so
+  // the WiFi mode transition never runs concurrently with continuous
+  // GPIO/interrupt activity from a held button. Bounded so a stuck input
+  // read can't turn into its own hang.
+  {
+    unsigned long releaseWaitStart = millis();
+    mappedInput.update();
+    while (mappedInput.isPressed(MappedInputManager::Button::Back) && millis() - releaseWaitStart < 3000) {
+      BootLog::step("WIFI", "attemptConnection: waiting for held Back button to release before WiFi reinit");
+      delay(30);
+      mappedInput.update();
+    }
+  }
+
+#ifndef SIMULATOR
+  armWifiHangWatchdog();
+#endif
+
+  // Only reinitialize the radio when it isn't already in the state we want.
+  // Repeatedly tearing down/rebuilding a mode that's already correct is
+  // exactly the pattern the hangs above were seen under.
+  if (WiFi.getMode() != WIFI_STA) {
+    BootLog::step("WIFI", "attemptConnection: WiFi.mode(WIFI_OFF) - clean slate before STA");
+    // A documented workaround for this exact ESP32 driver flakiness: force a
+    // clean OFF state before switching to STA, rather than transitioning
+    // from whatever ambiguous mode the radio happens to be in already.
+    WiFi.mode(WIFI_OFF);
+    delay(150);
+    BootLog::step("WIFI", "attemptConnection: WiFi.persistent(false) + mode(WIFI_STA)");
+    WiFi.persistent(false);  // Credentials are managed by WifiCredentialStore; suppress SDK NVS auto-connect
+    WiFi.mode(WIFI_STA);
+  } else {
+    BootLog::step("WIFI", "attemptConnection: already WIFI_STA, skipping persistent()/mode() reinit");
+  }
+  BootLog::step("WIFI", "attemptConnection: calling WiFi.disconnect(true)");
+  // Two consecutive boot-log captures of this exact hang both stopped right
+  // here, at disconnect(true, true) - the eraseap=true variant. That's a
+  // known-flaky ESP32 WiFi-driver call, and WiFi.persistent(false) above
+  // already stops the SDK from re-persisting a config to NVS going forward,
+  // so re-erasing NVS on every single connection attempt bought nothing
+  // beyond what happened once at first boot. Dropping eraseap here still
+  // aborts any in-progress connection (wifioff=true) without touching NVS.
+  // Explicit 1000ms timeout (CrossInk uses the same value) instead of the
+  // 100ms default, and don't treat a timeout as fatal - continue with the
+  // explicit begin() below regardless, same as CrossInk does.
+  if (!WiFi.disconnect(true, false, 1000)) {
+    BootLog::step("WIFI", "attemptConnection: WiFi.disconnect() timed out (1000ms); continuing anyway");
+  }
+  BootLog::step("WIFI", "attemptConnection: WiFi.disconnect(true) returned");
   delay(100);
 #ifndef SIMULATOR
   sLastStaDisconnectReason = 0;
@@ -415,11 +545,13 @@ void WifiSelectionActivity::attemptConnection() {
 #endif
 
   // Set hostname so routers show "InkMOD-Reader-AABBCCDDEEFF" instead of "esp32-XXXXXXXXXXXX"
+  BootLog::step("WIFI", "attemptConnection: reading MAC address for hostname");
   String mac = WiFi.macAddress();
   mac.replace(":", "");
   String hostname = "InkMOD-Reader-" + mac;
   WiFi.setHostname(hostname.c_str());
 
+  BootLog::step("WIFI", "attemptConnection: calling WiFi.begin() - this is the one call in this whole path that isn't obviously bounded");
   wl_status_t beginStatus = WL_IDLE_STATUS;
   if (selectedRequiresPassword && !enteredPassword.empty()) {
     beginStatus = WiFi.begin(selectedSSID.c_str(), enteredPassword.c_str());
@@ -427,6 +559,12 @@ void WifiSelectionActivity::attemptConnection() {
     beginStatus = WiFi.begin(selectedSSID.c_str());
   }
   LOG_INF("WIFI", "WiFi.begin returned status=%d/%s", static_cast<int>(beginStatus), wifiStatusName(beginStatus));
+  BootLog::stepf("WIFI", "attemptConnection: WiFi.begin() returned status=%d", static_cast<int>(beginStatus));
+  // Deliberately NOT disarmed here anymore: the last capture showed the
+  // hang moving past this point, into the connection-status polling that
+  // follows (checkConnectionStatus(), called from loop()) - stayed armed
+  // until that reaches WL_CONNECTED, an explicit failure, or its own
+  // CONNECTION_TIMEOUT_MS timeout, all of which now disarm it themselves.
 }
 
 void WifiSelectionActivity::checkConnectionStatus() {
@@ -441,12 +579,17 @@ void WifiSelectionActivity::checkConnectionStatus() {
       now - lastConnectionStatusLogTime >= CONNECTION_STATUS_LOG_INTERVAL_MS) {
     LOG_INF("WIFI", "Connection poll: elapsed=%lums status=%d/%s rssi=%d", now - connectionStartTime,
             static_cast<int>(status), wifiStatusName(status), status == WL_CONNECTED ? WiFi.RSSI() : 0);
+    BootLog::stepf("WIFI", "poll: elapsed=%lums status=%d", now - connectionStartTime, static_cast<int>(status));
     lastLoggedWifiStatus = static_cast<int>(status);
     lastConnectionStatusLogTime = now;
   }
 
   if (status == WL_CONNECTED) {
     // Successfully connected
+    BootLog::stepf("WIFI", "checkConnectionStatus: WL_CONNECTED after %lums", now - connectionStartTime);
+#ifndef SIMULATOR
+    disarmWifiHangWatchdog();
+#endif
     IPAddress ip = WiFi.localIP();
     char ipStr[16];
     snprintf(ipStr, sizeof(ipStr), "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
@@ -462,12 +605,14 @@ void WifiSelectionActivity::checkConnectionStatus() {
     // Settings > System > Device > Sync Date/Time Now.
     if (!SETTINGS.clockDisabled && halClock.isAvailable() &&
         (!SETTINGS.clockHasBeenSynced || !SETTINGS.clockDateHasBeenSynced)) {
+      BootLog::step("WIFI", "checkConnectionStatus: calling halClock.syncFromNTP()");
       if (halClock.syncFromNTP()) {
         SETTINGS.clockHasBeenSynced = 1;
         SETTINGS.clockDateHasBeenSynced = 1;
         SETTINGS.clockLastSyncedEpoch = static_cast<uint32_t>(time(nullptr));
         SETTINGS.saveToFile();
       }
+      BootLog::step("WIFI", "checkConnectionStatus: halClock.syncFromNTP() returned");
     }
 
     // Save this as the last connected network - SD card operations need lock as
@@ -489,7 +634,9 @@ void WifiSelectionActivity::checkConnectionStatus() {
         LOG_DBG("WIFI",
                 "Connected with saved/open credentials, "
                 "completing immediately");
+        BootLog::step("WIFI", "checkConnectionStatus: calling onComplete(true)");
         onComplete(true);
+        BootLog::step("WIFI", "checkConnectionStatus: onComplete(true) returned");
       } else {
         LOG_DBG("WIFI", "Connected from manual network settings, showing connected status");
         state = WifiSelectionState::CONNECTED;
@@ -506,7 +653,10 @@ void WifiSelectionActivity::checkConnectionStatus() {
     }
     LOG_INF("WIFI", "Connection failed: ssid=%s status=%d/%s elapsed=%lums", selectedSSID.c_str(),
             static_cast<int>(status), wifiStatusName(status), now - connectionStartTime);
+    BootLog::stepf("WIFI", "checkConnectionStatus: connection FAILED status=%d elapsed=%lums", static_cast<int>(status),
+                    now - connectionStartTime);
 #ifndef SIMULATOR
+    disarmWifiHangWatchdog();
     if (sLastStaDisconnectReason != 0) {
       LOG_INF("WIFI", "Last disconnect reason: %u(%s)", sLastStaDisconnectReason,
               WiFi.disconnectReasonName(static_cast<wifi_err_reason_t>(sLastStaDisconnectReason)));
@@ -524,7 +674,10 @@ void WifiSelectionActivity::checkConnectionStatus() {
     connectionError = tr(STR_ERROR_CONNECTION_TIMEOUT);
     LOG_INF("WIFI", "Connection timed out: ssid=%s elapsed=%lums lastStatus=%d/%s", selectedSSID.c_str(),
             millis() - connectionStartTime, static_cast<int>(status), wifiStatusName(status));
+    BootLog::stepf("WIFI", "checkConnectionStatus: TIMEOUT elapsed=%lums lastStatus=%d",
+                    millis() - connectionStartTime, static_cast<int>(status));
 #ifndef SIMULATOR
+    disarmWifiHangWatchdog();
     if (sLastStaDisconnectReason != 0) {
       LOG_INF("WIFI", "Last disconnect reason before timeout: %u(%s)", sLastStaDisconnectReason,
               WiFi.disconnectReasonName(static_cast<wifi_err_reason_t>(sLastStaDisconnectReason)));
@@ -541,7 +694,9 @@ void WifiSelectionActivity::loop() {
   if ((state == WifiSelectionState::SCANNING || state == WifiSelectionState::CONNECTING ||
        state == WifiSelectionState::AUTO_CONNECTING) &&
       mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+    BootLog::stepf("WIFI", "loop(): Back wasPressed() fired, cancelling (state=%d)", static_cast<int>(state));
 #ifndef SIMULATOR
+    disarmWifiHangWatchdog();
     sConnectionAttemptLoggingActive = false;
 #endif
     WiFi.disconnect();

@@ -318,14 +318,18 @@ bool Fb2Parser::scan(IByteReader& reader, Fb2ScanResult& out, size_t xmlBufferSi
         }
     }
 
-    // The cover is emitted through the same image-range filter as body
-    // illustrations. When the first section already contains images, include
-    // the cover in that section's ordinal count so virtual image slices keep
-    // exactly the same boundaries and no body illustration is skipped.
-    if (!out.metadata.coverBinaryId.empty() && !out.sections.empty() &&
-        out.sections.front().imageRefCount > 0 && out.sections.front().imageRefCount < UINT16_MAX) {
-        ++out.sections.front().imageRefCount;
-    }
+    // Coverpage belongs to FB2 metadata, not to the body image stream.
+    // Keep imageRefCount limited to real section illustrations so virtual
+    // image slices are stable regardless of whether a book has a cover.
+    return true;
+}
+
+bool Fb2Parser::renderCoverForFirstSection(IByteReader& reader,
+                                                  const Fb2SectionIndexEntry& section,
+                                                  Fb2ContentSink& sink) {
+    std::string coverId;
+    if (!findCoverForFirstSection(reader, section.innerStartOffset, coverId)) return false;
+    sink.onImage(coverId);
     return true;
 }
 
@@ -333,14 +337,6 @@ bool Fb2Parser::renderSection(IByteReader& reader,
                                const Fb2SectionIndexEntry& section,
                                Fb2ContentSink& sink,
                                const reader::ReaderCancellationToken* cancellationToken) {
-    // Emit the FB2 <coverpage> only before the first body section. The outer
-    // range sinks suppress this event for later virtual slices of that section;
-    // for image-sliced sections scan() counted the cover above so ordinals stay aligned.
-    std::string coverId;
-    if (findCoverForFirstSection(reader, section.innerStartOffset, coverId)) {
-        sink.onImage(coverId);
-    }
-
     Fb2XmlReader xml(reader, 4096);
     xml.seekTo(section.innerStartOffset);
 

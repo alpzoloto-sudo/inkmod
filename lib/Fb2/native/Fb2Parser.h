@@ -43,7 +43,15 @@ public:
     bool scan(IByteReader& reader, Fb2ScanResult& outResult,
               size_t xmlBufferSize = 8192);
 
+    // Emits the metadata cover only when `section` is the first body
+    // section. This is intentionally separate from renderSection() so callers
+    // can place the cover before generated title/annotation content.
+    bool renderCoverForFirstSection(IByteReader& reader,
+                                    const Fb2SectionIndexEntry& section,
+                                    Fb2ContentSink& sink);
+
     // sectionIndex must be an index into the vector scan() filled in.
+    // Body content only: coverpage is handled by renderCoverForFirstSection().
     bool renderSection(IByteReader& reader,
                         const Fb2SectionIndexEntry& section,
                         Fb2ContentSink& sink,

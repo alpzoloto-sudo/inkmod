@@ -73,6 +73,10 @@ class EpubReaderActivity final : public Activity {
   bool automaticPageTurnActive = false;
   bool longPressMenuHandled = false;
   bool longPressBackHandled = false;
+  // Network-backed sync must not start while a front button is still held.
+  // The long-press handlers arm these flags and execute sync on release.
+  bool pendingLongMenuSyncOnRelease = false;
+  bool pendingLongBackSyncOnRelease = false;
   bool longPowerButtonHandled = false;
   bool sideButtonLongPressHandled = false;
   bool frontButtonLongPressHandled = false;

@@ -395,7 +395,7 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
                                                      const RenderConfig& config) {
   LOG_DBG("JPG", "Decoding JPEG: %s", imagePath.c_str());
 
-  if (!MemoryBudget::hasHeapForImageDecoder("JPG", "JPEG", JPEG_DECODER_APPROX_SIZE)) {
+  if (!MemoryBudget::hasHeapForImageDecoder("JPG", "JPEG", JPEG_DECODER_APPROX_SIZE, MemoryBudget::JPEG_DECODER_HEADROOM)) {
     return false;
   }
 

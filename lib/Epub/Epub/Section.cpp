@@ -1,6 +1,9 @@
 #include "Section.h"
+#include "../../../src/SdCardFontSystem.h"
 
 #include <Arduino.h>
+#include <FontCacheManager.h>
+#include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <MemoryBudget.h>
@@ -18,7 +21,7 @@ constexpr uint32_t SECTION_CACHE_MAGIC = 0x535843FF;  // bytes: 0xFF, "CXS"
 // spacing only on normal <p> elements while preserving publisher spacing on
 // headings and structural containers. Old section pages cannot be reused
 // safely because their vertical positions/page counts differ.
-constexpr uint8_t SECTION_FILE_VERSION = 52;
+constexpr uint8_t SECTION_FILE_VERSION = 56;
 constexpr uint32_t HEADER_SIZE = sizeof(SECTION_CACHE_MAGIC) + sizeof(uint8_t) + sizeof(int) + sizeof(float) +
                                  sizeof(bool) + sizeof(bool) + sizeof(uint8_t) + sizeof(uint16_t) + sizeof(uint16_t) +
                                  sizeof(uint16_t) + sizeof(bool) + sizeof(bool) + sizeof(uint8_t) + sizeof(bool) +
@@ -239,6 +242,16 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
                                 const reader::ReaderCancellationToken* cancellationToken, bool* cancelled) {
   const auto localPath = epub->getSpineItem(spineIndex).href;
   const auto tmpHtmlPath = epub->getCachePath() + "/.tmp_" + std::to_string(spineIndex) + ".html";
+  // Real EPUBs cache each inflated XHTML spine source on SD.  Re-inflating
+  // the ZIP entry for every section rebuild needs a 32 KiB DEFLATE history
+  // buffer plus I/O buffers at exactly the moment CSS/font/layout state is
+  // already resident. On X4 this caused reproducible SW resets even with
+  // 70-90 KiB total free heap. FB2 is not a ZIP-backed XHTML source here and
+  // deliberately keeps the old temporary-file path.
+  const bool cacheInflatedSpine = !epub->isFb2Package();
+  const auto spineSourceDir = epub->getCachePath() + "/spine_src";
+  const auto cachedHtmlPath = spineSourceDir + "/" + std::to_string(spineIndex) + ".xhtml";
+  const auto sourceHtmlPath = cacheInflatedSpine ? cachedHtmlPath : tmpHtmlPath;
   const auto tmpSectionPath = filePath + ".tmp";
   const auto tmpLutPath = filePath + ".lut.tmp";
   pageCount = 0;
@@ -254,38 +267,94 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     Storage.mkdir(sectionsDir.c_str());
   }
 
-  // Retry logic for SD card timing issues
-  bool success = false;
+  // Retry logic for SD card timing issues. For ordinary EPUB, reuse a
+  // previously inflated XHTML source so section rebuilds never pay the 32 KiB
+  // ZIP dictionary again. Before the first extraction, drop any stale parsed
+  // CSS rules so DEFLATE and CSS are never resident at the same time.
+  bool success = cacheInflatedSpine && Storage.exists(cachedHtmlPath.c_str());
   uint32_t fileSize = 0;
-  for (int attempt = 0; attempt < 3 && !success; attempt++) {
-    if (cancellationToken && cancellationToken->isCancellationRequested()) {
-      if (cancelled) *cancelled = true;
-      break;
+  if (success) {
+    HalFile cachedSource;
+    if (Storage.openFileForRead("SCT", cachedHtmlPath, cachedSource)) {
+      fileSize = cachedSource.fileSize();
+      cachedSource.close();
+      LOG_DBG("SCT", "Using cached inflated spine source: %s (%u bytes)", cachedHtmlPath.c_str(), fileSize);
+    } else {
+      success = false;
     }
-    if (attempt > 0) {
-      LOG_DBG("SCT", "Retrying stream (attempt %d)...", attempt + 1);
-      delay(50);  // Brief delay before retry
+  }
+
+  bool temporarilyReleasedSdFontForInflate = false;
+  if (!success) {
+    if (cacheInflatedSpine) {
+      Storage.mkdir(spineSourceDir.c_str(), true);
+      if (auto* parser = epub->getCssParser()) {
+        parser->clear();
+      }
+
+      // The first visit to a real EPUB spine has to inflate XHTML from the ZIP.
+      // uzlib needs one contiguous 32 KiB dictionary. A loaded SD reader font
+      // can leave 50-80 KiB free in total while the largest block is only
+      // 20-30 KiB, which made the first attempt fail and the exact same chapter
+      // work only after leaving/reopening the book. The font is not needed for
+      // extraction, so temporarily unload it, inflate to SD, then restore it
+      // before CSS/layout. Cached spine sources skip this path entirely.
+      if (renderer.isSdCardFont(fontId)) {
+        if (auto* fcm = renderer.getFontCacheManager()) {
+          fcm->clearCache();
+        }
+        const auto beforeFontRelease = MemoryBudget::snapshot();
+        sdFontSystem.releaseLoadedFont(renderer);
+        delay(1);
+        yield();
+        const auto afterFontRelease = MemoryBudget::snapshot();
+        temporarilyReleasedSdFontForInflate = true;
+        LOG_DBG("SCT", "Released SD font for EPUB inflate: free=%u->%u maxAlloc=%u->%u",
+                beforeFontRelease.freeHeap, afterFontRelease.freeHeap,
+                beforeFontRelease.maxAllocHeap, afterFontRelease.maxAllocHeap);
+      }
     }
 
-    // Remove any incomplete file from previous attempt before retrying
-    if (Storage.exists(tmpHtmlPath.c_str())) {
-      Storage.remove(tmpHtmlPath.c_str());
-    }
+    for (int attempt = 0; attempt < 3 && !success; attempt++) {
+      if (cancellationToken && cancellationToken->isCancellationRequested()) {
+        if (cancelled) *cancelled = true;
+        break;
+      }
+      if (attempt > 0) {
+        LOG_DBG("SCT", "Retrying stream (attempt %d)...", attempt + 1);
+        delay(50);
+      }
 
-    FsFile tmpHtml;
-    if (!Storage.openFileForWrite("SCT", tmpHtmlPath, tmpHtml)) {
-      continue;
-    }
-    success = epub->readItemContentsToStream(localPath, tmpHtml, 1024, cancellationToken);
-    fileSize = tmpHtml.size();
-    // Explicitly close() file before calling Storage.remove()
-    tmpHtml.close();
+      const std::string& streamTargetPath = cacheInflatedSpine ? cachedHtmlPath : tmpHtmlPath;
+      if (Storage.exists(streamTargetPath.c_str())) {
+        Storage.remove(streamTargetPath.c_str());
+      }
 
-    // If streaming failed, remove the incomplete file immediately
-    if (!success && Storage.exists(tmpHtmlPath.c_str())) {
-      Storage.remove(tmpHtmlPath.c_str());
-      LOG_DBG("SCT", "Removed incomplete temp file after failed attempt");
+      FsFile tmpHtml;
+      if (!Storage.openFileForWrite("SCT", streamTargetPath, tmpHtml)) {
+        continue;
+      }
+      success = epub->readItemContentsToStream(localPath, tmpHtml, 1024, cancellationToken);
+      fileSize = tmpHtml.size();
+      tmpHtml.close();
+
+      if (!success && Storage.exists(streamTargetPath.c_str())) {
+        Storage.remove(streamTargetPath.c_str());
+        LOG_DBG("SCT", "Removed incomplete streamed source after failed attempt");
+      }
     }
+  }
+
+  if (temporarilyReleasedSdFontForInflate) {
+    sdFontSystem.ensureLoaded(renderer);
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->clearCache();
+    }
+    delay(1);
+    yield();
+    const auto restoredHeap = MemoryBudget::snapshot();
+    LOG_DBG("SCT", "Restored SD font after EPUB inflate: free=%u maxAlloc=%u",
+            restoredHeap.freeHeap, restoredHeap.maxAllocHeap);
   }
 
   if (!success) {
@@ -294,11 +363,11 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
       LOG_INF("SCT", "Section stream cancelled: spine=%d", spineIndex);
       return false;
     }
-    LOG_ERR("SCT", "Failed to stream item contents to temp file after retries");
+    LOG_ERR("SCT", "Failed to prepare XHTML source after retries");
     return false;
   }
 
-  LOG_DBG("SCT", "Streamed temp HTML to %s (%d bytes, free=%u, maxAlloc=%u)", tmpHtmlPath.c_str(), fileSize,
+  LOG_DBG("SCT", "Prepared HTML source %s (%d bytes, free=%u, maxAlloc=%u)", sourceHtmlPath.c_str(), fileSize,
           ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
   if (Storage.exists(tmpSectionPath.c_str())) {
@@ -364,7 +433,7 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   }
 
   ChapterHtmlSlimParser visitor(
-      epub, tmpHtmlPath, renderer, fontId, lineCompression, extraParagraphSpacing, forceParagraphIndents,
+      epub, sourceHtmlPath, renderer, fontId, lineCompression, extraParagraphSpacing, forceParagraphIndents,
       paragraphAlignment, viewportWidth, viewportHeight, hyphenationEnabled, bionicReadingEnabled, guideReadingEnabled,
       [this, &lutWriteFailed, &lutEntryCount, &firstLutRecordOffset,
        &lastLutRecordOffset](std::unique_ptr<Page> page, const uint16_t paragraphIndex,
@@ -396,6 +465,12 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   Hyphenator::setPreferredLanguage(epub->getLanguage());
   LOG_DBG("SCT", "Parser start: spine=%d free=%u maxAlloc=%u", spineIndex, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
   success = visitor.parseAndBuildPages();
+  // CSS is only needed while the XHTML visitor is actively resolving styles.
+  // Release it immediately after pagination so final section serialization and
+  // the next spine start from a clean heap. loadFromCache() now reserves the
+  // final hash-table size up front, making this reload deterministic instead of
+  // repeatedly rehashing/fragmenting the heap.
+  if (cssParser) cssParser->clear();
   LOG_DBG("SCT", "Parser done: spine=%d success=%u pages=%u free=%u maxAlloc=%u", spineIndex, success, pageCount,
           ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
@@ -403,7 +478,7 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   if (layoutAbortedForLowMemory) *layoutAbortedForLowMemory = visitor.wasLowMemoryAbortTriggered();
   if (cancelled) *cancelled = visitor.wasCancellationTriggered();
 
-  Storage.remove(tmpHtmlPath.c_str());
+  if (!cacheInflatedSpine) Storage.remove(tmpHtmlPath.c_str());
   if (!success || lutWriteFailed || lutEntryCount != pageCount) {
     if (visitor.wasCancellationTriggered()) {
       LOG_INF("SCT", "Section parse cancelled: spine=%d", spineIndex);
@@ -568,9 +643,9 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     return false;
   }
   if (hadExistingCache) Storage.remove(backupPath.c_str());
-  if (cssParser) {
-    cssParser->clear();
-  }
+  // Idempotent safety clear; normal success already released CSS immediately
+  // after pagination above. FB2 keeps the same end-of-section lifetime.
+  if (cssParser) cssParser->clear();
   LOG_DBG("SCT", "Create section done: spine=%d pages=%u free=%u maxAlloc=%u", spineIndex, pageCount, ESP.getFreeHeap(),
           ESP.getMaxAllocHeap());
   return true;

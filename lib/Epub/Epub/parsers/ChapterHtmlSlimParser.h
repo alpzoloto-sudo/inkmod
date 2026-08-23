@@ -170,6 +170,8 @@ class ChapterHtmlSlimParser {
   void updateEffectiveInlineStyle();
   void skipCurrentElement();
   void skipDescendantsOfCurrentElement();
+  bool relieveEpubMemoryPressure(const char* stage, bool allowPageSpool);
+  void drainCurrentTextBlockForStreaming();
   bool shouldAbortForLowMemory(const char* stage);
   bool startNewPage(const char* reason);
   void startNewTextBlock(const BlockStyle& blockStyle);

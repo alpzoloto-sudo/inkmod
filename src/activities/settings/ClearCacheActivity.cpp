@@ -103,7 +103,9 @@ void ClearCacheActivity::clearCache() {
   // Iterate through all entries in the directory
   for (auto file = root.openNextFile(); file; file = root.openNextFile()) {
     file.getName(name, sizeof(name));
-    const bool preserve = std::strcmp(name, "wifi.json") == 0 || std::strcmp(name, "inkmod-settings.json") == 0;
+    const bool preserve = std::strcmp(name, "wifi.json") == 0 ||
+                          std::strcmp(name, "inkmod-settings.json") == 0 ||
+                          std::strcmp(name, "opds.json") == 0;
     const bool isDirectory = file.isDirectory();
     if (preserve) {
       file.close();

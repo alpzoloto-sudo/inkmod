@@ -1,6 +1,9 @@
 #include "FontSelectionActivity.h"
 
 #include <GfxRenderer.h>
+#include <FontCacheManager.h>
+
+#include <algorithm>
 #include <I18n.h>
 #include <Logging.h>
 
@@ -83,11 +86,19 @@ void FontSelectionActivity::onEnter() {
 }
 
 void FontSelectionActivity::onExit() {
-  // previewFontId() may have swapped the real active SD reader font out for
-  // a preview of a different family while browsing - SdCardFontManager only
-  // keeps one family resident at a time, so restore the actual saved
-  // selection now rather than leaving whatever was last previewed active.
+  // Preview glyphs are cached separately from the SD font object itself.
+  // Clear them before swapping the saved reader family back in, otherwise
+  // 20+ KiB of preview glyph/cache state can follow us into EPUB layout.
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    fcm->clearCache();
+  }
+  sdFontSystem.releaseLoadedFont(renderer);
   sdFontSystem.ensureLoaded(renderer);
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    fcm->clearCache();
+  }
+  previewedIndex_ = -1;
+  previewFontId_ = 0;
   Activity::onExit();
 }
 
@@ -101,14 +112,22 @@ int FontSelectionActivity::previewFontId() {
   }
 
   const auto& font = fonts_[selectedIndex_];
+
+  // A preview family can leave glyphs in FontCacheManager even after
+  // SdCardFontManager unloads the font object. Reclaim both before every
+  // family switch so the picker has a constant memory footprint.
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    fcm->clearCache();
+  }
+
   if (font.isBuiltin) {
+    // loadPreviewFamily() owns the single SD-font slot. Explicitly release a
+    // previous SD preview when the cursor moves back to the built-in face.
+    sdFontSystem.releaseLoadedFont(renderer);
     previewFontId_ = TEST_FONTS_12_FONT_ID;
   } else {
-    // Fixed preview size rather than the user's configured reading size:
-    // this screen exists to compare typefaces, not to show the exact final
-    // reading layout, and a fixed size keeps line count/wrapping consistent
-    // while scrolling through very differently-sized font families.
-    previewFontId_ = sdFontSystem.loadPreviewFamily(font.name, renderer, /*targetPointSize=*/14);
+    // Use a compact fixed preview size; the box itself remains fixed below.
+    previewFontId_ = sdFontSystem.loadPreviewFamily(font.name, renderer, /*targetPointSize=*/12);
   }
   return previewFontId_;
 }
@@ -195,10 +214,10 @@ void FontSelectionActivity::render(RenderLock&&) {
   const char* previewText = nullptr;
   switch (I18N.getLanguage()) {
     case Language::RU:
-      previewText = "Съешь же ещё этих мягких французских булок, да выпей чаю.";
+      previewText = "Съешь ещё этих мягких французских булок.";
       break;
     case Language::UK:
-      previewText = "Жебракують філософи при ґанку церкви в Гадячі, ще й шатро їхнє знаємо.";
+      previewText = "Жебракують філософи при ґанку в Гадячі.";
       break;
     case Language::EN:
     default:
@@ -212,17 +231,29 @@ void FontSelectionActivity::render(RenderLock&&) {
   // preview to fit its content, which would otherwise shove every row down
   // by a different amount on every keypress.
   const int previewFontId = this->previewFontId();
-  const int previewLineHeight = renderer.getLineHeight(previewFontId);
+  const int previewLineHeight = std::max(1, renderer.getLineHeight(previewFontId));
   const int previewTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int previewPadding = 6;
-  const int previewHeight = previewLineHeight * 2 + previewPadding * 2;
+  constexpr int previewPadding = 8;
+  constexpr int previewHeight = 112;  // Fixed band large enough for two lines of every preview face.
+  const int previewInnerHeight = previewHeight - previewPadding * 2;
+  const int maxPreviewLines = 2;
+  const int previewTextWidth = std::max(1, safeArea.width - 2 * previewPadding);
 
   renderer.fillRect(safeArea.x, previewTop, safeArea.width, previewHeight, false);
-  const auto previewLines =
-      renderer.wrappedText(previewFontId, previewText, safeArea.width - 2 * previewPadding, 2, EpdFontFamily::REGULAR);
-  int previewY = previewTop + previewPadding;
+  const auto previewLines = renderer.wrappedText(previewFontId, previewText, previewTextWidth, maxPreviewLines,
+                                                 EpdFontFamily::REGULAR);
+
+  // Vertically center the actual one/two preview lines inside the fixed band.
+  // wrappedText() enforces the horizontal width; maxPreviewLines plus the
+  // fixed inner height prevents text from reaching the list below.
+  const int usedTextHeight = static_cast<int>(previewLines.size()) * previewLineHeight;
+  int previewY = previewTop + previewPadding + std::max(0, (previewInnerHeight - usedTextHeight) / 2);
+  const int previewBottom = previewTop + previewHeight - previewPadding;
   for (const auto& line : previewLines) {
-    renderer.drawText(previewFontId, safeArea.x + previewPadding, previewY, line.c_str());
+    if (previewY + previewLineHeight > previewBottom) break;
+    const std::string clippedLine =
+        renderer.truncatedText(previewFontId, line.c_str(), previewTextWidth, EpdFontFamily::REGULAR);
+    renderer.drawText(previewFontId, safeArea.x + previewPadding, previewY, clippedLine.c_str());
     previewY += previewLineHeight;
   }
   renderer.drawLine(safeArea.x, previewTop + previewHeight, safeArea.x + safeArea.width, previewTop + previewHeight,

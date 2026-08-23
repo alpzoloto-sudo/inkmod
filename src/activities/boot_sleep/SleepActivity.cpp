@@ -505,11 +505,7 @@ void SleepActivity::onEnter() {
     case (InkMODSettings::SLEEP_SCREEN_MODE::COVER):
       return renderCoverSleepScreen();
     case (InkMODSettings::SLEEP_SCREEN_MODE::COVER_CUSTOM):
-      if (APP_STATE.lastSleepFromReader) {
-        return renderCoverSleepScreen();
-      } else {
-        return renderCustomSleepScreen();
-      }
+      return renderCoverSleepScreen();
     case (InkMODSettings::SLEEP_SCREEN_MODE::OVERLAY):
       return renderOverlaySleepScreen();
     case (InkMODSettings::SLEEP_SCREEN_MODE::READING_STATS_SLEEP):

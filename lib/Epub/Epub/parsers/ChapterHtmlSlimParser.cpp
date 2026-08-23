@@ -22,16 +22,40 @@
 #include "Epub/converters/ImageDecoderFactory.h"
 #include "Epub/converters/ImageToFramebufferDecoder.h"
 #include "Epub/htmlEntities.h"
+#include "Epub/css/ClassicBookProfile.h"
 
 // Minimum file size (in bytes) to show indexing popup - smaller chapters don't benefit from it
 constexpr size_t MIN_SIZE_FOR_POPUP = 10 * 1024;  // 10KB
 constexpr size_t PARSE_BUFFER_SIZE = 1024;
 constexpr size_t IMAGE_EXTRACT_CHUNK_SIZE = 1024;
-constexpr uint32_t MIN_FREE_HEAP_FOR_TEXT_LAYOUT = 44 * 1024;
-constexpr uint32_t MIN_MAX_ALLOC_FOR_TEXT_LAYOUT = 32 * 1024;
+// Start shedding completed EPUB layout state well before the allocator is in
+// danger. A previous 24/16 KiB floor let one larger std::string/vector growth
+// consume the remaining heap between parser callbacks and caused a real
+// operator-new OOM/reset. The pressure watermark is where we spool; the lower
+// floor is only where the section is finally declared unsafe after relief.
+constexpr uint32_t EPUB_PRESSURE_FREE_HEAP = 56 * 1024;
+constexpr uint32_t EPUB_PRESSURE_MAX_ALLOC = 32 * 1024;
+constexpr uint32_t MIN_FREE_HEAP_FOR_TEXT_LAYOUT = 36 * 1024;
+constexpr uint32_t MIN_MAX_ALLOC_FOR_TEXT_LAYOUT = 24 * 1024;
+// Real EPUB text is now bounded by the 64-word streaming window, so it no
+// longer needs the old 36/24 KiB fatal floor that was chosen when an entire
+// paragraph could remain live. Keep the conservative floor for FB2, whose
+// pagination path is intentionally unchanged. Images and tables retain their
+// own stricter guards below.
+constexpr uint32_t EPUB_FATAL_FREE_HEAP = 24 * 1024;
+constexpr uint32_t EPUB_FATAL_MAX_ALLOC = 12 * 1024;
 constexpr uint32_t MIN_FREE_HEAP_FOR_TABLE_BUFFERING = 64 * 1024;
 constexpr uint32_t MIN_MAX_ALLOC_FOR_TABLE_BUFFERING = 40 * 1024;
-constexpr size_t MAX_BUFFERED_WORDS_BEFORE_LAYOUT = 350;
+// Bound only the *internal* ParsedText working set for real EPUBs. Complete
+// lines may be emitted from a long paragraph in small windows, but the visible
+// Page is never completed by memory-pressure code (see relieveEpubMemoryPressure).
+// This keeps the ESP32-C3 heap bounded without turning internal chunks into
+// user-visible pages.
+// 128 words is still a small bounded working set on the X4, but avoids
+// repeatedly cutting ordinary publisher paragraphs into tiny independent
+// line-breaking problems. Combined with a two-line overlap below, this keeps
+// streaming RAM bounded without visible seams in EPUB text.
+constexpr size_t MAX_BUFFERED_WORDS_BEFORE_LAYOUT = 128;
 constexpr uint8_t INITIAL_PAGE_ELEMENT_RESERVE = 8;
 constexpr uint8_t INITIAL_TABLE_FRAGMENT_ROW_RESERVE = 8;
 constexpr uint32_t PAGE_ELEMENT_RESERVE_MIN_MAX_ALLOC = 1024;
@@ -239,16 +263,144 @@ void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
   }
 }
 
+void ChapterHtmlSlimParser::drainCurrentTextBlockForStreaming() {
+  if (!currentTextBlock || currentTextBlock->isEmpty() || lowMemoryAbort) {
+    return;
+  }
+
+  if (!currentPage && !startNewPage("streaming text drain")) {
+    return;
+  }
+
+  const BlockStyle baseStyle = currentTextBlock->getBlockStyle();
+  const bool startsBesideFloat = activeFloat.active && currentPageNextY < activeFloat.bottomY;
+
+  // Top spacing belongs to the paragraph, not to an internal RAM window.
+  // Apply it exactly once, before the first emitted line.
+  if (wordsExtractedInBlock == 0 && !startsBesideFloat) {
+    if (baseStyle.marginTop > 0) currentPageNextY += baseStyle.marginTop;
+    if (baseStyle.paddingTop > 0) currentPageNextY += baseStyle.paddingTop;
+  }
+
+  const int horizontalInset = baseStyle.totalHorizontalInset();
+  const uint16_t fullWidth =
+      (horizontalInset < viewportWidth) ? static_cast<uint16_t>(viewportWidth - horizontalInset) : viewportWidth;
+  const int lineHeight = renderer.getLineHeight(fontId) * lineCompression;
+
+  // IMPORTANT: use the same float geometry as makePages().  The old streaming
+  // path laid out early lines at full width, so Gutenberg-style drop caps and
+  // floated illustrations were visually overprinted by text even though CSS
+  // had parsed correctly.
+  if (activeFloat.active && currentPageNextY < activeFloat.bottomY && fullWidth > FLOAT_TEXT_GAP + 1) {
+    const int16_t reservedWidth = std::min<int16_t>(activeFloat.width + FLOAT_TEXT_GAP, fullWidth - 1);
+    const uint16_t floatTextWidth = static_cast<uint16_t>(fullWidth - reservedWidth);
+    const size_t floatLineCount = static_cast<size_t>(std::max<int16_t>(
+        1, static_cast<int16_t>((activeFloat.bottomY - currentPageNextY + lineHeight - 1) / lineHeight)));
+
+    BlockStyle floatStyle = baseStyle;
+    if (!activeFloat.right) {
+      floatStyle.marginLeft = static_cast<int16_t>(floatStyle.marginLeft + reservedWidth);
+    }
+    currentTextBlock->setBlockStyle(floatStyle);
+    currentTextBlock->layoutAndExtractLines(
+        renderer, fontId, floatTextWidth,
+        [this](const std::shared_ptr<TextBlock>& textBlock) { addLineToPage(textBlock); }, true, floatLineCount);
+    currentTextBlock->setBlockStyle(baseStyle);
+    activeFloat.active = currentPageNextY < activeFloat.bottomY;
+
+    if (lowMemoryAbort || currentTextBlock->isEmpty()) {
+      return;
+    }
+  }
+
+  // Once the float has ended (or when there was none), continue the same
+  // paragraph at its normal CSS width. Keep the final incomplete line so the
+  // next Expat callback can continue it without changing visible pagination.
+  if (!activeFloat.active || currentPageNextY >= activeFloat.bottomY) {
+    currentTextBlock->layoutAndExtractLines(
+        renderer, fontId, fullWidth,
+        [this](const std::shared_ptr<TextBlock>& textBlock) { addLineToPage(textBlock); }, false, SIZE_MAX, 2);
+  }
+}
+
+bool ChapterHtmlSlimParser::relieveEpubMemoryPressure(const char* stage, const bool allowPageSpool) {
+  // FB2 uses its own virtual-chapter pagination and cache lifecycle. Keep this
+  // pressure-relief path strictly for real EPUBs so FB2 page counts/layout stay
+  // byte-for-byte on the existing code path.
+  if (!epub || epub->isFb2Package() || lowMemoryAbort) {
+    return false;
+  }
+
+  const auto before = MemoryBudget::snapshot();
+  bool didWork = false;
+
+  // Finish the word currently being accumulated, then extract every complete
+  // line from the active paragraph. ParsedText::layoutAndExtractLines() erases
+  // consumed words, so this immediately releases the vectors/strings that were
+  // competing with an image decoder. Keep the final line because more inline
+  // text may still belong to the same paragraph.
+  if (currentTextBlock) {
+    if (partWordBufferIndex > 0) {
+      flushPartWordBuffer();
+      didWork = true;
+    }
+    if (!currentTextBlock->isEmpty()) {
+      drainCurrentTextBlockForStreaming();
+      didWork = true;
+    }
+  }
+
+  // IMPORTANT: never serialize a partially filled screen page merely to free
+  // memory. addLineToPage() is the sole owner of visible page boundaries and
+  // completes a page only when viewportHeight is actually full. We may drain
+  // complete *lines* from ParsedText above, but they keep accumulating in the
+  // same Page until the normal paginator reaches the bottom of the 800x480
+  // viewport. This decouples internal RAM chunking from user-visible pages.
+  //
+  // keep the argument for API compatibility with older callers; it no longer
+  // permits an early screen-page break.
+  (void)allowPageSpool;
+
+  const auto after = MemoryBudget::snapshot();
+  if (didWork) {
+    LOG_DBG("EHP", "EPUB pressure relief before %s: free=%u->%u maxAlloc=%u->%u", stage, before.freeHeap,
+            after.freeHeap, before.maxAllocHeap, after.maxAllocHeap);
+  }
+  return didWork;
+}
+
 bool ChapterHtmlSlimParser::shouldAbortForLowMemory(const char* stage) {
   if (lowMemoryAbort) {
     return true;
   }
 
   auto heap = MemoryBudget::snapshot();
-  if (heap.freeHeap >= MIN_FREE_HEAP_FOR_TEXT_LAYOUT && heap.maxAllocHeap >= MIN_MAX_ALLOC_FOR_TEXT_LAYOUT) {
+
+  // Real EPUBs have a bounded text working set: long paragraphs are drained
+  // through the line breaker in 64-word windows and visible Page boundaries
+  // are still owned exclusively by addLineToPage(). Therefore a fragmented
+  // heap with a 16-23 KiB largest block is not, by itself, a reason to throw
+  // away the chapter. FB2 keeps the older conservative limits.
+  const bool boundedRealEpub = epub && !epub->isFb2Package();
+  const uint32_t fatalFree = boundedRealEpub ? EPUB_FATAL_FREE_HEAP : MIN_FREE_HEAP_FOR_TEXT_LAYOUT;
+  const uint32_t fatalMaxAlloc = boundedRealEpub ? EPUB_FATAL_MAX_ALLOC : MIN_MAX_ALLOC_FOR_TEXT_LAYOUT;
+
+  // Start pressure relief early, while there is still enough contiguous RAM to
+  // finish the current line. This may drain complete text lines, never a
+  // partially filled screen page.
+  if (heap.freeHeap < EPUB_PRESSURE_FREE_HEAP || heap.maxAllocHeap < EPUB_PRESSURE_MAX_ALLOC) {
+    if (relieveEpubMemoryPressure(stage, true)) {
+      heap = MemoryBudget::snapshot();
+    }
+  }
+
+  if (heap.freeHeap >= fatalFree && heap.maxAllocHeap >= fatalMaxAlloc) {
     return false;
   }
 
+  // Glyph data is rebuildable. Try reclaiming it before declaring the section
+  // unsafe. One trim per parser instance is enough; repeated trims in the same
+  // parse only add churn without releasing new ownership.
   if (!attemptedTextLayoutFontCacheRelease) {
     attemptedTextLayoutFontCacheRelease = true;
     if (renderer.trimSdCardFontForLowMemory(fontId)) {
@@ -256,14 +408,14 @@ bool ChapterHtmlSlimParser::shouldAbortForLowMemory(const char* stage) {
       LOG_DBG("EHP", "Trimmed SD font glyph cache before %s: free=%u->%u maxAlloc=%u->%u", stage, heap.freeHeap,
               afterRelease.freeHeap, heap.maxAllocHeap, afterRelease.maxAllocHeap);
       heap = afterRelease;
-      if (heap.freeHeap >= MIN_FREE_HEAP_FOR_TEXT_LAYOUT && heap.maxAllocHeap >= MIN_MAX_ALLOC_FOR_TEXT_LAYOUT) {
+      if (heap.freeHeap >= fatalFree && heap.maxAllocHeap >= fatalMaxAlloc) {
         return false;
       }
     }
   }
 
-  LOG_ERR("EHP", "Low heap during %s (%u free, %u max alloc); aborting section build", stage, heap.freeHeap,
-          heap.maxAllocHeap);
+  LOG_ERR("EHP", "Low heap during %s (%u free, %u max alloc, floor=%u/%u); aborting section build", stage,
+          heap.freeHeap, heap.maxAllocHeap, fatalFree, fatalMaxAlloc);
   lowMemoryAbort = true;
   return true;
 }
@@ -376,6 +528,21 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
   currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues, effectiveBackgroundBlack);
   partWordBufferIndex = 0;
   nextWordContinues = false;
+
+  // Stream long EPUB paragraphs through the line breaker before their token
+  // vectors can monopolize the tiny ESP32-C3 heap. The helper deliberately
+  // mirrors normal CSS/float geometry, so internal RAM windows never alter
+  // publisher layout or visible page boundaries. FB2 stays untouched.
+  if (epub && !epub->isFb2Package() && currentTextBlock &&
+      currentTextBlock->size() >= MAX_BUFFERED_WORDS_BEFORE_LAYOUT) {
+    drainCurrentTextBlockForStreaming();
+    if (lowMemoryAbort) return;
+
+    const auto heap = MemoryBudget::snapshot();
+    LOG_DBG("EHP", "Streaming EPUB text window: remaining=%u free=%u maxAlloc=%u",
+            static_cast<unsigned>(currentTextBlock->size()), heap.freeHeap, heap.maxAllocHeap);
+  }
+
 }
 
 // start a new text block if needed
@@ -429,6 +596,7 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
     lowMemoryAbort = true;
     return;
   }
+
   wordsExtractedInBlock = 0;
 }
 
@@ -917,6 +1085,29 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     }
   }
 
+  // Synthetic FB2 packages use this private marker immediately after
+  // their metadata cover. Finalize the cover page and start a clean page for
+  // title/annotation/body text. It deliberately bypasses CSS so publisher
+  // styles cannot accidentally disable the boundary.
+  if (attributeContainsToken(classAttr.c_str(), "inkmod-fb2-cover-page-break")) {
+    if (self->partWordBufferIndex > 0 && self->currentTextBlock) {
+      self->flushPartWordBuffer();
+    }
+    if (self->currentTextBlock && !self->currentTextBlock->isEmpty()) {
+      self->makePages();
+    }
+    self->currentTextBlock.reset();
+    if (self->currentPage && !self->currentPage->elements.empty()) {
+      self->completePageFn(std::move(self->currentPage), self->xpathParagraphIndex, self->xpathListItemIndex);
+      self->completedPageCount++;
+    }
+    if (!self->startNewPage("FB2 cover page break")) {
+      return;
+    }
+    self->skipCurrentElement();
+    return;
+  }
+
   auto centeredBlockStyle = BlockStyle();
   centeredBlockStyle.textAlignDefined = true;
   centeredBlockStyle.alignment = CssTextAlign::Center;
@@ -925,10 +1116,29 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   // before tag-specific branches emit any content or metadata.
   CssStyle cssStyle;
   if (self->cssParser) {
-    cssStyle = self->cssParser->resolveStyle(name, classAttr, self->ancestorStack_);
+    const bool realEpubWithPublisherCss = self->epub && !self->epub->isFb2Package() && self->embeddedStyle;
+
+    // Real EPUB must keep the publisher's stylesheet as the source of truth.
+    // The convenience const-char* overload intentionally locks <p> vertical
+    // spacing for inkMOD's normalized book profile, which is useful for the
+    // generated FB2 package but destroys real EPUB typography. Use the raw
+    // string_view resolver for EPUB so margins, alignment, indents, headings,
+    // drop-caps, etc. survive exactly as authored.
+    if (realEpubWithPublisherCss) {
+      cssStyle = self->cssParser->resolveStyle(std::string_view(name), std::string_view(classAttr), self->ancestorStack_);
+    } else {
+      cssStyle = self->cssParser->resolveStyle(name, classAttr, self->ancestorStack_);
+    }
+
     if (!styleAttr.empty()) {
       CssStyle inlineStyle = CssParser::parseInlineStyle(styleAttr);
       cssStyle.applyOver(inlineStyle);
+    }
+
+    // ClassicBookProfile is an inkMOD normalization layer for FB2-generated
+    // XHTML. Never apply it over a real EPUB publisher stylesheet.
+    if (!realEpubWithPublisherCss) {
+      applyInkmodClassicBookProfile(name, classAttr, self->ancestorStack_, cssStyle);
     }
     if (self->shouldAbortForLowMemory("CSS style resolution")) {
       return;
@@ -1334,18 +1544,59 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                     }
                   }
 
-                  // PNGdec allocates its internal inflater with ordinary
-                  // `new`.  Rendering after the complete section has been
-                  // paginated leaves too little contiguous heap for that
-                  // allocation and used to reboot the device.  Build the
-                  // small, screen-sized pixel cache while this parser still
-                  // has its initial heap budget; later page draws only stream
-                  // the .pxc rows from SD.  The temporary framebuffer output
-                  // is harmless: the final page redraw replaces it.
+                  // Flush text BEFORE asking the image decoder for RAM. The old
+                  // order decoded/pre-cached the image while ParsedText still owned
+                  // the preceding paragraph's strings, line-break vectors and glyph
+                  // metrics. On ESP32-C3 that made image-heavy books fail despite
+                  // the text already being eligible to spool to SD.
+                  if (self->partWordBufferIndex > 0) {
+                    self->flushPartWordBuffer();
+                  }
+                  if (self->currentTextBlock && !self->currentTextBlock->isEmpty()) {
+                    const BlockStyle parentBlockStyle = self->currentTextBlock->getBlockStyle();
+                    self->startNewTextBlock(parentBlockStyle);
+                  }
+
+                  // For real EPUBs only, if the current page itself is the thing
+                  // preventing the decoder from fitting, serialize that page now.
+                  // This intentionally does not run for FB2: FB2 keeps its established
+                  // virtual-chapter pagination and exact page-count path.
+                  if (!self->epub->isFb2Package() && self->currentPage && !self->currentPage->elements.empty()) {
+                    const auto imageHeap = MemoryBudget::snapshot();
+                    const auto imageReq = MemoryBudget::epubInlineImageRequirementForSource(cachedImagePath.c_str());
+                    if (!MemoryBudget::hasHeap(imageHeap, imageReq.minFree, imageReq.minMaxAlloc)) {
+                      self->completePageFn(std::move(self->currentPage), self->xpathParagraphIndex,
+                                           self->xpathListItemIndex);
+                      self->completedPageCount++;
+                      if (!self->startNewPage("EPUB image memory-pressure spool")) {
+                        return;
+                      }
+                      self->activeFloat.active = false;
+                      self->renderer.trimSdCardFontForLowMemory(self->fontId);
+                      const auto afterSpool = MemoryBudget::snapshot();
+                      LOG_DBG("EHP",
+                              "Spool before inline image: free=%u->%u maxAlloc=%u->%u path=%s",
+                              imageHeap.freeHeap, afterSpool.freeHeap, imageHeap.maxAllocHeap,
+                              afterSpool.maxAllocHeap, cachedImagePath.c_str());
+                    }
+                  }
+
+                  // Build the screen-sized pixel cache only after text pressure has
+                  // been relieved. Later page draws stream .pxc rows from SD.
                   const size_t imageDot = cachedImagePath.rfind('.');
                   const std::string pixelCachePath =
                       imageDot == std::string::npos ? cachedImagePath + ".pxc"
                                                      : cachedImagePath.substr(0, imageDot) + ".pxc";
+                  if (!Storage.exists(pixelCachePath.c_str())) {
+                    // The glyph cache is rebuildable and often accounts for the
+                    // last few KiB that make an otherwise valid JPEG miss the
+                    // decoder gate. Reclaim it before deciding to defer an image.
+                    const auto beforeImageGate = MemoryBudget::snapshot();
+                    const auto imageReq = MemoryBudget::epubInlineImageRequirementForSource(cachedImagePath.c_str());
+                    if (!MemoryBudget::hasHeap(beforeImageGate, imageReq.minFree, imageReq.minMaxAlloc)) {
+                      self->renderer.trimSdCardFontForLowMemory(self->fontId);
+                    }
+                  }
                   if (!Storage.exists(pixelCachePath.c_str()) &&
                       MemoryBudget::hasHeapForEpubInlineImage("EHP", cachedImagePath.c_str())) {
                     RenderConfig precacheConfig;
@@ -1361,15 +1612,6 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                       LOG_ERR("EHP", "Deferred image cache failed; image may be retried on display: %s",
                               cachedImagePath.c_str());
                     }
-                  }
-
-                  // Flush any pending text block so it appears before the image
-                  if (self->partWordBufferIndex > 0) {
-                    self->flushPartWordBuffer();
-                  }
-                  if (self->currentTextBlock && !self->currentTextBlock->isEmpty()) {
-                    const BlockStyle parentBlockStyle = self->currentTextBlock->getBlockStyle();
-                    self->startNewTextBlock(parentBlockStyle);
                   }
 
                   int16_t imageMarginTop = 0;
@@ -1538,11 +1780,21 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   const float emSize = static_cast<float>(self->renderer.getFontAscenderSize(self->fontId));
 
   const CssTextAlign requestedAlign = static_cast<CssTextAlign>(self->paragraphAlignment);
-  auto userAlignmentBlockStyle = BlockStyle::fromCssStyle(cssStyle, emSize, requestedAlign, self->viewportWidth);
+  const bool realEpubPublisherLayout = self->epub && !self->epub->isFb2Package() && self->embeddedStyle;
+  const bool isParagraphElement = strcmp(name, "p") == 0;
 
-  if (!self->embeddedStyle || requestedAlign != CssTextAlign::None) {
+  // With publisher styling enabled, real EPUB structural elements (headings,
+  // captions, epigraphs, etc.) must keep their own text-align. Reader
+  // paragraph alignment is only a prose preference, not a global CSS override.
+  const CssTextAlign effectiveUserAlign =
+      (realEpubPublisherLayout && !isParagraphElement) ? CssTextAlign::None : requestedAlign;
+  auto userAlignmentBlockStyle =
+      BlockStyle::fromCssStyle(cssStyle, emSize, effectiveUserAlign, self->viewportWidth);
+
+  if (!self->embeddedStyle || (effectiveUserAlign != CssTextAlign::None && (!realEpubPublisherLayout || isParagraphElement))) {
     userAlignmentBlockStyle.textAlignDefined = true;
-    userAlignmentBlockStyle.alignment = requestedAlign == CssTextAlign::None ? CssTextAlign::Justify : requestedAlign;
+    userAlignmentBlockStyle.alignment =
+        effectiveUserAlign == CssTextAlign::None ? CssTextAlign::Justify : effectiveUserAlign;
   }
 
   if (!self->embeddedStyle) {
@@ -1556,7 +1808,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     userAlignmentBlockStyle.paddingBottom = 0;
     userAlignmentBlockStyle.textIndentDefined = false;
     userAlignmentBlockStyle.textIndent = 0;
-  } else if (self->extraParagraphSpacing == 0 && strcmp(name, "p") == 0) {
+  } else if (!realEpubPublisherLayout && self->extraParagraphSpacing == 0 && strcmp(name, "p") == 0) {
     // "Paragraph spacing: None" is a user layout override for normal prose.
     // Keep publisher styling enabled (alignment, indent, font styles and all
     // structural container/header spacing), but suppress only the vertical
@@ -1571,7 +1823,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
   // Force paragraph indent to prevent unreadable walls of text.
   // This applies if the publisher set text-indent: 0, omitted it, or if it was stripped by disabling embedded styles.
-  if (self->forceParagraphIndents && strcmp(name, "p") == 0) {
+  if (self->forceParagraphIndents && strcmp(name, "p") == 0 && !realEpubPublisherLayout) {
     static constexpr float forcedIndentEm = 1.0f;
     if (userAlignmentBlockStyle.alignment == CssTextAlign::Left ||
         userAlignmentBlockStyle.alignment == CssTextAlign::Justify ||
@@ -2052,19 +2304,12 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
     self->partWordBuffer[self->partWordBufferIndex++] = s[i];
   }
 
-  // If a paragraph keeps growing, perform the layout and consume all but the last line.
-  // This turns the parser's text buffer into page records earlier, which keeps memory
-  // bounded for chapters with very long XHTML text runs.
-  // Spotted when reading Intermezzo, there are some really long text blocks in there.
-  if (self->currentTextBlock && self->currentTextBlock->size() > MAX_BUFFERED_WORDS_BEFORE_LAYOUT) {
-    LOG_DBG("EHP", "Text block too long, splitting into multiple pages");
-    const int horizontalInset = self->currentTextBlock->getBlockStyle().totalHorizontalInset();
-    const uint16_t effectiveWidth = (horizontalInset < self->viewportWidth)
-                                        ? static_cast<uint16_t>(self->viewportWidth - horizontalInset)
-                                        : self->viewportWidth;
-    self->currentTextBlock->layoutAndExtractLines(
-        self->renderer, self->fontId, effectiveWidth,
-        [self](const std::shared_ptr<TextBlock>& textBlock) { self->addLineToPage(textBlock); }, false);
+  // Secondary safety net for non-word paths (entities/CJK edge cases). Normal
+  // EPUB prose is already drained continuously by flushPartWordBuffer().
+  if (self->epub && !self->epub->isFb2Package() && self->currentTextBlock &&
+      self->currentTextBlock->size() > MAX_BUFFERED_WORDS_BEFORE_LAYOUT) {
+    LOG_DBG("EHP", "Post-callback EPUB text drain");
+    self->drainCurrentTextBlockForStreaming();
   }
 }
 
@@ -2440,11 +2685,16 @@ void ChapterHtmlSlimParser::makePages() {
   // neighbour often has a normal paragraph margin, which would otherwise
   // leave the drop capital visibly hanging above the text.
   const bool startsBesideFloat = activeFloat.active && currentPageNextY < activeFloat.bottomY;
-  if (!startsBesideFloat && blockStyle.marginTop > 0) {
-    currentPageNextY += blockStyle.marginTop;
-  }
-  if (!startsBesideFloat && blockStyle.paddingTop > 0) {
-    currentPageNextY += blockStyle.paddingTop;
+  // Streaming layout may already have emitted complete lines from this same
+  // paragraph. In that case its top spacing was applied before the first
+  // streamed line and must not be inserted again in the middle of the block.
+  if (wordsExtractedInBlock == 0) {
+    if (!startsBesideFloat && blockStyle.marginTop > 0) {
+      currentPageNextY += blockStyle.marginTop;
+    }
+    if (!startsBesideFloat && blockStyle.paddingTop > 0) {
+      currentPageNextY += blockStyle.paddingTop;
+    }
   }
 
   // Calculate effective width accounting for horizontal margins/padding

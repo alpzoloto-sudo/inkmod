@@ -61,6 +61,7 @@ constexpr int kFooterTopGap = 10;
 constexpr int kFooterLabelToBarGap = 3;
 constexpr int kFooterProgressBarHeight = 5;
 constexpr int kFooterPercentTopGap = 2;
+constexpr int kFooterPercentRightInset = 6;
 
 constexpr int kCornerRadius = 6;
 constexpr int kThinOutlineW = 1;    // always-visible outline around centre cover
@@ -442,7 +443,9 @@ void LyraCarouselTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect,
       }
       const int progressLabelW = renderer.getTextWidth(footerLabelFontId, progressLabel, EpdFontFamily::REGULAR);
       const int progressLabelY = progressBarY + kFooterProgressBarHeight + kFooterPercentTopGap;
-      renderer.drawText(footerLabelFontId, footerX + footerWidth - progressLabelW, progressLabelY, progressLabel, true,
+      const int progressLabelX =
+          std::max(footerX, footerX + footerWidth - progressLabelW - kFooterPercentRightInset);
+      renderer.drawText(footerLabelFontId, progressLabelX, progressLabelY, progressLabel, true,
                         EpdFontFamily::REGULAR);
     }
 

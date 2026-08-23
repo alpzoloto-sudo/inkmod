@@ -409,6 +409,29 @@ bool releaseReaderSdFontCachesForLowMemory(const GfxRenderer& renderer, const ch
   return true;
 }
 
+// Cross-spine jumps (chapter selection, footnotes, back from a footnote) can
+// start a new Section immediately after a heavy chapter.  Section destruction
+// releases the page/cache file state, but renderer glyph caches are intentionally
+// persistent and can leave the ESP32-C3 heap badly fragmented.  Reclaim only
+// rebuildable renderer/font data before the next spine build; do not unload the
+// selected font or change layout settings.
+void reclaimReaderNavigationMemory(GfxRenderer& renderer, const char* reason) {
+#if defined(ENABLE_SERIAL_LOG) && LOG_LEVEL >= 2
+  const auto before = MemoryBudget::snapshot();
+#endif
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    fcm->clearCache();
+  }
+  releaseReaderSdFontCachesForLowMemory(renderer, "ERS", reason);
+  delay(1);
+  yield();
+#if defined(ENABLE_SERIAL_LOG) && LOG_LEVEL >= 2
+  const auto after = MemoryBudget::snapshot();
+  LOG_INF("ERS", "Navigation memory reclaim (%s): free=%u->%u maxAlloc=%u->%u", reason, before.freeHeap,
+          after.freeHeap, before.maxAllocHeap, after.maxAllocHeap);
+#endif
+}
+
 int clampPercent(int percent) {
   if (percent < 0) {
     return 0;
@@ -1244,6 +1267,10 @@ void EpubReaderActivity::loop() {
     readerMenuRequested = false;
     if (longPressMenuHandled) {
       longPressMenuHandled = false;
+      if (pendingLongMenuSyncOnRelease) {
+        pendingLongMenuSyncOnRelease = false;
+        executeReaderQuickAction(InkMODSettings::LONG_MENU_SYNC_PROGRESS);
+      }
       return;
     }
     if (SETTINGS.longPressMenuAction != InkMODSettings::LONG_MENU_OFF &&
@@ -1349,6 +1376,11 @@ void EpubReaderActivity::loop() {
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Back) && longPressBackHandled) {
     longPressBackHandled = false;
+    if (pendingLongBackSyncOnRelease) {
+      pendingLongBackSyncOnRelease = false;
+      BootLog::step("SYNC", "long-press Back released; starting deferred progress sync");
+      executeReaderQuickAction(InkMODSettings::LONG_MENU_SYNC_PROGRESS);
+    }
     return;
   }
 
@@ -1356,8 +1388,14 @@ void EpubReaderActivity::loop() {
       mappedInput.getHeldTime() >= ReaderUtils::GO_HOME_MS) {
     longPressBackHandled = true;
     BootLog::stepf("SYNC", "long-press Back triggered, action=%d", static_cast<int>(SETTINGS.longPressBackAction));
-    executeReaderQuickAction(static_cast<InkMODSettings::LONG_PRESS_MENU_ACTION>(SETTINGS.longPressBackAction));
-    BootLog::step("SYNC", "executeReaderQuickAction() returned");
+    if (SETTINGS.longPressBackAction == InkMODSettings::LONG_MENU_SYNC_PROGRESS) {
+      // Do not enter Wi-Fi/KOReader sync while Back is physically held.
+      pendingLongBackSyncOnRelease = true;
+      BootLog::step("SYNC", "progress sync armed; waiting for Back release");
+    } else {
+      executeReaderQuickAction(static_cast<InkMODSettings::LONG_PRESS_MENU_ACTION>(SETTINGS.longPressBackAction));
+      BootLog::step("SYNC", "executeReaderQuickAction() returned");
+    }
     return;
   }
 
@@ -1600,6 +1638,7 @@ void EpubReaderActivity::applyCoalescedNavigationIfReady() {
 
   int32_t spineDelta = 0;
   int32_t pageDelta = 0;
+  bool crossedSpine = false;
   {
     RenderLock lock(*this);
     // The render task consumes the same queue before it displays a freshly
@@ -1624,6 +1663,7 @@ void EpubReaderActivity::applyCoalescedNavigationIfReady() {
         nextPageNumber = 0;
         pendingPageJump = 0;
         section.reset();
+        crossedSpine = true;
       }
     } else {
       if (section && section->pageCount > 0) {
@@ -1636,6 +1676,7 @@ void EpubReaderActivity::applyCoalescedNavigationIfReady() {
           currentSpineIndex++;
           nextPageNumber = 0;
           section.reset();
+          crossedSpine = true;
         } else if (targetPage >= section->pageCount && currentSpineIndex + 1 == epub->getSpineItemsCount()) {
           clearLogicalPageCarry();
           currentSpineIndex = epub->getSpineItemsCount();
@@ -1649,6 +1690,7 @@ void EpubReaderActivity::applyCoalescedNavigationIfReady() {
           nextPageNumber = 0;
           pendingPageJump = std::numeric_limits<uint16_t>::max();
           section.reset();
+          crossedSpine = true;
         } else {
           section->currentPage = static_cast<int>(std::max<int64_t>(
               0, std::min<int64_t>(targetPage, static_cast<int64_t>(section->pageCount) - 1)));
@@ -1661,6 +1703,10 @@ void EpubReaderActivity::applyCoalescedNavigationIfReady() {
       }
     }
   }
+  if (crossedSpine) {
+    reclaimReaderNavigationMemory(renderer, "page/chapter boundary");
+  }
+
   logicalStatusCacheSpineIndex = -1;
   logicalStatusCacheLocalPageCount = -1;
   requestUpdate();
@@ -1731,6 +1777,7 @@ void EpubReaderActivity::jumpToPercent(int percent) {
   nextPageNumber = 0;
   pendingPercentJump = true;
   section.reset();
+  reclaimReaderNavigationMemory(renderer, "percent jump");
   armReadingPaceWarmup("percent_jump");
 }
 
@@ -1765,6 +1812,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
               nextPageNumber = 0;
 
               section.reset();
+              reclaimReaderNavigationMemory(renderer, "chapter jump");
               armReadingPaceWarmup("chapter_jump");
               pauseReadingPaceTimer("chapter_jump");
             } else {
@@ -2433,16 +2481,10 @@ void EpubReaderActivity::executeReaderQuickAction(InkMODSettings::LONG_PRESS_MEN
       requestUpdate();
       break;
     case InkMODSettings::LONG_MENU_SYNC_PROGRESS:
-      // No longer assignable from Settings (see SettingsList.h) - this was
-      // the one path that kept hanging despite many attempted fixes
-      // (readerWork cancellation, RenderLock ordering, a render-task race,
-      // several rounds of ESP32 WiFi-driver-specific hardening). A
-      // pre-existing saved setting could still carry this raw value, so
-      // handle it explicitly: do nothing, same as IGNORE. The identical
-      // sync action remains available and reliable from the in-reader menu
-      // (Menu -> Sync), which is what triggers it here anyway - it was
-      // never the sync logic itself at fault, only reaching it from outside
-      // the reader with a button held.
+      // Reuse the exact same implementation as Menu -> Sync. Long-press
+      // front-button handlers defer this call until the physical button is
+      // released, avoiding the old held-button/network transition race.
+      onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction::SYNC);
       break;
     case InkMODSettings::LONG_MENU_MARK_FINISHED: {
       const bool newCompleted = !stats.isCompleted;
@@ -2691,6 +2733,11 @@ bool EpubReaderActivity::executeLongPowerButtonAction() {
 }
 
 void EpubReaderActivity::executeLongPressMenuAction() {
+  if (SETTINGS.longPressMenuAction == InkMODSettings::LONG_MENU_SYNC_PROGRESS) {
+    pendingLongMenuSyncOnRelease = true;
+    BootLog::step("SYNC", "progress sync armed; waiting for Menu release");
+    return;
+  }
   executeReaderQuickAction(static_cast<InkMODSettings::LONG_PRESS_MENU_ACTION>(SETTINGS.longPressMenuAction));
 }
 
@@ -2991,8 +3038,34 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       fcm->clearCache();
     }
 
+    // A section transition can leave the selected SD font's rebuildable glyph
+    // cache fragmented even after the previous Section object is destroyed.
+    // In the failing trace the next spine started at ~80 KiB and hit a real
+    // operator-new OOM, while the exact same spine succeeded after reboot at
+    // ~96 KiB. Reclaim that cache proactively before a missing-section build.
+    {
+      const auto preBuildHeap = MemoryBudget::snapshot();
+      if (renderer.isSdCardFont(readerFontId) &&
+          (preBuildHeap.freeHeap < 96U * 1024U || preBuildHeap.maxAllocHeap < 56U * 1024U)) {
+        if (renderer.trimSdCardFontForLowMemory(readerFontId)) {
+          const auto afterTrim = MemoryBudget::snapshot();
+          LOG_DBG("ERS", "Pre-build SD font trim: free=%u->%u maxAlloc=%u->%u", preBuildHeap.freeHeap,
+                  afterTrim.freeHeap, preBuildHeap.maxAllocHeap, afterTrim.maxAllocHeap);
+        }
+      }
+    }
+
     auto heap = MemoryBudget::snapshot();
     auto memoryPolicy = reader::selectReaderMemoryPolicy(heap.freeHeap, heap.maxAllocHeap);
+
+    // Real EPUB chapter sources are cached uncompressed on SD after their
+    // first extraction. Once that source exists, section rebuilds no longer
+    // need the 32 KiB DEFLATE dictionary, so a moderately fragmented heap can
+    // still safely use the full publisher-quality path. FB2 keeps its existing
+    // policy and lifecycle.
+    if (!epub->isFb2Package() && heap.freeHeap >= 72U * 1024U && heap.maxAllocHeap >= 26U * 1024U) {
+      memoryPolicy = {reader::ReaderMemoryMode::Normal, true, true, true, true, true};
+    }
     if (memoryPolicy.mode == reader::ReaderMemoryMode::Unavailable && canUseFallbackFont) {
       releaseReaderSdFontCachesForLowMemory(renderer, "ERS", "reader memory-mode selection");
       heap = MemoryBudget::snapshot();
@@ -3012,6 +3085,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       yield();
       heap = MemoryBudget::snapshot();
       memoryPolicy = reader::selectReaderMemoryPolicy(heap.freeHeap, heap.maxAllocHeap);
+      if (!epub->isFb2Package() && heap.freeHeap >= 72U * 1024U && heap.maxAllocHeap >= 26U * 1024U) {
+        memoryPolicy = {reader::ReaderMemoryMode::Normal, true, true, true, true, true};
+      }
     }
 
     bool loadedSection = false;
@@ -3061,9 +3137,35 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
     if (!loadedSection) {
       if (memoryPolicy.mode == reader::ReaderMemoryMode::Unavailable) {
-        LOG_ERR("ERS", "Reader has no safe memory mode (free=%u maxAlloc=%u)", heap.freeHeap, heap.maxAllocHeap);
-        showLowMemoryLayoutError();
-        return;
+        // A fragmented heap is not the same thing as an exhausted heap.
+        // Real EPUB sources are streamed from the SD cache and the parser has
+        // its own bounded-pressure checks, so do not reject the next spine
+        // solely because the largest free block fell below ReaderWork's
+        // conservative pre-flight threshold.  First reclaim every rebuildable
+        // font/glyph allocation, then allow one publisher-quality attempt.
+        if (!epub->isFb2Package() && heap.freeHeap >= 48U * 1024U && heap.maxAllocHeap >= 12U * 1024U) {
+          if (auto* fcm = renderer.getFontCacheManager()) {
+            fcm->clearCache();
+          }
+          if (renderer.isSdCardFont(readerFontId)) {
+            releaseReaderSdFontCachesForLowMemory(renderer, "ERS", "fragmented EPUB preflight");
+          }
+          delay(1);
+          yield();
+          const auto reclaimed = MemoryBudget::snapshot();
+          LOG_INF("ERS",
+                  "Fragmented EPUB heap: allowing streaming normal attempt (free=%u->%u maxAlloc=%u->%u)",
+                  heap.freeHeap, reclaimed.freeHeap, heap.maxAllocHeap, reclaimed.maxAllocHeap);
+          heap = reclaimed;
+          // The build loop below always starts in Normal mode and will fall
+          // back only after a real parser/allocation failure.  This preserves
+          // CSS/images while avoiding the false 'no safe memory mode' exit.
+          memoryPolicy = {reader::ReaderMemoryMode::Normal, true, true, true, true, true};
+        } else {
+          LOG_ERR("ERS", "Reader has no safe memory mode (free=%u maxAlloc=%u)", heap.freeHeap, heap.maxAllocHeap);
+          showLowMemoryLayoutError();
+          return;
+        }
       }
 
       showChapterLoadingPopup();
@@ -3186,17 +3288,16 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         LOG_INF("ERS", "Retrying spine %d after emergency cache reclaim (free=%u maxAlloc=%u)",
                 currentSpineIndex, recovered.freeHeap, recovered.maxAllocHeap);
 
-        // Final emergency retry keeps the selected reader font, but sheds the
-        // two heaviest optional layout inputs. Normal/Safe/Survival already
-        // tried the full book styling and images; at this point readable text
-        // is preferable to ejecting the user back to Home on one oversized
-        // EPUB spine item.
+        // Final emergency retry happens after the failed parser and font caches
+        // have actually unwound.  Preserve publisher CSS and illustrations:
+        // silently turning an EPUB into plain text made a successful open look
+        // like data loss.  Survival mode already drops only optional reader
+        // effects/hyphenation, which is enough to reduce transient pressure.
         SectionMemoryConfig retryConfig =
             sectionMemoryConfig(reader::ReaderMemoryMode::Survival, readerFontId, fallbackFontId);
-        retryConfig.hyphenationEnabled = SETTINGS.hyphenationEnabled != 0;
-        retryConfig.embeddedStyle = false;
-        retryConfig.imageRendering = InkMODSettings::IMAGES_SUPPRESS;
-        LOG_INF("ERS", "Emergency text-only retry for spine %d with selected font", currentSpineIndex);
+        retryConfig.embeddedStyle = SETTINGS.embeddedStyle != 0;
+        retryConfig.imageRendering = SETTINGS.imageRendering;
+        LOG_INF("ERS", "Emergency full-content retry for spine %d with selected font", currentSpineIndex);
         section = makeUniqueNoThrow<Section>(epub, currentSpineIndex, renderer, retryConfig.suffix);
         if (section) {
           bool retryImagesSuppressed = false;
@@ -4042,6 +4143,7 @@ void EpubReaderActivity::navigateToHref(const std::string& hrefStr, const bool s
     nextPageNumber = 0;
     section.reset();
   }
+  reclaimReaderNavigationMemory(renderer, savePosition ? "footnote/href jump" : "href jump");
   armReadingPaceWarmup(savePosition ? "href_navigation" : "href_restore");
   requestUpdate();
   LOG_DBG("ERS", "Navigated to spine %d for href: %s", targetSpineIndex, hrefStr.c_str());
@@ -4060,6 +4162,7 @@ void EpubReaderActivity::restoreSavedPosition() {
     nextPageNumber = pos.pageNumber;
     section.reset();
   }
+  reclaimReaderNavigationMemory(renderer, "footnote return");
   armReadingPaceWarmup("saved_position_restore");
   requestUpdate();
 }

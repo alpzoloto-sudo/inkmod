@@ -44,9 +44,12 @@ constexpr size_t MAX_RULES = 1500;
 // Maximum number of two-part descendant rules (ancestor subject) to store
 constexpr size_t MAX_DESCENDANT_RULES = CssParser::MAX_DESCENDANT_RULES;
 
-// Minimum free heap required to apply CSS during rendering
-// If below this threshold, we skip CSS to avoid display artifacts.
-constexpr size_t MIN_FREE_HEAP_FOR_CSS = 48 * 1024;
+// Style lookup itself is allocation-light: it probes already-loaded maps and
+// merges a small CssStyle value.  Returning an empty style at 48 KiB silently
+// stripped publisher formatting exactly when image-heavy chapters were under
+// pressure.  Keep only a true emergency floor; allocation-producing parser
+// paths have their own guards.
+constexpr size_t MIN_FREE_HEAP_FOR_CSS = 16 * 1024;
 
 // Maximum length for a single selector string
 // Prevents parsing of extremely long or malformed selectors
@@ -1038,6 +1041,14 @@ bool CssParser::loadFromCache() {
     rulesBySelector_.clear();
     return false;
   }
+
+  // Allocate the hash table once at its final size.  On ESP32-C3, letting
+  // unordered_map grow through several rehashes while loading every chapter's
+  // CSS cache creates large temporary bucket arrays and fragments the heap.
+  // A later rehash was observed to OOM even with ~70-90 KiB total free.
+  // Reserving from the serialized rule count removes those transient growth
+  // allocations; individual selector/style nodes are then the only inserts.
+  rulesBySelector_.reserve(ruleCount);
 
   auto hasRemainingBytes = [&file](const size_t neededBytes) -> bool {
     return static_cast<size_t>(file.available()) >= neededBytes;

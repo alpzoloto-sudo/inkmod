@@ -25,10 +25,13 @@ struct HeapRequirement {
 // would safely allow them, causing the reader to abort and eject the user.
 constexpr uint32_t EPUB_INLINE_IMAGE_MIN_FREE = 92U * 1024U;
 constexpr uint32_t EPUB_INLINE_IMAGE_MIN_MAX_ALLOC = 44U * 1024U;
-// JPEGDEC needs about 20 KB plus its 48 KB safety margin. Requiring the
+// JPEGDEC needs about 20 KB plus its dedicated 24 KB safety margin. Requiring the
 // PNG-sized 96 KB budget here needlessly suppresses otherwise safe JPEGs.
-constexpr uint32_t EPUB_INLINE_JPEG_MIN_FREE = 72U * 1024U;
-constexpr uint32_t EPUB_INLINE_JPEG_MIN_MAX_ALLOC = 42U * 1024U;
+// Match the decoder's real guard (20 KiB JPEGDEC + 24 KiB headroom).  The
+// previous 42 KiB contiguous-allocation gate rejected JPEG precaching even
+// though JPEGDEC itself only needs a ~20 KiB contiguous allocation.
+constexpr uint32_t EPUB_INLINE_JPEG_MIN_FREE = 44U * 1024U;
+constexpr uint32_t EPUB_INLINE_JPEG_MIN_MAX_ALLOC = 20U * 1024U;
 constexpr uint32_t EPUB_INLINE_IMAGE_SD_FONT_RELEASE_MIN_FREE = 120U * 1024U;
 constexpr uint32_t EPUB_INLINE_IMAGE_SD_FONT_RELEASE_MIN_MAX_ALLOC = 80U * 1024U;
 constexpr uint32_t OPTIONAL_EPUB_REBUILD_MIN_FREE = 96U * 1024U;
@@ -48,6 +51,7 @@ constexpr uint32_t OPTIONAL_EPUB_REBUILD_MIN_MAX_ALLOC = 48U * 1024U;
 // well past that observed margin so a modest concurrent allocation in the
 // gap can't eat all of it.
 constexpr uint32_t IMAGE_DECODER_HEADROOM = 48U * 1024U;
+constexpr uint32_t JPEG_DECODER_HEADROOM = 24U * 1024U;
 
 inline HeapSnapshot snapshot() { return {ESP.getFreeHeap(), ESP.getMaxAllocHeap()}; }
 
@@ -123,9 +127,10 @@ inline bool hasHeapForOptionalEpubRebuild(const char* tag, const char* action, c
   return false;
 }
 
-inline bool hasHeapForImageDecoder(const char* tag, const char* decoderName, const uint32_t decoderApproxBytes) {
+inline bool hasHeapForImageDecoder(const char* tag, const char* decoderName, const uint32_t decoderApproxBytes,
+                                   const uint32_t headroom = IMAGE_DECODER_HEADROOM) {
   const auto heap = snapshot();
-  const uint32_t minFree = decoderApproxBytes + IMAGE_DECODER_HEADROOM;
+  const uint32_t minFree = decoderApproxBytes + headroom;
   if (hasHeap(heap, minFree, decoderApproxBytes)) {
     return true;
   }

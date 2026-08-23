@@ -47,6 +47,15 @@ class Activity {
   virtual bool allowPowerAsConfirmInReaderMode() const { return false; }
   virtual bool canSnapshotForSleepOverlay() const { return false; }
   virtual std::string getCurrentBookPath() const { return {}; }
+  // Called just before another activity is pushed on top of this one (see
+  // ActivityManager::pushActivity) — unlike replaceActivity, a pushed
+  // activity keeps this one fully alive in the background stack so it can
+  // be returned to, so nothing about it is freed automatically. Activities
+  // holding large heap-resident state (e.g. the reader's decoded chapter
+  // Section) should override this to release what it can safely regenerate
+  // on return, so the activity being pushed doesn't have to compete with a
+  // full duplicate of this activity's own working set for RAM.
+  virtual void releaseHeavyResourcesForBackgroundActivity() {}
   virtual ScreenshotInfo getScreenshotInfo() const { return {}; }
 
   // Start a new activity without destroying the current one

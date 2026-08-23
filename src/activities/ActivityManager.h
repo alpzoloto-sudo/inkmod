@@ -124,6 +124,12 @@ class ActivityManager {
   // Unlike isReaderActivity(), this checks only the activity currently on
   // screen and ignores a reader parked underneath a modal/menu activity.
   bool isCurrentReaderActivity() const;
+  // Immediately releases the current activity's heavy heap-resident state
+  // (see Activity::releaseHeavyResourcesForBackgroundActivity()). Call this
+  // before doing your own heavy allocation/loading if you're about to
+  // pushActivity() - pushActivity() alone only frees it once the queued push
+  // is actually processed, which is too late to help your own peak usage.
+  void releaseCurrentActivityHeavyResources();
   bool canSnapshotForSleepOverlay() const;
   bool skipLoopDelay() const;
   std::string getCurrentBookPath() const;

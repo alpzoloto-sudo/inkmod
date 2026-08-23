@@ -379,6 +379,16 @@ bool isGlobalPowerButtonAction(const InkMODSettings::SHORT_PWRBTN action) {
 }
 
 bool startGlobalSyncProgress() {
+  // If a reader is currently open (e.g. this was triggered by a long-press
+  // while reading, not from the in-reader menu), its decoded Section is
+  // still fully resident at this point. Free it now, before loading a second
+  // independent Epub for potentially the same file below - otherwise both
+  // the reader's full working set AND this fresh load compete for RAM at
+  // once, which is exactly the peak that was crashing/hanging the device.
+  // (The in-reader "Sync" menu item never hit this because it reuses the
+  // already-loaded Epub and frees its own Section itself before proceeding.)
+  activityManager.releaseCurrentActivityHeavyResources();
+
   if (!KOREADER_STORE.hasCredentials()) {
     activityManager.pushActivity(std::make_unique<KOReaderSettingsActivity>(renderer, mappedInputManager));
     return true;

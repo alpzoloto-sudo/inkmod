@@ -226,6 +226,17 @@ class EpubReaderActivity final : public Activity {
   bool isReaderActivity() const override { return true; }
   bool canSnapshotForSleepOverlay() const override { return true; }
   std::string getCurrentBookPath() const override { return epub ? epub->getPath() : std::string{}; }
+  // Same cleanup the in-reader SYNC menu action already does before handing
+  // off to KOReaderSyncActivity (see the MenuAction::SYNC case in
+  // handleMenuAction()) - free the heavy per-chapter Section now rather than
+  // leaving it resident for the whole time a pushed activity runs on top.
+  // It gets rebuilt normally from currentSpineIndex/nextPageNumber on return.
+  void releaseHeavyResourcesForBackgroundActivity() override {
+    if (!section) return;
+    RenderLock lock(*this);
+    nextPageNumber = section->currentPage;
+    section.reset();
+  }
   void setAutoPageTurnIntervalSeconds(uint16_t seconds);
   uint16_t getAutoPageTurnIntervalSeconds() const;
 

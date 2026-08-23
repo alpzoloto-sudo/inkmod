@@ -133,6 +133,14 @@ void ActivityManager::loop() {
           stackActivities.pop_back();
         }
       } else if (pendingAction == PendingAction::Push) {
+        // Give the outgoing activity a chance to free heap-heavy state it can
+        // safely regenerate on return (e.g. the reader's decoded Section) -
+        // unlike Replace, a pushed activity is kept fully alive on the stack
+        // for as long as whatever gets pushed on top of it runs, so its RAM
+        // stays committed the whole time unless it releases some itself here.
+        if (currentActivity) {
+          currentActivity->releaseHeavyResourcesForBackgroundActivity();
+        }
         // Move current activity to stack
         stackActivities.push_back(std::move(currentActivity));
         LOG_DBG("ACT", "Pushed to activity stack, new size = %zu", stackActivities.size());
@@ -302,6 +310,20 @@ bool ActivityManager::isReaderActivity() const {
 
 bool ActivityManager::isCurrentReaderActivity() const {
   return currentActivity && currentActivity->isReaderActivity();
+}
+
+void ActivityManager::releaseCurrentActivityHeavyResources() {
+  // Unlike the automatic release pushActivity() does for you, this runs
+  // immediately - for callers that need to free the current activity's RAM
+  // (e.g. the reader's decoded Section) *before* doing their own heavy
+  // allocation, not just once their activity actually gets pushed. Calling
+  // pushActivity() alone is too late for that: it only queues the push: this
+  // activity keeps holding its memory until the ActivityManager loop
+  // processes that queued action later, by which point the caller's own
+  // heavy work has often already run.
+  if (currentActivity) {
+    currentActivity->releaseHeavyResourcesForBackgroundActivity();
+  }
 }
 
 bool ActivityManager::canSnapshotForSleepOverlay() const {

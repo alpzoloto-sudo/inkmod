@@ -2934,6 +2934,19 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   const uint16_t viewportHeight = layout.viewportHeight;
 
   if (!section) {
+    // A pending push/pop/replace means this activity is about to stop being
+    // current (see ActivityManager::hasPendingActivityTransition()). Its own
+    // Section may have just been released for exactly that transition (see
+    // releaseHeavyResourcesForBackgroundActivity()/
+    // releaseCurrentActivityHeavyResources()) - reloading it here would run
+    // on the render task concurrently with whatever heavy work the main task
+    // is doing as part of that same transition (e.g. loading a second Epub
+    // for a background sync), racing both for the SD card at once. Just
+    // don't render this frame; the next real render happens after the
+    // transition, once this activity is current again with a fresh Section.
+    if (activityManager.hasPendingActivityTransition()) {
+      return;
+    }
     const auto filepath = epub->getSpineItem(currentSpineIndex).href;
     LOG_DBG("ERS", "Loading file: %s, index: %d (free=%u, maxAlloc=%u)", filepath.c_str(), currentSpineIndex,
             ESP.getFreeHeap(), ESP.getMaxAllocHeap());

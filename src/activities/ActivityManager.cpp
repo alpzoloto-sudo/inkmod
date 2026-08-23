@@ -181,6 +181,7 @@ void ActivityManager::exitActivity(const RenderLock& lock) {
 
 void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
   // Note: no lock here, this is usually called by loop() and we may run into deadlock
+  backgroundTransitionPending = false;
   if (currentActivity) {
     // Defer launch if we're currently in an activity, to avoid deleting the current activity
     // leading to the "delete this" problem
@@ -286,6 +287,8 @@ void ActivityManager::pushActivity(std::unique_ptr<Activity>&& activity) {
   }
   pendingActivity = std::move(activity);
   pendingAction = PendingAction::Push;
+  // pendingAction now covers the render-task guard; no need for both flags.
+  backgroundTransitionPending = false;
 }
 
 void ActivityManager::popActivity() {
@@ -295,6 +298,7 @@ void ActivityManager::popActivity() {
     pendingActivity.reset();
   }
   pendingAction = PendingAction::Pop;
+  backgroundTransitionPending = false;
 }
 
 bool ActivityManager::preventAutoSleep() const { return currentActivity && currentActivity->preventAutoSleep(); }
@@ -329,6 +333,7 @@ void ActivityManager::releaseCurrentActivityHeavyResources() {
   if (currentActivity) {
     RenderLock lock;
     currentActivity->releaseHeavyResourcesForBackgroundActivity();
+    backgroundTransitionPending = true;
   }
 }
 

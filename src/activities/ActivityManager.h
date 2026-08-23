@@ -55,6 +55,10 @@ class ActivityManager {
   std::unique_ptr<Activity> pendingActivity;
   enum class PendingAction { None, Push, Pop, Replace };
   PendingAction pendingAction = PendingAction::None;
+  // See hasPendingActivityTransition() - covers the window between
+  // releaseCurrentActivityHeavyResources() and the actual push/pop/replace
+  // call, which pendingAction alone does not cover.
+  bool backgroundTransitionPending = false;
 
   // Task to render and display the activity
   TaskHandle_t renderTaskHandle = nullptr;
@@ -124,6 +128,22 @@ class ActivityManager {
   // Unlike isReaderActivity(), this checks only the activity currently on
   // screen and ignores a reader parked underneath a modal/menu activity.
   bool isCurrentReaderActivity() const;
+  // True from the moment releaseCurrentActivityHeavyResources() runs until
+  // push/pop/replaceActivity() is actually called. The render task runs
+  // independently (see renderTaskLoop(), woken by xTaskNotify) and can still
+  // call the outgoing activity's render() in that window - activities that
+  // had heavy state released early (see releaseCurrentActivityHeavyResources())
+  // should check this and skip any work that would reacquire it, since a
+  // reload racing against whatever the caller is itself doing (e.g. loading
+  // a second Epub for a background sync) can contend for the same
+  // non-reentrant resources (the SD card) from two tasks at once.
+  // pendingAction alone is NOT enough for this: it's only set once
+  // pushActivity() is actually called, which can be well after
+  // releaseCurrentActivityHeavyResources() already dropped the resource -
+  // this flag covers that whole earlier window too.
+  bool hasPendingActivityTransition() const {
+    return pendingAction != PendingAction::None || backgroundTransitionPending;
+  }
   // Immediately releases the current activity's heavy heap-resident state
   // (see Activity::releaseHeavyResourcesForBackgroundActivity()). Call this
   // before doing your own heavy allocation/loading if you're about to

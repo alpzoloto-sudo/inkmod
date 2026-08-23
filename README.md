@@ -1,15 +1,15 @@
-<h1 align="center">⚠️ WARNING — XTEINK X3 ⚠️</h1>
-
-<h2 align="center">
-Some Xteink X3 display revisions are currently NOT COMPATIBLE with this firmware!
-</h2>
+<h1 align="center">⚠️ DISCLAIMER ⚠️</h1>
 
 <p align="center">
-<b>Before installing inkMOD on an X3, please make sure your display revision is supported.</b>
+<b>By installing inkMOD, you acknowledge that you are doing so entirely at your own risk.</b>
 </p>
 
 <p align="center">
-⚠️ Installing this firmware on an unsupported X3 display revision may result in the screen not working correctly.
+The developers and contributors of inkMOD accept <b>no responsibility or liability</b> for any damage, loss of functionality, software corruption, or bricked hardware that may occur to your device during or after the installation process.
+</p>
+
+<p align="center">
+<i>Proceed with caution and ensure you follow all instructions carefully.</i>
 </p>
 
 

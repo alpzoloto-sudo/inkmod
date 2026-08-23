@@ -2351,6 +2351,8 @@ void EpubReaderActivity::executeReaderQuickAction(InkMODSettings::LONG_PRESS_MEN
     navigationSettleUntilMs.store(0, std::memory_order_relaxed);
     if (epub && section) {
       saveProgress(currentSpineIndex, section->currentPage, section->pageCount);
+      cachedChapterTotalPageCount = section->pageCount;
+      nextPageNumber = section->currentPage;
     }
     {
       RenderLock lock(*this);
@@ -2413,6 +2415,12 @@ void EpubReaderActivity::executeReaderQuickAction(InkMODSettings::LONG_PRESS_MEN
       break;
     case InkMODSettings::LONG_MENU_SYNC_PROGRESS:
       if (KOREADER_STORE.hasCredentials()) {
+        // Matches every other network-transitioning case below
+        // (FILE_TRANSFER/CALIBRE_WIRELESS/JOIN_NETWORK/CREATE_HOTSPOT) - this
+        // was the one case that skipped it. Without cancelling readerWork
+        // first, any in-flight chapter load/layout keeps running alongside
+        // KOReaderSyncActivity's own SD and network work, racing it.
+        prepareForNetworkTransition("sync_progress");
         onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction::SYNC);
       } else {
         pauseReadingPaceTimer("koreader_settings");

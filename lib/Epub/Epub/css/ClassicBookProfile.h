@@ -100,15 +100,20 @@ inline void setItalic(CssStyle& style) {
   style.defined.fontStyle = 1;
 }
 
+inline void setNormalFontStyle(CssStyle& style) {
+  style.fontStyle = CssFontStyle::Normal;
+  style.defined.fontStyle = 1;
+}
+
 inline void apply(const char* tagName, const std::string& classAttr,
                   const std::vector<CssAncestorEntry>& ancestors, CssStyle& style) {
   const std::string_view tag = tagName ? std::string_view(tagName) : std::string_view{};
   const auto has = [&](std::string_view token) { return classHasToken(classAttr, token); };
   const auto inClass = [&](std::string_view token) { return ancestorHasClass(ancestors, token); };
 
-  const bool heading = tag == "h1" || tag == "h2" || tag == "h3" || tag == "h4" ||
-                       tag == "h5" || tag == "h6";
-  const bool subtitle = has("subtitle") || has("title-line") || has("subheading");
+  const bool topHeading = tag == "h1" || tag == "h2" || tag == "title" || has("title");
+  const bool subHeading = tag == "h3" || tag == "h4" || tag == "h5" || tag == "h6" || has("subtitle") ||
+                          has("title-line") || has("subheading");
   const bool poemContainer = has("poem") || has("poetry");
   const bool stanzaContainer = has("stanza") || has("stanza-break");
   const bool quoteContainer = tag == "blockquote" || has("cite") || has("quote") || has("epigraph");
@@ -119,7 +124,13 @@ inline void apply(const char* tagName, const std::string& classAttr,
                        inClass("quote") || inClass("epigraph");
 
   // Container geometry is inherited by the existing block-style stack.
-  if (heading || subtitle) {
+  if (topHeading) {
+    // Book/part/chapter-level titles (FB2 <title>, EPUB h1/h2/.title) keep a
+    // visible gap around them - unlike subHeading below, these usually are
+    // NOT already wrapped in a blank line by the source markup.
+    setLayout(style, CssTextAlign::Center, 0.0f, 0.6f, 0.6f, 0.0f, 0.0f);
+    setBoldNormal(style);
+  } else if (subHeading) {
     // No external top/bottom margin: FB2/EPUB source markup usually already
     // wraps these in a blank line, so an added margin here doubles the gap.
     setLayout(style, CssTextAlign::Center, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
@@ -138,11 +149,11 @@ inline void apply(const char* tagName, const std::string& classAttr,
   // Structural book paragraphs override this below.
   if (tag != "p") return;
 
-  if (subtitle) return;
+  if (subHeading) return;
 
-  if (has("text-author")) {
-    setLayout(style, CssTextAlign::Right, 0.0f, 0.3f, 0.0f, 0.0f, 0.0f);
-    setItalic(style);
+  if (has("text-author") || has("author") || has("cite-author")) {
+    setLayout(style, CssTextAlign::Right, 0.0f, 0.4f, 0.4f, 0.0f, 0.0f);
+    setNormalFontStyle(style);  // force non-italic, overriding any inherited italic
     return;
   }
   if (has("date")) {

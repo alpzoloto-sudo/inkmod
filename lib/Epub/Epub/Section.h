@@ -24,7 +24,7 @@ class Section {
   // fixes (notably Paragraph spacing=None preserving structural title/subtitle
   // spacing) without changing TextBlock/Page serialization or requiring the
   // user to clear .inkmod manually.
-  static constexpr const char* LAYOUT_CACHE_GENERATION = "_layout58";
+  static constexpr const char* LAYOUT_CACHE_GENERATION = "_layout60";
 
   bool writeSectionFileHeader(int fontId, float lineCompression, uint8_t extraParagraphSpacing, bool forceParagraphIndents,
                               uint8_t paragraphAlignment, uint16_t viewportWidth, uint16_t viewportHeight,

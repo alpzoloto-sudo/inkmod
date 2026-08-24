@@ -316,6 +316,7 @@
     fileInput.value = '';
     fileInput.classList.remove('has-files');
     document.getElementById('folderPickerInput').value = '';
+    folderPickedFiles = null;
     document.getElementById('folderModeInfo').style.display = 'none';
     const uploadBtn = document.getElementById('uploadBtn');
     uploadBtn.disabled = true;
@@ -327,7 +328,7 @@
     document.getElementById('progress-fill').style.width = '0%';
     document.getElementById('progress-fill').style.backgroundColor = '#27ae60';
     document.getElementById('convertBeforeUpload').checked = false;
-    document.getElementById('prepareBookBeforeUpload').checked = true;
+    document.getElementById('prepareBookBeforeUpload').checked = false;
     document.getElementById('convertInfo').style.display = 'none';
     document.getElementById('convertWarning').style.display = 'none';
     document.getElementById('fb2ToEpubCheckbox').checked = false;
@@ -1261,10 +1262,18 @@
     const folderInput = document.getElementById('folderPickerInput');
     if (!folderInput.files || folderInput.files.length === 0) return;
 
-    const dt = new DataTransfer();
-    Array.from(folderInput.files).forEach(f => dt.items.add(f));
-    const fileInput = document.getElementById('fileInput');
-    fileInput.files = dt.files;
+    // IMPORTANT (Safari/macOS): keep the original File objects. Rebuilding a
+    // FileList through DataTransfer may drop webkitRelativePath, which destroys
+    // the directory structure and makes large folder retries unreliable.
+    folderPickedFiles = Array.from(folderInput.files);
+
+    // Mirror the selection into the regular input only as a best-effort UI aid.
+    // The actual upload pipeline below uses folderPickedFiles directly.
+    try {
+      const dt = new DataTransfer();
+      folderPickedFiles.forEach(f => dt.items.add(f));
+      document.getElementById('fileInput').files = dt.files;
+    } catch (_) { /* Safari may not allow programmatic FileList assignment */ }
     folderInput.value = '';
 
     openUploadModal();
@@ -1274,7 +1283,8 @@
   function validateFile(fromFolderPicker = false) {
     const fileInput = document.getElementById('fileInput');
     const uploadBtn = document.getElementById('uploadBtn');
-    const files = fileInput.files;
+    if (!fromFolderPicker) folderPickedFiles = null;
+    const files = folderPickedFiles || fileInput.files;
     const convertOptions = document.getElementById('convertOptions');
     fileInput.classList.toggle('has-files', files.length > 0);
 
@@ -1326,20 +1336,9 @@
     }
     if (files.length > 0 && hasConvertible) {
       convertOptions.style.display = 'block';
-      // Large books are prepared in this browser before transfer. This keeps
-      // image resizing/splitting off the ESP32-C3 and avoids a long first-open
-      // indexing pass on the reader. The option remains visible so a user can
-      // explicitly turn it off for a lossless copy.
-      const hasLargeConvertible = Array.from(files).some(f => {
-        const n = f.name.toLowerCase();
-        return f.size >= 5 * 1024 * 1024 &&
-          (n.endsWith('.epub') || isFb2Name(n) || n.endsWith('.zip') || isImageName(n));
-      });
-      const convertCheckbox = document.getElementById('convertBeforeUpload');
-      if (hasLargeConvertible && convertCheckbox && !convertCheckbox.checked) {
-        convertCheckbox.checked = true;
-        toggleConvertOptions();
-      }
+      // Conversion/preparation must always be explicit. A plain upload is a
+      // byte-for-byte copy regardless of file size. Do NOT auto-enable either
+      // option for large EPUB/FB2/ZIP files.
     } else {
       convertOptions.style.display = 'none';
       // Clear stale checkbox state so the "Optimize & Upload" button doesn't linger
@@ -1392,8 +1391,11 @@ let operationCancelled = false; // Set by Cancel to stop conversion loops and up
 let uploadGeneration = 0;       // Incremented each uploadFile() call; guards stale restoreAfterCancel()
 let currentUploadWs = null;     // Active WebSocket reference for external abort
 let currentUploadXhr = null;    // Active XHR reference for external abort
+let folderPickedFiles = null;   // Preserve Safari's original File objects + webkitRelativePath
 const WS_PORT = 81;
 const WS_CHUNK_SIZE = 4096; // 4KB chunks - smaller for ESP32 stability
+const WS_LARGE_FILE_LIMIT = 8 * 1024 * 1024; // large files use HTTP from the start
+const IS_SAFARI = /^((?!chrome|chromium|crios|android).)*safari/i.test(navigator.userAgent);
 
 // ============================================================================
 // EPUB Image Conversion Functions (from Baseline JPEG Converter)
@@ -4580,23 +4582,41 @@ async function ensureRemoteFolderPath(fullPath) {
   for (const seg of segments) {
     const parent = current === '' ? '/' : current;
     current = joinRemotePath(parent, seg);
-    if (folderExistsCache.has(current)) continue; // already attempted earlier in this batch
-    folderExistsCache.add(current);
+    if (folderExistsCache.has(current)) continue;
 
-    const formData = new FormData();
-    formData.append('name', seg);
-    formData.append('path', parent);
-    try {
-      await fetch('/mkdir', { method: 'POST', body: formData });
-    } catch (e) {
-      // Network-level failure reaching the device at all — log it, but still
-      // let the upload attempt proceed; its own error handling will report
-      // a clear failure if the folder really isn't there.
-      console.warn('[mkdir] request failed for', current, e);
+    let lastError = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const formData = new FormData();
+      formData.append('name', seg);
+      formData.append('path', parent);
+      try {
+        const response = await fetch('/mkdir?_=' + Date.now(), {
+          method: 'POST', body: formData, cache: 'no-store'
+        });
+        const text = await response.text();
+        if (response.ok || (response.status === 400 && /already exists/i.test(text))) {
+          folderExistsCache.add(current);
+          lastError = null;
+          break;
+        }
+        lastError = new Error(text || `mkdir HTTP ${response.status}`);
+      } catch (e) {
+        lastError = e;
+      }
+      await new Promise(r => setTimeout(r, 120 * attempt));
+    }
+    if (lastError) {
+      throw new Error(`Failed to create folder ${current}: ${lastError.message || lastError}`);
     }
   }
 }
 
+
+function uploadTransportBasename(file) {
+  const raw = String((file && file.name) || 'book').replace(/\\/g, '/');
+  const slash = raw.lastIndexOf('/');
+  return (slash >= 0 ? raw.slice(slash + 1) : raw) || 'book';
+}
 
 function uploadFileWebSocket(file, onProgress, onComplete, onError, targetPath) {
   return new Promise((resolve, reject) => {
@@ -4609,9 +4629,11 @@ function uploadFileWebSocket(file, onProgress, onComplete, onError, targetPath) 
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = function() {
-      console.log('[WS] Connected, starting upload:', file.name);
-      // Send start message: START:<filename>:<size>:<path>
-      ws.send(`START:${file.name}:${file.size}:${targetPath || currentPath}`);
+      const uploadName = uploadTransportBasename(file);
+      console.log('[WS] Connected, starting upload:', uploadName);
+      // Never send webkitRelativePath/folder components as the filename.
+      // The directory is carried separately in targetPath.
+      ws.send(`START:${uploadName}:${file.size}:${targetPath || currentPath}`);
     };
 
     ws.onmessage = async function(event) {
@@ -4710,7 +4732,10 @@ function uploadFileWebSocket(file, onProgress, onComplete, onError, targetPath) 
 function uploadFileHTTP(file, onProgress, onComplete, onError, targetPath) {
   return new Promise((resolve, reject) => {
     const formData = new FormData();
-    formData.append('file', file);
+    // Safari can serialize a directory-picked File using its relative path as
+    // multipart filename. Pass the filename explicitly so folder components
+    // never become part of the on-device filename.
+    formData.append('file', file, uploadTransportBasename(file));
 
     const xhr = new XMLHttpRequest();
     currentUploadXhr = xhr;
@@ -4965,12 +4990,13 @@ async function buildBrowserBookCache(epubFile, progressCallback) {
 
 function uploadFile() {
   const fileInput = document.getElementById('fileInput');
-  const files = Array.from(fileInput.files);
+  const files = folderPickedFiles ? folderPickedFiles.slice() : Array.from(fileInput.files);
   const convertEnabled = document.getElementById('convertBeforeUpload').checked;
   const prepareBookEl = document.getElementById('prepareBookBeforeUpload');
   const prepareBookEnabled = !!(prepareBookEl && prepareBookEl.checked);
   const fb2ToEpubEl = document.getElementById('fb2ToEpubCheckbox');
   const fb2ToEpubEnabled = !!(fb2ToEpubEl && fb2ToEpubEl.checked);
+  const anyBookTransformEnabled = convertEnabled || prepareBookEnabled || fb2ToEpubEnabled;
   folderExistsCache = new Set(); // fresh per batch — subfolders may have changed since the last upload
 
   if (files.length === 0) {
@@ -4994,7 +5020,7 @@ function uploadFile() {
 
   let currentIndex = 0;
   const failedFiles = [];
-  let useWebSocket = true; // Try WebSocket first
+  let useWebSocket = !IS_SAFARI; // Safari/macOS is more reliable with HTTP multipart
 
   // Check if we should use batch logging mode
   const epubFilesToConvert = files.filter(f => {
@@ -5062,6 +5088,11 @@ function uploadFile() {
     const relPath = originalFile.webkitRelativePath || '';
     const relDir = relPath ? relPath.slice(0, relPath.length - originalFile.name.length).replace(/\/+$/, '') : '';
     const targetPath = relDir ? joinRemotePath(currentPath, relDir) : currentPath;
+    // Large transfers are deliberately sent over HTTP. ESP32 WebSocket upload
+    // remains the fast path for small files, but Safari/large-file buffering can
+    // outrun the device and stall before DONE. HTTP streaming is slower but far
+    // more predictable for 10–100+ MB books and big folder batches.
+    if (originalFile.size >= WS_LARGE_FILE_LIMIT) useWebSocket = false;
     // Reset progress bar instantly without transition when starting a new file
     progressFill.classList.add('no-transition');
     progressFill.style.width = '0%';
@@ -5069,19 +5100,20 @@ function uploadFile() {
     // Re-enable transition after a brief delay
     setTimeout(() => progressFill.classList.remove('no-transition'), 50);
 
-    // Content-detect EPUB ZIPs before extension-based routing.
-    file = await extractEpubFromUpload(file);
-    // Check if file is an EPUB/FB2/standalone image and conversion is enabled
+    // Plain copy is deliberately zero-touch: no JSZip scan, no content
+    // detection, no renaming and no browser-side book preparation. This keeps
+    // large-file/folder uploads cheap and makes the bytes on SD identical to
+    // the selected file. Content inspection is only needed when the user
+    // explicitly enabled Optimize / Prepare / FB2→EPUB.
+    if (anyBookTransformEnabled) {
+      file = await extractEpubFromUpload(file);
+    }
     const lowerFileName = file.name.toLowerCase();
     const isEpub = lowerFileName.endsWith('.epub');
-    const isFb2 = await isFb2UploadFile(file);
+    const isFb2 = anyBookTransformEnabled ? await isFb2UploadFile(file) : isFb2Name(lowerFileName);
     const isImage = isImageName(lowerFileName);
 
-    // A generic Book.zip that actually contains FB2 must arrive on the
-    // device with an FB2-recognisable extension too. Content detection alone
-    // is not enough: the firmware file browser intentionally does not treat
-    // every arbitrary .zip as a book. Rename only the detected FB2 archives.
-    if (isFb2 && lowerFileName.endsWith('.zip')) {
+    if (anyBookTransformEnabled && isFb2 && lowerFileName.endsWith('.zip') && !isFb2ZipName(lowerFileName)) {
       const fb2ZipName = canonicalFb2ZipUploadName(file.name);
       if (fb2ZipName !== file.name) {
         file = new File([file], fb2ZipName, { type: file.type || 'application/zip' });
@@ -5093,14 +5125,10 @@ function uploadFile() {
     const prepareNativeFb2 = isFb2 && prepareBookEnabled && !fb2ToEpubEnabled;
     const convertFb2ToRealEpub = isFb2 && fb2ToEpubEnabled;
 
-    // Every FB2 upload gets a lightweight cover-normalization pass. This is
-    // required for progressive JPEG cover compatibility on X3/X4. The normal
-    // Optimization checkbox still controls EPUB/images and the OTHER FB2
-    // illustrations.
-    const normalizeFb2Cover = isFb2 && !convertFb2ToRealEpub;
+    // Transformation is opt-in. When all checkboxes are off, FB2/FB2.ZIP is
+    // uploaded byte-for-byte; even the cover is left untouched.
     const needsConversion =
-      ((isEpub || isImage) && convertEnabled) ||
-      (isFb2 && (convertEnabled || normalizeFb2Cover)) ||
+      ((isEpub || isImage || isFb2) && convertEnabled) ||
       convertFb2ToRealEpub || prepareNativeFb2;
     let conversionSucceeded = false;
     let conversionFailed = false;  // Track if conversion actually failed
@@ -5110,7 +5138,7 @@ function uploadFile() {
     let convNewSize = 0;           // Generated blob size; 0 unless conversion succeeded
 
     const methodText = useWebSocket ? ' [WS]' : ' [HTTP]';
-    const stageText = needsConversion ? 'Converting & uploading' : 'Uploading';
+    const stageText = needsConversion ? 'Converting & uploading' : 'Copying';
     progressText.style.color = '';
     progressText.textContent = `${stageText} ${file.name} (${currentIndex + 1}/${files.length})${methodText}`;
 
@@ -5119,7 +5147,7 @@ function uploadFile() {
       // If conversion succeeded, display goes from 50-100%, otherwise 0-100%
       const displayPercent = conversionSucceeded ? 50 + Math.round(uploadPercent / 2) : uploadPercent;
       progressFill.style.width = displayPercent + '%';
-      const prefix = conversionSucceeded ? 'Converting & uploading' : 'Uploading';
+      const prefix = conversionSucceeded ? 'Converting & uploading' : 'Copying';
       progressText.textContent = `${prefix} ${file.name} (${currentIndex + 1}/${files.length})${methodText} — ${uploadPercent}%`;
     };
 
@@ -5320,12 +5348,22 @@ function uploadFile() {
         logError(`Upload failed: ${error.message}`);
       }
 
-      if (useWebSocket && error.message === 'WebSocket connection failed') {
-        // Fall back to HTTP for all subsequent uploads
-        console.log('WebSocket failed, falling back to HTTP');
+      if (useWebSocket) {
+        // Any WS failure (connect, mid-transfer, or waiting for DONE) gets one
+        // clean HTTP retry. Previously only an initial connection failure fell
+        // back, so a large file dying at 30–90% poisoned the whole folder batch.
+        console.log('[Upload] WebSocket failed, retrying current file over HTTP:', error.message);
         useWebSocket = false;
-        // Retry this file with HTTP
         try {
+          if (currentUploadWs && currentUploadWs.readyState <= WebSocket.OPEN) {
+            try { currentUploadWs.close(); } catch (_) {}
+          }
+          currentUploadWs = null;
+          await new Promise(r => setTimeout(r, 300)); // let ESP32 delete partial WS file
+          progressFill.classList.add('no-transition');
+          progressFill.style.width = '0%';
+          setTimeout(() => progressFill.classList.remove('no-transition'), 30);
+          progressText.textContent = `Retrying ${file.name} over HTTP...`;
           await uploadFileHTTP(file, onProgress, null, null, targetPath);
           onComplete();
         } catch (httpError) {
@@ -5399,14 +5437,13 @@ function retrySingleUpload(index) {
 function retryAllFailedUploads() {
   if (failedUploadsGlobal.length === 0) return;
 
-  // Create a DataTransfer with all failed files
-  const dt = new DataTransfer();
-  failedUploadsGlobal.forEach(failedFile => {
-    dt.items.add(failedFile.file);
-  });
-
-  const fileInput = document.getElementById('fileInput');
-  fileInput.files = dt.files;
+  // Preserve original File objects so Safari keeps webkitRelativePath on retry.
+  folderPickedFiles = failedUploadsGlobal.map(failedFile => failedFile.file);
+  try {
+    const dt = new DataTransfer();
+    folderPickedFiles.forEach(f => dt.items.add(f));
+    document.getElementById('fileInput').files = dt.files;
+  } catch (_) {}
 
   // Clear failed files list
   failedUploadsGlobal = [];
@@ -5441,7 +5478,9 @@ function retryAllFailedUploads() {
 
     xhr.onload = function() {
       if (xhr.status === 200) {
-        window.location.reload();
+        const u = new URL(window.location.href);
+        u.searchParams.set('_', Date.now().toString());
+        window.location.replace(u.toString());
       } else {
         alert(t('files.folder_create_failed', {msg: xhr.responseText}));
       }
@@ -5493,7 +5532,9 @@ function retryAllFailedUploads() {
 
     xhr.onload = function() {
       if (xhr.status === 200) {
-        window.location.reload();
+        const u = new URL(window.location.href);
+        u.searchParams.set('_', Date.now().toString());
+        window.location.replace(u.toString());
       } else {
         alert(t('files.rename_failed', {msg: xhr.responseText}));
       }
@@ -5603,7 +5644,9 @@ function retryAllFailedUploads() {
 
     xhr.onload = function() {
       if (xhr.status === 200) {
-        window.location.reload();
+        const u = new URL(window.location.href);
+        u.searchParams.set('_', Date.now().toString());
+        window.location.replace(u.toString());
       } else {
         alert(t('files.move_failed', {msg: xhr.responseText}));
       }

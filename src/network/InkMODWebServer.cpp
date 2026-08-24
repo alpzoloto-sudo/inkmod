@@ -600,6 +600,8 @@ void InkMODWebServer::handleFileListData() const {
 
     body += "]";
     server->sendHeader("X-InkMOD-Has-More", hasMore ? "1" : "0");
+    server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    server->sendHeader("Pragma", "no-cache");
     server->send(200, "application/json", body);
     LOG_DBG("WEB", "Served paged file list path=%s offset=%d count=%d more=%d", currentPath.c_str(), offset,
             emitted, hasMore ? 1 : 0);
@@ -607,6 +609,8 @@ void InkMODWebServer::handleFileListData() const {
   }
 
   server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server->sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  server->sendHeader("Pragma", "no-cache");
   server->send(200, "application/json", "");
   server->sendContent("[");
   char output[512];
@@ -759,9 +763,16 @@ void InkMODWebServer::handleUpload(UploadState& state, const bool preparedBookCa
     esp_task_wdt_reset();
 
     state.file.close();
+    // Browsers (notably Safari directory uploads) may report multipart
+    // filename as "TopFolder/sub/file.ext". The destination directory is
+    // already supplied separately in ?path=, so only keep the basename here.
+    String multipartName = upload.filename;
+    multipartName.replace('\\', '/');
+    const int multipartSlash = multipartName.lastIndexOf('/');
+    if (multipartSlash >= 0) multipartName = multipartName.substring(multipartSlash + 1);
     state.fileName = preparedBookCache ? "book.bin.tmp"
                                        : preparedFb2Package ? "package.epub.tmp"
-                                                            : StringUtils::sanitizeFilename(upload.filename.c_str()).c_str();
+                                                            : StringUtils::sanitizeFilename(multipartName.c_str()).c_str();
     state.size = 0;
     state.success = false;
     state.error = "";
@@ -1868,7 +1879,11 @@ void InkMODWebServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* payl
         int secondColon = msg.indexOf(':', firstColon + 1);
 
         if (firstColon > 0 && secondColon > 0) {
-          wsUploadFileName = StringUtils::sanitizeFilename(msg.substring(6, firstColon).c_str()).c_str();
+          String requestedUploadName = msg.substring(6, firstColon);
+          requestedUploadName.replace('\\', '/');
+          const int uploadSlash = requestedUploadName.lastIndexOf('/');
+          if (uploadSlash >= 0) requestedUploadName = requestedUploadName.substring(uploadSlash + 1);
+          wsUploadFileName = StringUtils::sanitizeFilename(requestedUploadName.c_str()).c_str();
           String sizeToken = msg.substring(firstColon + 1, secondColon);
           bool sizeValid = sizeToken.length() > 0;
           int digitStart = (sizeValid && sizeToken[0] == '+') ? 1 : 0;

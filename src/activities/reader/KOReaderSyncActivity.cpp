@@ -308,7 +308,26 @@ void KOReaderSyncActivity::performUpload() {
   // localProgress was pre-computed in EpubReaderActivity before the Epub was released.
   KOReaderProgress progress;
   progress.document = documentHash;
-  progress.progress = localProgress.xpath;
+  // FB2 is internally exposed as a synthetic EPUB package. Never publish that
+  // synthetic XHTML XPath to KOReader: PocketBook/KOReader opens the original
+  // FB2 through crengine and would treat the foreign path as invalid (often
+  // jumping to the beginning). Publish a native-FB2-compatible shallow XPointer.
+  const std::string originalPath = Fb2::resolveOriginalPath(epubPath);
+  const bool fb2BackedBook = originalPath != epubPath;
+  if (fb2BackedBook) {
+    InkMODPosition fb2Pos{};
+    fb2Pos.spineIndex = currentSpineIndex;
+    fb2Pos.pageNumber = currentPage;
+    fb2Pos.totalPages = totalPagesInSpine;
+    if (currentParagraphIndex.has_value()) {
+      fb2Pos.paragraphIndex = *currentParagraphIndex;
+      fb2Pos.hasParagraphIndex = true;
+    }
+    progress.progress = ProgressMapper::generateFb2CompatibleXPath(fb2Pos);
+    LOG_DBG("KOSync", "FB2 upload XPointer: %s", progress.progress.c_str());
+  } else {
+    progress.progress = localProgress.xpath;
+  }
   progress.percentage = localProgress.percentage;
   progress.device = SETTINGS.getEffectiveDeviceName();
 

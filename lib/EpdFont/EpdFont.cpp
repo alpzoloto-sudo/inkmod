@@ -153,7 +153,6 @@ uint32_t EpdFont::applyLigatures(uint32_t cp, const char*& text) const {
 
 const EpdGlyph* EpdFont::findGlyph(const uint32_t cp) const {
   const int count = data->intervalCount;
-  if (count == 0 && !data->glyphMissHandler) return nullptr;
 
   if (count > 0) {
     const EpdUnicodeInterval* intervals = data->intervals;
@@ -173,18 +172,26 @@ const EpdGlyph* EpdFont::findGlyph(const uint32_t cp) const {
     }
   }
 
+  // SD-card fonts deliberately keep only a small page-local glyph table in
+  // RAM. A glyph can therefore be absent from the current interval table even
+  // though it exists in the .cpfont file. Family-level fallback checks call
+  // findGlyph(), not getGlyph(); if we return nullptr here they incorrectly
+  // conclude that the selected font lacks the character and render it with the
+  // built-in fallback. Give the SD font a chance to load the exact glyph first.
+  if (data->glyphMissHandler) {
+    if (const EpdGlyph* loaded = data->glyphMissHandler(data->glyphMissCtx, cp)) {
+      return loaded;
+    }
+  }
+
   return nullptr;
 }
 
 const EpdGlyph* EpdFont::getGlyph(const uint32_t cp) const {
+  // findGlyph() already performs the SD-card on-demand lookup when a miss
+  // handler is present, so do not invoke the callback a second time here.
   if (const EpdGlyph* glyph = findGlyph(cp)) {
     return glyph;
-  }
-
-  // Codepoint not in interval table — try on-demand loading (SD card fonts).
-  if (data->glyphMissHandler) {
-    const EpdGlyph* loaded = data->glyphMissHandler(data->glyphMissCtx, cp);
-    if (loaded) return loaded;
   }
 
   if (cp != REPLACEMENT_GLYPH) {

@@ -27,19 +27,25 @@ class FontSelectionActivity final : public Activity {
     uint8_t settingIndex;  // index used by valueSetter
   };
 
-  // Returns the font ID to preview the currently highlighted entry with,
-  // loading it from the SD card first if needed. Cheap to call every
-  // render(): only actually touches the SD card / font manager when
-  // selectedIndex_ changed since the last call.
-  int previewFontId();
+  // CrossPoint-style preview: temporarily apply the highlighted family to
+  // SETTINGS and load it through the exact same SdCardFontSystem path used by
+  // the reader. Back restores the saved settings; Select commits them.
+  void updatePreviewFont();
+  void restoreSavedFontSettings();
 
   const SdCardFontRegistry* registry_;
   ButtonNavigator buttonNavigator_;
   std::vector<FontEntry> fonts_;
   int selectedIndex_ = 0;
 
-  // Preview font cache (see previewFontId()) so scrolling through the list
-  // doesn't reload the SD card font on every single render() call.
   int previewedIndex_ = -1;
   int previewFontId_ = 0;
+
+  // Snapshot of the real reader setting while the picker temporarily mutates
+  // SETTINGS for live preview (the same design used by CrossPoint #2349).
+  uint8_t savedFontFamily_ = 0;
+  uint8_t savedFontSize_ = 0;
+  std::string savedSdFontFamilyName_;
+  uint8_t previewTargetPointSize_ = 12;
+  bool selectionCommitted_ = false;
 };

@@ -113,6 +113,7 @@ STR_LONG_PRESS_BEHAVIOR: "Поведінка довгого натискання
 STR_LONG_PRESS_BEHAVIOR_OFF: "Нічого"
 STR_LONG_PRESS_BEHAVIOR_SKIP: "Пропуск розділу"
 STR_LONG_PRESS_BEHAVIOR_ORIENTATION: "Змінити орієнтацію"
+STR_FONT_PREVIEW_TEXT: "Єхидна, ґава, їжак ще й шиплячі плазуни бігцем форсують Янцзи"
 STR_FONT_FAMILY: "Шрифт читання"
 STR_FONT_SIZE: "Розмір шрифту інтерфейсу"
 STR_SD_FONT_SIZE_RANGE: "Завантажити діапазон розмірів шрифту"

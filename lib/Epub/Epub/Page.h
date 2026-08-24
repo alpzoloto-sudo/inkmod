@@ -130,6 +130,9 @@ class Page {
   std::vector<std::shared_ptr<PageElement>> elements;
   std::vector<FootnoteEntry> footnotes;
   std::vector<PublisherPageMarker> publisherPageMarkers;
+  // Synthetic FB2 cover/annotation pages should not inherit the first body
+  // chapter title in the status bar. Serialized with the page cache.
+  bool suppressChapterTitle = false;
   static constexpr uint16_t MAX_FOOTNOTES_PER_PAGE = 16;
   static constexpr uint8_t INITIAL_FOOTNOTE_RESERVE = 2;
   static constexpr uint8_t MAX_PUBLISHER_PAGE_MARKERS_PER_PAGE = 8;

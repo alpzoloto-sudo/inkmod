@@ -70,4 +70,11 @@ class ProgressMapper {
    * /body/DocFragment[3]/body/p[42]/text().17.
    */
   static std::string generateXPath(const std::shared_ptr<Epub>& epub, int spineIndex, float intraSpineProgress);
+
+ public:
+  // FB2 packages are rendered through synthetic XHTML internally, but KOReader
+  // opens the original FB2 with crengine. Convert an InkMOD location to a
+  // conservative crengine-compatible FB2 XPointer instead of publishing the
+  // synthetic XHTML ancestry.
+  static std::string generateFb2CompatibleXPath(const InkMODPosition& pos);
 };

@@ -117,11 +117,28 @@ int SdCardFontSystem::loadPreviewFamily(const std::string& familyName, GfxRender
   refreshIfDirty();
   const auto* family = registry_.findFamily(familyName);
   if (!family) return 0;
-  // sizeStep only matters when a family offers multiple files per size
-  // (SETTINGS.fontSize picks among them for the real reader font) - for a
-  // preview at one fixed size, 0 just takes the closest match to
-  // targetPointSize with no further preference.
-  if (!manager_.loadFamily(*family, renderer, targetPointSize, /*sizeStep=*/0)) return 0;
+
+  // SdCardFontFamilyInfo::selectFile() interprets sizeStep as the rank in the
+  // family's sorted point sizes (0 = smallest), not as "automatic/closest".
+  // Passing 0 here therefore made previews jump between each family's minimum
+  // size (18 pt Literata, 24 pt Merriweather, ...), even though the log said
+  // targetPt=14. Pick the rank whose actual point size is closest to the
+  // reader's current point size so scrolling changes the face, not the scale.
+  const auto sizes = family->availableSizes();
+  uint8_t previewSizeStep = 0;
+  if (!sizes.empty()) {
+    uint8_t bestDiff = UINT8_MAX;
+    for (size_t i = 0; i < sizes.size(); ++i) {
+      const uint8_t size = sizes[i];
+      const uint8_t diff = size > targetPointSize ? size - targetPointSize : targetPointSize - size;
+      if (diff < bestDiff || (diff == bestDiff && size < sizes[previewSizeStep])) {
+        previewSizeStep = static_cast<uint8_t>(i);
+        bestDiff = diff;
+      }
+    }
+  }
+
+  if (!manager_.loadFamily(*family, renderer, targetPointSize, previewSizeStep)) return 0;
   return manager_.getFontId(familyName);
 }
 

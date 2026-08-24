@@ -398,6 +398,8 @@ bool Page::serialize(FsFile& file) const {
       return false;
     }
   }
+  const uint8_t pageFlags = suppressChapterTitle ? 0x01 : 0x00;
+  if (!serialization::tryWritePod(file, pageFlags)) return false;
 
   return true;
 }
@@ -491,6 +493,9 @@ std::unique_ptr<Page> Page::deserialize(FsFile& file) {
     marker.label[sizeof(marker.label) - 1] = '\0';
     page->publisherPageMarkers.push_back(marker);
   }
+  uint8_t pageFlags = 0;
+  if (!serialization::tryReadPod(file, pageFlags)) return nullptr;
+  page->suppressChapterTitle = (pageFlags & 0x01) != 0;
 
   return page;
 }

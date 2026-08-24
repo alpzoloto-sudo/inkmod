@@ -600,11 +600,11 @@ void WifiSelectionActivity::checkConnectionStatus() {
 #endif
     LOG_INF("WIFI", "Connected to ssid=%s ip=%s rssi=%d", selectedSSID.c_str(), connectedIP.c_str(), WiFi.RSSI());
 
-    // Sync RTC from NTP on the first successful WiFi connection only. The DS3231
-    // drifts ~2 ppm so one sync is enough; users can force a re-sync from
-    // Settings > System > Device > Sync Date/Time Now.
-    if (!SETTINGS.clockDisabled && halClock.isAvailable() &&
-        (!SETTINGS.clockHasBeenSynced || !SETTINGS.clockDateHasBeenSynced)) {
+    // Refresh the software/RTC clock on every newly established Wi-Fi connection.
+    // X4 has no DS3231, so treating clockHasBeenSynced as a lifetime latch makes
+    // time drift/stale after reconnects. This block is reached on the connection
+    // transition, not every loop tick.
+    if (!SETTINGS.clockDisabled && halClock.isAvailable()) {
       BootLog::step("WIFI", "checkConnectionStatus: calling halClock.syncFromNTP()");
       if (halClock.syncFromNTP()) {
         SETTINGS.clockHasBeenSynced = 1;

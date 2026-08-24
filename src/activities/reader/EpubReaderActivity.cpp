@@ -1135,6 +1135,22 @@ void EpubReaderActivity::onExit() {
 }
 
 void EpubReaderActivity::loop() {
+  // Reader-menu pushes deliberately release the decoded Section to save RAM.
+  // CREATE_CLIPPING is the exception: it needs a live Section to read the
+  // current/adjacent page cache.  If the menu action arrived after that
+  // release, wait one render pass for the reader to rebuild the Section and
+  // then execute the action instead of silently dropping it.
+  if (pendingCreateClipping) {
+    if (!section) {
+      requestUpdate();
+      return;
+    }
+    pendingCreateClipping = false;
+    LOG_INF("CLIP", "Deferred clipping action resumed with rebuilt section spine=%d page=%d/%d",
+            currentSpineIndex, section->currentPage + 1, section->pageCount);
+    onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction::CREATE_CLIPPING);
+    return;
+  }
   if (!epub) {
     // Should never happen
     finish();
@@ -1357,7 +1373,12 @@ void EpubReaderActivity::loop() {
                              const auto& menu = std::get<MenuResult>(result.data);
                              applyOrientation(menu.orientation);
                              if (menu.settingsChanged) {
+                               // FontSelectionActivity may have used the single SD-font slot for previews.
+                               // Re-load the selected reader family and invalidate the section font id before
+                               // rebuilding so a family change cannot keep rendering with the old face.
+                               sdFontSystem.releaseLoadedFont(renderer);
                                sdFontSystem.ensureLoaded(renderer);
+                               activeSectionFontId = 0;
                                RenderLock lock(*this);
                                if (section) {
                                  cachedSpineIndex = currentSpineIndex;
@@ -2236,8 +2257,27 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       break;
     }
     case EpubReaderMenuActivity::MenuAction::CREATE_CLIPPING: {
-      if (!section || section->pageCount <= 0) break;
-      const int renderFontId = activeSectionFontId != 0 ? activeSectionFontId : SETTINGS.getReaderFontId();
+      if (!section || section->pageCount <= 0) {
+        // Opening the reader menu releases Section before this callback runs.
+        // Do not discard the menu command: let the normal reader render path
+        // reconstruct the current section, then launch the selector on the
+        // next loop iteration.
+        pendingCreateClipping = true;
+        LOG_INF("CLIP", "Deferring clipping action until reader section is rebuilt (spine=%d)", currentSpineIndex);
+        requestUpdate();
+        break;
+      }
+      // Preview/menu activities share the single SD-font slot. Ensure clipping selection
+      // measures words with the actual reader family, not a stale preview font id.
+      sdFontSystem.ensureLoaded(renderer);
+      const int renderFontId = SETTINGS.getReaderFontId();
+      if (renderFontId == 0) {
+        LOG_ERR("CLIP", "Cannot start clipping selector: reader font id is 0");
+        GUI.drawPopup(renderer, tr(STR_SAVE_FAILED));
+        renderer.displayBuffer();
+        requestUpdate();
+        break;
+      }
       const int selectedSpine = currentSpineIndex;
       const int selectedPage = section->currentPage;
       const int selectedPageCount = section->pageCount;
@@ -2246,6 +2286,19 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       const int tocIndex = epub->getTocIndexForSpineIndex(currentSpineIndex);
       if (tocIndex >= 0) chapterTitle = epub->getTocItem(tocIndex).title;
 
+      // Consume any release that belonged to the menu action itself before
+      // the clipping modal becomes active.
+      mappedInput.suppressNextBackRelease();
+      mappedInput.suppressNextConfirmRelease();
+      mappedInput.suppressNextPowerConfirmRelease();
+      // ActivityManager normally frees the reader Section before pushing a
+      // background activity.  ClippingSelectionActivity deliberately reads the
+      // current/adjacent pages through this Section, so keep it alive for this
+      // one push or the selector receives a dangling reference and immediately
+      // falls back to the book.
+      preserveSectionForNextBackgroundPush = true;
+      LOG_INF("CLIP", "Opening selector spine=%d page=%d/%d font=%d", selectedSpine, selectedPage + 1,
+              selectedPageCount, renderFontId);
       pauseReadingPaceTimer("clipping_select");
       startActivityForResult(
           std::make_unique<ClippingSelectionActivity>(renderer, mappedInput, *section, renderFontId,
@@ -2320,7 +2373,9 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
 
 void EpubReaderActivity::reindexCurrentSection() {
   SETTINGS.saveToFile();
+  sdFontSystem.releaseLoadedFont(renderer);
   sdFontSystem.ensureLoaded(renderer);
+  activeSectionFontId = 0;
   {
     RenderLock lock(*this);
     showChapterLoadingPopup();
@@ -3689,6 +3744,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
     // Collect footnotes from the loaded page
     currentPageFootnotes = std::move(p->footnotes);
+    suppressCurrentChapterTitle = p->suppressChapterTitle;
 
     const auto start = millis();
     const int renderFontId = activeSectionFontId != 0 ? activeSectionFontId : SETTINGS.getReaderFontId();
@@ -4042,11 +4098,13 @@ void EpubReaderActivity::renderStatusBar() const {
     }
 
   } else if (SETTINGS.statusBarTitle == InkMODSettings::STATUS_BAR_TITLE::CHAPTER_TITLE) {
-    title = tr(STR_UNNAMED);
-    const int tocIndex = epub->getTocIndexForSpineIndex(currentSpineIndex);
-    if (tocIndex != -1) {
-      const auto tocItem = epub->getTocItem(tocIndex);
-      title = tocItem.title;
+    if (!suppressCurrentChapterTitle) {
+      title = tr(STR_UNNAMED);
+      const int tocIndex = epub->getTocIndexForSpineIndex(currentSpineIndex);
+      if (tocIndex != -1) {
+        const auto tocItem = epub->getTocItem(tocIndex);
+        title = tocItem.title;
+      }
     }
 
   } else if (SETTINGS.statusBarTitle == InkMODSettings::STATUS_BAR_TITLE::BOOK_TITLE) {
@@ -4105,11 +4163,17 @@ void EpubReaderActivity::navigateToHref(const std::string& hrefStr, const bool s
   pageLoadRetryCount = 0;
   if (!epub) return;
 
-  // Push current position onto saved stack
-  if (savePosition && section && footnoteDepth < MAX_FOOTNOTE_DEPTH) {
-    savedPositions[footnoteDepth] = {currentSpineIndex, section->currentPage};
+  // Push current position onto the footnote return stack. The reader may have
+  // already released its heavy Section while the book menu/footnote picker was
+  // open. releaseHeavyResourcesForBackgroundActivity() preserves the current
+  // page in nextPageNumber before doing that, so use it as the authoritative
+  // fallback instead of silently losing the return point.
+  if (savePosition && footnoteDepth < MAX_FOOTNOTE_DEPTH) {
+    const int returnPage = section ? section->currentPage : nextPageNumber;
+    savedPositions[footnoteDepth] = {currentSpineIndex, std::max(0, returnPage)};
     footnoteDepth++;
-    LOG_DBG("ERS", "Saved position [%d]: spine %d, page %d", footnoteDepth, currentSpineIndex, section->currentPage);
+    LOG_INF("ERS", "Footnote return saved [%d]: spine=%d page=%d source=%s", footnoteDepth, currentSpineIndex,
+            std::max(0, returnPage), section ? "section" : "saved-page");
   }
 
   // Extract fragment anchor (e.g. "#note1" or "chapter2.xhtml#note1")
@@ -4154,10 +4218,16 @@ void EpubReaderActivity::restoreSavedPosition() {
   if (footnoteDepth <= 0) return;
   footnoteDepth--;
   const auto& pos = savedPositions[footnoteDepth];
-  LOG_DBG("ERS", "Restoring position [%d]: spine %d, page %d", footnoteDepth, pos.spineIndex, pos.pageNumber);
+  LOG_INF("ERS", "Footnote return restoring [%d]: spine=%d page=%d", footnoteDepth, pos.spineIndex,
+          pos.pageNumber);
 
   {
     RenderLock lock(*this);
+    // A footnote jump may leave the note anchor pending until the target section
+    // is loaded. Returning must cancel that anchor; otherwise the restored
+    // chapter can immediately re-apply the footnote anchor and appear to ignore Back.
+    pendingAnchor.clear();
+    pendingPageJump.reset();
     currentSpineIndex = pos.spineIndex;
     nextPageNumber = pos.pageNumber;
     section.reset();

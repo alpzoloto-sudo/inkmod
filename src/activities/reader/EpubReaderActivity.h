@@ -25,6 +25,9 @@ class EpubReaderActivity final : public Activity {
   int currentSpineIndex = 0;
   int nextPageNumber = 0;
   int activeSectionFontId = 0;
+  bool preserveSectionForNextBackgroundPush = false;
+  bool pendingCreateClipping = false;
+  bool suppressCurrentChapterTitle = false;
   bool activeSectionUsesFallbackFont = false;
   std::optional<uint16_t> pendingPageJump;
   // Set when navigating to a footnote href with a fragment (e.g. #note1).
@@ -242,6 +245,14 @@ class EpubReaderActivity final : public Activity {
   // is a plain FreeRTOS mutex, not recursive, so taking a second one here
   // deadlocks the calling task against itself.
   void releaseHeavyResourcesForBackgroundActivity() override {
+    // ClippingSelectionActivity keeps a reference to the current Section because it
+    // must read neighbouring cached pages while the selector is open.  Consuming
+    // this one-shot guard here keeps that Section alive for exactly that push; all
+    // other background activities retain the normal low-RAM release behaviour.
+    if (preserveSectionForNextBackgroundPush) {
+      preserveSectionForNextBackgroundPush = false;
+      return;
+    }
     if (!section) return;
     nextPageNumber = section->currentPage;
     section.reset();

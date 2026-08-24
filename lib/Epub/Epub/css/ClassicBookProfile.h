@@ -142,7 +142,9 @@ inline void apply(const char* tagName, const std::string& classAttr,
   } else if (poemContainer) {
     setLayout(style, CssTextAlign::Left, 0.0f, 0.6f, 0.6f, 1.2f, 1.2f);
   } else if (stanzaContainer) {
-    setLayout(style, CssTextAlign::Left, 0.0f, 0.0f, 0.6f, 0.0f, 0.0f);
+    // The following text-author supplies its own small separation. Keeping a
+    // stanza bottom margin here stacks both gaps and makes poems look detached.
+    setLayout(style, CssTextAlign::Left, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
   }
 
   // Ordinary prose: no inter-paragraph holes, 1.2em red line, justified.
@@ -152,8 +154,8 @@ inline void apply(const char* tagName, const std::string& classAttr,
   if (subHeading) return;
 
   if (has("text-author") || has("author") || has("cite-author")) {
-    setLayout(style, CssTextAlign::Right, 0.0f, 0.4f, 0.4f, 0.0f, 0.0f);
-    setNormalFontStyle(style);  // force non-italic, overriding any inherited italic
+    setLayout(style, CssTextAlign::Right, 0.0f, 0.2f, 0.0f, 0.0f, 0.0f);
+    setItalic(style);
     return;
   }
   if (has("date")) {

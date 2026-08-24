@@ -736,8 +736,8 @@ class StreamSink : public Fb2ContentSink {
 
   void onCiteBegin() override { writeBytes(out_, "<blockquote class=\"cite\">"); }
   void onCiteEnd() override { writeBytes(out_, "</blockquote>"); }
-  void onEpigraphBegin() override { writeBytes(out_, "<blockquote class=\"epigraph\">"); }
-  void onEpigraphEnd() override { writeBytes(out_, "</blockquote>"); }
+  void onEpigraphBegin() override { writeBytes(out_, "<div class=\"epigraph\">"); }
+  void onEpigraphEnd() override { writeBytes(out_, "</div>"); }
   void onTextAuthor(const std::string& text) override {
     writeBytes(out_, "<p class=\"text-author\">");
     writeXmlEscaped(out_, text);
@@ -2454,7 +2454,7 @@ bool Fb2::renderChapterOnDemand(const std::string& packageCachePath, int chapter
           }
           if (!paragraphOpen) {
             if (!emitted) writeBytes(out, "<div class=\"annotation\">");
-            writeBytes(out, "<p>");
+            writeBytes(out, "<p class=\"inkmod-fb2-frontmatter\">");
             emitted = true;
             paragraphOpen = true;
           }
@@ -2496,8 +2496,9 @@ bool Fb2::writeStyleFile() const {
       "p { margin: 0.25em 0; }\n"
       ".epigraph, .cite { margin: 0.7em 1.5em; font-style: italic; text-indent: 0; }\n"
       ".poem { margin: 0.7em 1em; }\n"
+      ".stanza { margin: 0; padding: 0; }\n"
       ".v { text-indent: 0; text-align: left; margin: 0; }\n"
-      ".text-author { text-align: right; font-style: italic; text-indent: 0; }\n"
+      ".text-author { text-align: right; font-style: italic; text-indent: 0; margin: 0.2em 0 0 0; }\n"
       ".empty-line { margin: 0.6em 0; text-indent: 0; }\n"
       ".annotation { font-style: italic; }\n"
       ".strike { text-decoration: line-through; }\n"

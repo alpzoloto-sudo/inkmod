@@ -3,6 +3,7 @@
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
+#include <Logging.h>
 
 #include <algorithm>
 #include <climits>
@@ -26,9 +27,22 @@ ClippingSelectionActivity::ClippingSelectionActivity(GfxRenderer& renderer, Mapp
 
 void ClippingSelectionActivity::onEnter() {
   Activity::onEnter();
+
+  // This activity is launched from a reader-menu button release.  Do not let
+  // that same physical release (or a pending Back/Power release from closing
+  // the menu) immediately cancel/advance the clipping selector on its first
+  // loop iteration.
+  mappedInput.suppressNextBackRelease();
+  mappedInput.suppressNextConfirmRelease();
+  mappedInput.suppressNextPowerConfirmRelease();
+
   originalPage_ = std::clamp(section_.currentPage, 0, std::max(0, static_cast<int>(section_.pageCount) - 1));
   currentPage_ = originalPage_;
-  loadPage(currentPage_);
+  if (!loadPage(currentPage_)) {
+    LOG_ERR("CLIP", "Failed to load clipping page %d/%u", currentPage_, static_cast<unsigned>(section_.pageCount));
+  } else if (words_.empty()) {
+    LOG_ERR("CLIP", "Clipping page %d contains no selectable words", currentPage_);
+  }
   cursor_ = nearestCenterWord();
   anchorPage_ = currentPage_;
   anchorWord_ = cursor_;

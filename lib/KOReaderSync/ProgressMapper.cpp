@@ -3,6 +3,7 @@
 #include <Logging.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cmath>
 #include <cstring>
 
@@ -700,6 +701,20 @@ bool streamSpine(const std::shared_ptr<Epub>& epub, int spineIndex, ParagraphStr
   return !href.empty() && epub->readItemContentsToStream(href, s, 1024);
 }
 }  // namespace
+
+
+std::string ProgressMapper::generateFb2CompatibleXPath(const InkMODPosition& pos) {
+  // crengine represents reflow documents under /body/DocFragment/body. For a
+  // native FB2 there is a single document fragment, and FB2 sections are kept
+  // as section nodes. Keep the path deliberately shallow: section + paragraph
+  // is much more portable across KOReader/CREngine versions than our internal
+  // converted XHTML ancestry. The percentage remains authoritative for InkMOD.
+  const int sectionIndex = std::max(1, pos.spineIndex + 1);
+  const int paragraphIndex = pos.hasParagraphIndex ? std::max(1, static_cast<int>(pos.paragraphIndex)) : 1;
+  char buf[96];
+  snprintf(buf, sizeof(buf), "/body/DocFragment/body/section[%d]/p[%d]/text().0", sectionIndex, paragraphIndex);
+  return std::string(buf);
+}
 
 KOReaderPosition ProgressMapper::toKOReader(const std::shared_ptr<Epub>& epub, const InkMODPosition& pos) {
   KOReaderPosition result;

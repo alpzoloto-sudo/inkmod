@@ -1098,6 +1098,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     }
     self->currentTextBlock.reset();
     if (self->currentPage && !self->currentPage->elements.empty()) {
+      self->currentPage->suppressChapterTitle = true;
       self->completePageFn(std::move(self->currentPage), self->xpathParagraphIndex, self->xpathListItemIndex);
       self->completedPageCount++;
     }
@@ -1106,6 +1107,10 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     }
     self->skipCurrentElement();
     return;
+  }
+
+  if (attributeContainsToken(classAttr.c_str(), "inkmod-fb2-frontmatter") && self->currentPage) {
+    self->currentPage->suppressChapterTitle = true;
   }
 
   auto centeredBlockStyle = BlockStyle();

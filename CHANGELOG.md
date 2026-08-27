@@ -1,5 +1,30 @@
 # Changelog
 
+## [v1.1.6] - 2026-08-27
+
+### Added
+- Expanded FB2 semantic styling for annotations, epigraphs, headings, subtitles, quotations, poems, stanzas and text authors.
+- Added faithful `<emphasis>` handling in FB2.
+- Added Create Clipping as an assignable button / long-press action.
+- Added held-button repeat for ordinary menus and lists.
+- Added improved PNG/BMP handling in File Browser and sleep-screen selection.
+
+### Changed
+- Reworked large FB2/FB2.ZIP and EPUB processing around low-memory streaming.
+- Improved preservation of author formatting during streaming.
+- Improved verse wrapping and continuation indentation.
+- Improved logical chapter pagination across internally split spine fragments.
+- Dictionary article pagination was heavily optimized.
+- File extension setting renamed to “Show file extensions” with corrected switch semantics.
+
+### Fixed
+- Fixed rare split words such as `п ривет` caused by streaming boundaries.
+- Fixed logical chapter counters jumping from values such as `40/40` to `41/45`.
+- Fixed the first clipping-selection press sometimes being ignored.
+- Fixed PNG/BMP format reporting in File Browser.
+- Fixed custom sleep-screen selection changing the Lock Screen mode.
+- Removed the need to create a duplicate `/sleep.bmp` when setting a new custom image.
+
 ## [v1.1.5] - 2026-08-20
 
 ### Added

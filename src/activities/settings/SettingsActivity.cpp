@@ -601,15 +601,26 @@ void SettingsActivity::loop() {
     requestUpdate();
   });
 
-  buttonNavigator.onNextContinuous([this, &hasChangedCategory] {
-    hasChangedCategory = true;
-    enterCategory(ButtonNavigator::nextIndex(selectedCategoryIndex, categoryCount));
+  // Holding navigation follows the same selector path as a short press.
+  // ButtonNavigator repeats after 500 ms and then every 500 ms, so long lists
+  // can be traversed without turning a hold into a category/page jump.
+  buttonNavigator.onNextContinuous([this] {
+    selectedSettingIndex = ButtonNavigator::nextIndex(selectedSettingIndex, settingsCount + 1);
+    while (selectedSettingIndex > 0 && selectedSettingIndex <= settingsCount &&
+           ((*currentSettings)[selectedSettingIndex - 1].type == SettingType::SECTION_HEADER ||
+            (*currentSettings)[selectedSettingIndex - 1].type == SettingType::INFO)) {
+      selectedSettingIndex = ButtonNavigator::nextIndex(selectedSettingIndex, settingsCount + 1);
+    }
     requestUpdate();
   });
 
-  buttonNavigator.onPreviousContinuous([this, &hasChangedCategory] {
-    hasChangedCategory = true;
-    enterCategory(ButtonNavigator::previousIndex(selectedCategoryIndex, categoryCount));
+  buttonNavigator.onPreviousContinuous([this] {
+    selectedSettingIndex = ButtonNavigator::previousIndex(selectedSettingIndex, settingsCount + 1);
+    while (selectedSettingIndex > 0 && selectedSettingIndex <= settingsCount &&
+           ((*currentSettings)[selectedSettingIndex - 1].type == SettingType::SECTION_HEADER ||
+            (*currentSettings)[selectedSettingIndex - 1].type == SettingType::INFO)) {
+      selectedSettingIndex = ButtonNavigator::previousIndex(selectedSettingIndex, settingsCount + 1);
+    }
     requestUpdate();
   });
 

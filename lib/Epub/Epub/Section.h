@@ -24,7 +24,7 @@ class Section {
   // fixes (notably Paragraph spacing=None preserving structural title/subtitle
   // spacing) without changing TextBlock/Page serialization or requiring the
   // user to clear .inkmod manually.
-  static constexpr const char* LAYOUT_CACHE_GENERATION = "_layout60";
+  static constexpr const char* LAYOUT_CACHE_GENERATION = "_layout62";
 
   bool writeSectionFileHeader(int fontId, float lineCompression, uint8_t extraParagraphSpacing, bool forceParagraphIndents,
                               uint8_t paragraphAlignment, uint16_t viewportWidth, uint16_t viewportHeight,
@@ -34,6 +34,7 @@ class Section {
 
  public:
   uint16_t pageCount = 0;
+  uint16_t leadingFrontMatterPages = 0;
   int currentPage = 0;
 
   explicit Section(const std::shared_ptr<Epub>& epub, const int spineIndex, GfxRenderer& renderer,
@@ -44,6 +45,11 @@ class Section {
         filePath(epub->getCachePath() + "/sections/" + std::to_string(spineIndex) + LAYOUT_CACHE_GENERATION +
                  (cacheSuffix ? cacheSuffix : "") + ".bin") {}
   ~Section() = default;
+  // A missing section cache is a normal first-open condition, not an I/O error.
+  // This lightweight probe lets callers avoid opening/logging cache variants
+  // that have never been generated. A .bak also counts because loadSectionFile()
+  // can restore it after an interrupted atomic promotion.
+  bool hasSectionFile() const;
   bool loadSectionFile(int fontId, float lineCompression, uint8_t extraParagraphSpacing, bool forceParagraphIndents,
                        uint8_t paragraphAlignment, uint16_t viewportWidth, uint16_t viewportHeight,
                        bool hyphenationEnabled, bool embeddedStyle, uint8_t imageRendering, bool bionicReadingEnabled,

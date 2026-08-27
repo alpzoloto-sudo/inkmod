@@ -398,7 +398,7 @@ bool Page::serialize(FsFile& file) const {
       return false;
     }
   }
-  const uint8_t pageFlags = suppressChapterTitle ? 0x01 : 0x00;
+  const uint8_t pageFlags = (suppressChapterTitle ? 0x01 : 0x00) | (isFrontMatter ? 0x02 : 0x00);
   if (!serialization::tryWritePod(file, pageFlags)) return false;
 
   return true;
@@ -496,6 +496,7 @@ std::unique_ptr<Page> Page::deserialize(FsFile& file) {
   uint8_t pageFlags = 0;
   if (!serialization::tryReadPod(file, pageFlags)) return nullptr;
   page->suppressChapterTitle = (pageFlags & 0x01) != 0;
+  page->isFrontMatter = (pageFlags & 0x02) != 0;
 
   return page;
 }

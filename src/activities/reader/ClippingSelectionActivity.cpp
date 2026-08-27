@@ -26,24 +26,28 @@ ClippingSelectionActivity::ClippingSelectionActivity(GfxRenderer& renderer, Mapp
       marginTop_(marginTop) {}
 
 void ClippingSelectionActivity::onEnter() {
+  const uint32_t t0 = millis();
   Activity::onEnter();
 
-  // This activity is launched from a reader-menu button release.  Do not let
-  // that same physical release (or a pending Back/Power release from closing
-  // the menu) immediately cancel/advance the clipping selector on its first
-  // loop iteration.
-  mappedInput.suppressNextBackRelease();
-  mappedInput.suppressNextConfirmRelease();
-  mappedInput.suppressNextPowerConfirmRelease();
+  // Arm input only after the launch gesture has fully disappeared.  Do not
+  // queue suppressNext* here: those flags can survive the already-consumed
+  // menu release and swallow the user's first genuine Confirm.
+  inputArmed_ = false;
+  quietInputFrames_ = 0;
 
   originalPage_ = std::clamp(section_.currentPage, 0, std::max(0, static_cast<int>(section_.pageCount) - 1));
   currentPage_ = originalPage_;
-  if (!loadPage(currentPage_)) {
+  const uint32_t tLoad = millis();
+  const bool loaded = loadPage(currentPage_);
+  const uint32_t loadMs = millis() - tLoad;
+  if (!loaded) {
     LOG_ERR("CLIP", "Failed to load clipping page %d/%u", currentPage_, static_cast<unsigned>(section_.pageCount));
   } else if (words_.empty()) {
     LOG_ERR("CLIP", "Clipping page %d contains no selectable words", currentPage_);
   }
+  const uint32_t tCenter = millis();
   cursor_ = nearestCenterWord();
+  const uint32_t centerMs = millis() - tCenter;
   anchorPage_ = currentPage_;
   anchorWord_ = cursor_;
   requestUpdate(true);
@@ -57,15 +61,22 @@ void ClippingSelectionActivity::onExit() {
 }
 
 bool ClippingSelectionActivity::loadPage(const int pageNumber, const bool selectLastWord) {
+  const uint32_t t0 = millis();
   if (pageNumber < 0 || pageNumber >= static_cast<int>(section_.pageCount)) return false;
   const int previousSectionPage = section_.currentPage;
   section_.currentPage = pageNumber;
+  const uint32_t tRead = millis();
   auto next = section_.loadPageFromSectionFile();
+  const uint32_t readMs = millis() - tRead;
   section_.currentPage = previousSectionPage;
-  if (!next) return false;
+  if (!next) {
+    return false;
+  }
 
   page_ = std::move(next);
+  const uint32_t tWords = millis();
   words_ = ClippingUtils::collectWords(*page_);
+  const uint32_t wordsMs = millis() - tWords;
   currentPage_ = pageNumber;
   if (words_.empty()) {
     cursor_ = 0;
@@ -243,6 +254,26 @@ void ClippingSelectionActivity::saveSelection() {
 }
 
 void ClippingSelectionActivity::loop() {
+  if (!inputArmed_) {
+    const bool anyHeld =
+        mappedInput.isPressed(MappedInputManager::Button::Back) ||
+        mappedInput.isPressed(MappedInputManager::Button::Confirm) ||
+        mappedInput.isPressed(MappedInputManager::Button::Power) ||
+        mappedInput.isPressed(MappedInputManager::Button::Left) ||
+        mappedInput.isPressed(MappedInputManager::Button::Right) ||
+        mappedInput.isPressed(MappedInputManager::Button::Up) ||
+        mappedInput.isPressed(MappedInputManager::Button::Down) ||
+        mappedInput.isPressed(MappedInputManager::Button::PageBack) ||
+        mappedInput.isPressed(MappedInputManager::Button::PageForward);
+
+    if (anyHeld || mappedInput.wasAnyPressed() || mappedInput.wasAnyReleased()) {
+      quietInputFrames_ = 0;
+      return;
+    }
+    if (++quietInputFrames_ < 1) return;
+    inputArmed_ = true;
+    return;
+  }
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     ActivityResult result;
     result.isCancelled = true;
@@ -276,11 +307,20 @@ void ClippingSelectionActivity::loop() {
     return;
   }
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Up)) moveVertical(-1);
-  if (mappedInput.wasReleased(MappedInputManager::Button::Down)) moveVertical(1);
+  if (mappedInput.wasReleased(MappedInputManager::Button::Up)) {
+    const int steps = mappedInput.getHeldTime() >= PAGE_JUMP_HOLD_MS ? FAST_VERTICAL_STEPS : 1;
+    for (int i = 0; i < steps; ++i) moveVertical(-1);
+    return;
+  }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Down)) {
+    const int steps = mappedInput.getHeldTime() >= PAGE_JUMP_HOLD_MS ? FAST_VERTICAL_STEPS : 1;
+    for (int i = 0; i < steps; ++i) moveVertical(1);
+    return;
+  }
 }
 
 void ClippingSelectionActivity::render(RenderLock&&) {
+  const uint32_t t0 = millis();
   // IMPORTANT: a Page loaded from the section cache only contains layout/text
   // references. For an SD-card font the glyph bitmaps may have been evicted
   // after leaving the reader menu. Rendering immediately in that state makes
@@ -347,23 +387,37 @@ void ClippingSelectionActivity::render(RenderLock&&) {
 
   if (page_) {
     if (auto* fontCache = renderer.getFontCacheManager()) {
+      const uint32_t tScope = millis();
       auto prewarmScope = fontCache->createPrewarmScope();
+      const uint32_t scopeMs = millis() - tScope;
 
       // Scan every text glyph used by this rendered page with the exact font
       // selected by the parent reader. No fallback font and no new font
       // context are introduced by clipping mode.
+      const uint32_t tScan = millis();
       page_->renderText(renderer, fontId_, marginLeft_, marginTop_,
                         ReaderUtils::readerForegroundBlack());
+      const uint32_t scanMs = millis() - tScan;
 
+      const uint32_t tPrewarm = millis();
       prewarmScope.endScanAndPrewarm();
+      const uint32_t prewarmMs = millis() - tPrewarm;
+      const uint32_t tDraw = millis();
       drawSelectionScreen();
+      const uint32_t drawMs = millis() - tDraw;
+      const uint32_t tDisplay = millis();
       renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+      const uint32_t displayMs = millis() - tDisplay;
       return;
     }
   }
 
   // Built-in fonts do not require prewarming.
+  const uint32_t tDraw = millis();
   drawSelectionScreen();
+  const uint32_t drawMs = millis() - tDraw;
+  const uint32_t tDisplay = millis();
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  const uint32_t displayMs = millis() - tDisplay;
 }
 

@@ -33,6 +33,7 @@ struct Fb2Metadata {
                                         // that want more than the flattened
                                         // string (e.g. an "About" screen)
     std::string language;              // <lang>
+    std::string date;                  // display text from <title-info><date>, if present
     std::string coverBinaryId;          // id= of the <binary> referenced by
                                         // <coverpage><image l:href="#id"/></coverpage>,
                                         // WITHOUT the leading '#'
@@ -177,6 +178,11 @@ public:
     virtual void onParagraphBegin() {}
     virtual void onParagraphEnd() {}
     virtual void onSubtitle(const std::string& /*text*/) {}
+    virtual void onSubtitleBegin() {}
+    virtual void onSubtitleEnd() {}
+    virtual void onTitleBegin(uint8_t /*level*/) {}
+    virtual void onTitleEnd(uint8_t /*level*/) {}
+    virtual void onTitleLineBreak() {}
     virtual void onEmptyLine() {}
     virtual void onHorizontalRule() {}
 
@@ -185,6 +191,10 @@ public:
     virtual void onStanzaBegin() {}
     virtual void onStanzaEnd() {}
     virtual void onVerseLine(const std::string& /*text*/) {}
+    // Streaming verse callbacks preserve inline FB2 markup (especially <emphasis>)
+    // while keeping each <v> on its own visual line.
+    virtual void onVerseBegin() {}
+    virtual void onVerseEnd() {}
 
     virtual void onCiteBegin() {}
     virtual void onCiteEnd() {}
@@ -192,6 +202,8 @@ public:
     virtual void onEpigraphEnd() {}
     // Attribution inside <cite> or <epigraph>, distinct from quoted text.
     virtual void onTextAuthor(const std::string& /*text*/) {}
+    virtual void onTextAuthorBegin() {}
+    virtual void onTextAuthorEnd() {}
 
     // Called with successive runs of text inside the current block-level
     // element, tagged with whatever inline styles are currently active.

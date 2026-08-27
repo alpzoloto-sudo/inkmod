@@ -28,13 +28,16 @@ def replace_once(path: Path, old: str, new: str) -> None:
     raise SystemExit(f"{path}: expected exactly one patch target, found {count}")
 
 
-# v16 forces old FB2 packages/layout pages to rebuild. v15 put the cover first
-# but still allowed the first body text to use leftover space under the cover.
-replace_once(
-    FB2_CPP,
-    "constexpr uint8_t PACKAGE_VERSION = 14;  // 24 KiB virtual text chunks; invalidates older package indexes",
-    "constexpr uint8_t PACKAGE_VERSION = 16;  // dedicated first cover page; invalidates older package indexes",
-)
+# v16 forces old FB2 packages/layout pages to rebuild. Later source revisions
+# legitimately bump PACKAGE_VERSION again; do not require the exact v16 line on
+# every subsequent PlatformIO environment. Only upgrade the legacy v14 source.
+fb2_version_text = FB2_CPP.read_text(encoding="utf-8")
+if "constexpr uint8_t PACKAGE_VERSION = 14;" in fb2_version_text:
+    replace_once(
+        FB2_CPP,
+        "constexpr uint8_t PACKAGE_VERSION = 14;  // 24 KiB virtual text chunks; invalidates older package indexes",
+        "constexpr uint8_t PACKAGE_VERSION = 16;  // dedicated first cover page; invalidates older package indexes",
+    )
 
 # The cover is metadata, not a body illustration. It must not consume the
 # image ordinal used to split illustration-heavy body sections.
@@ -46,18 +49,26 @@ replace_once(
 
 # Expose a tiny cover-only pass so Fb2::renderChapterOnDemand can write the
 # cover before its generated title/annotation, while renderSection remains
-# strictly body content and never duplicates the cover.
-replace_once(
-    PARSER_H,
-    '''    // sectionIndex must be an index into the vector scan() filled in.\n    bool renderSection(IByteReader& reader,\n                        const Fb2SectionIndexEntry& section,\n                        Fb2ContentSink& sink,\n                        const reader::ReaderCancellationToken* cancellationToken = nullptr);\n''',
-    '''    // Emits the metadata cover only when `section` is the first body\n    // section. This is intentionally separate from renderSection() so callers\n    // can place the cover before generated title/annotation content.\n    bool renderCoverForFirstSection(IByteReader& reader,\n                                    const Fb2SectionIndexEntry& section,\n                                    Fb2ContentSink& sink);\n\n    // sectionIndex must be an index into the vector scan() filled in.\n    // Body content only: coverpage is handled by renderCoverForFirstSection().\n    bool renderSection(IByteReader& reader,\n                        const Fb2SectionIndexEntry& section,\n                        Fb2ContentSink& sink,\n                        const reader::ReaderCancellationToken* cancellationToken = nullptr);\n''',
-)
+# strictly body content and never duplicates the cover.  PlatformIO can run
+# this pre-script for several environments in the same checkout, and later
+# source revisions may legitimately add declarations between this helper and
+# renderSection().  Treat the helper declaration itself as the idempotency
+# marker instead of requiring the whole block to remain byte-for-byte equal.
+parser_h_text = PARSER_H.read_text(encoding="utf-8")
+if "bool renderCoverForFirstSection(" not in parser_h_text:
+    replace_once(
+        PARSER_H,
+        '''    // sectionIndex must be an index into the vector scan() filled in.\n    bool renderSection(IByteReader& reader,\n                        const Fb2SectionIndexEntry& section,\n                        Fb2ContentSink& sink,\n                        const reader::ReaderCancellationToken* cancellationToken = nullptr);\n''',
+        '''    // Emits the metadata cover only when `section` is the first body\n    // section. This is intentionally separate from renderSection() so callers\n    // can place the cover before generated title/annotation content.\n    bool renderCoverForFirstSection(IByteReader& reader,\n                                    const Fb2SectionIndexEntry& section,\n                                    Fb2ContentSink& sink);\n\n    // sectionIndex must be an index into the vector scan() filled in.\n    // Body content only: coverpage is handled by renderCoverForFirstSection().\n    bool renderSection(IByteReader& reader,\n                        const Fb2SectionIndexEntry& section,\n                        Fb2ContentSink& sink,\n                        const reader::ReaderCancellationToken* cancellationToken = nullptr);\n''',
+    )
 
-replace_once(
-    PARSER_CPP,
-    '''bool Fb2Parser::renderSection(IByteReader& reader,\n                               const Fb2SectionIndexEntry& section,\n                               Fb2ContentSink& sink,\n                               const reader::ReaderCancellationToken* cancellationToken) {\n    // Emit the FB2 <coverpage> only before the first body section. The outer\n    // range sinks suppress this event for later virtual slices of that section;\n    // for image-sliced sections scan() counted the cover above so ordinals stay aligned.\n    std::string coverId;\n    if (findCoverForFirstSection(reader, section.innerStartOffset, coverId)) {\n        sink.onImage(coverId);\n    }\n\n    Fb2XmlReader xml(reader, 4096);\n''',
-    '''bool Fb2Parser::renderCoverForFirstSection(IByteReader& reader,\n                                                  const Fb2SectionIndexEntry& section,\n                                                  Fb2ContentSink& sink) {\n    std::string coverId;\n    if (!findCoverForFirstSection(reader, section.innerStartOffset, coverId)) return false;\n    sink.onImage(coverId);\n    return true;\n}\n\nbool Fb2Parser::renderSection(IByteReader& reader,\n                               const Fb2SectionIndexEntry& section,\n                               Fb2ContentSink& sink,\n                               const reader::ReaderCancellationToken* cancellationToken) {\n    Fb2XmlReader xml(reader, 4096);\n''',
-)
+parser_cpp_text = PARSER_CPP.read_text(encoding="utf-8")
+if "bool Fb2Parser::renderCoverForFirstSection(" not in parser_cpp_text:
+    replace_once(
+        PARSER_CPP,
+        '''bool Fb2Parser::renderSection(IByteReader& reader,\n                               const Fb2SectionIndexEntry& section,\n                               Fb2ContentSink& sink,\n                               const reader::ReaderCancellationToken* cancellationToken) {\n    // Emit the FB2 <coverpage> only before the first body section. The outer\n    // range sinks suppress this event for later virtual slices of that section;\n    // for image-sliced sections scan() counted the cover above so ordinals stay aligned.\n    std::string coverId;\n    if (findCoverForFirstSection(reader, section.innerStartOffset, coverId)) {\n        sink.onImage(coverId);\n    }\n\n    Fb2XmlReader xml(reader, 4096);\n''',
+        '''bool Fb2Parser::renderCoverForFirstSection(IByteReader& reader,\n                                                  const Fb2SectionIndexEntry& section,\n                                                  Fb2ContentSink& sink) {\n    std::string coverId;\n    if (!findCoverForFirstSection(reader, section.innerStartOffset, coverId)) return false;\n    sink.onImage(coverId);\n    return true;\n}\n\nbool Fb2Parser::renderSection(IByteReader& reader,\n                               const Fb2SectionIndexEntry& section,\n                               Fb2ContentSink& sink,\n                               const reader::ReaderCancellationToken* cancellationToken) {\n    Fb2XmlReader xml(reader, 4096);\n''',
+    )
 
 # ChapterHtmlSlimParser already owns the only safe primitive for finalizing a
 # partially-filled page. Add a private inkMOD marker understood by generated

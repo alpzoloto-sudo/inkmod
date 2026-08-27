@@ -135,11 +135,11 @@ void ClippingListActivity::loop() {
     requestUpdate();
   });
   navigator_.onNextContinuous([this, total, perPage] {
-    selectedIndex_ = ButtonNavigator::nextPageIndex(selectedIndex_, total, perPage);
+    selectedIndex_ = ButtonNavigator::nextIndex(selectedIndex_, total);
     requestUpdate();
   });
   navigator_.onPreviousContinuous([this, total, perPage] {
-    selectedIndex_ = ButtonNavigator::previousPageIndex(selectedIndex_, total, perPage);
+    selectedIndex_ = ButtonNavigator::previousIndex(selectedIndex_, total);
     requestUpdate();
   });
 }

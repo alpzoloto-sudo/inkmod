@@ -582,7 +582,8 @@ bool FileBrowserActivity::isSleepFavoriteFolder(const std::string& fullPath) con
 void FileBrowserActivity::showFileActionMenu(const std::string& entry, bool ignoreInitialConfirmRelease) {
   const std::string fullPath = buildFullPath(basepath, entry);
   std::vector<FileBrowserActionActivity::MenuItem> items = BookActions::buildBookActionItems(fullPath, false);
-  items.insert(items.begin(), {FileBrowserAction::BookInfo, StrId::STR_BOOK_INFO});
+  items.insert(items.begin(),
+               {FileBrowserAction::BookInfo, isSleepImageFile(entry) ? StrId::STR_FILE_INFO : StrId::STR_BOOK_INFO});
   items.push_back({FileBrowserAction::Rename, StrId::STR_RENAME});
 
   if (isSleepImageFile(entry)) {
@@ -613,10 +614,11 @@ void FileBrowserActivity::showFileActionMenu(const std::string& entry, bool igno
                                    [this](const ActivityResult&) { requestUpdate(true); });
             return;
           case FileBrowserAction::SetSleepOverlay:
+            // Selecting an image must not silently change the user's chosen
+            // "Lock screen" mode.  Store only the image path; SleepActivity
+            // decides how to use it according to the existing mode.
             APP_STATE.favoriteSleepImagePath = fullPath;
-            SETTINGS.sleepScreen = InkMODSettings::OVERLAY;
             APP_STATE.saveToFile();
-            SETTINGS.saveToFile();
             requestUpdate();
             return;
           case FileBrowserAction::SetTimeoutSleepOverlay:
@@ -886,13 +888,13 @@ void FileBrowserActivity::loop() {
     requestUpdate();
   });
 
-  buttonNavigator.onNextContinuous([this, listSize, pageItems] {
-    selectorIndex = ButtonNavigator::nextPageIndex(static_cast<int>(selectorIndex), listSize, pageItems);
+  buttonNavigator.onNextContinuous([this, listSize] {
+    selectorIndex = ButtonNavigator::nextIndex(static_cast<int>(selectorIndex), listSize);
     requestUpdate();
   });
 
-  buttonNavigator.onPreviousContinuous([this, listSize, pageItems] {
-    selectorIndex = ButtonNavigator::previousPageIndex(static_cast<int>(selectorIndex), listSize, pageItems);
+  buttonNavigator.onPreviousContinuous([this, listSize] {
+    selectorIndex = ButtonNavigator::previousIndex(static_cast<int>(selectorIndex), listSize);
     requestUpdate();
   });
 }

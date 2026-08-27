@@ -208,12 +208,12 @@ void ControlsOptionsActivity::toggleCurrentSetting() {
 }
 
 void ControlsOptionsActivity::loop() {
-  buttonNavigator.onNextRelease([this] {
+  buttonNavigator.onNext([this] {
     moveSelection(true);
     requestUpdate();
   });
 
-  buttonNavigator.onPreviousRelease([this] {
+  buttonNavigator.onPrevious([this] {
     moveSelection(false);
     requestUpdate();
   });

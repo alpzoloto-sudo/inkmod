@@ -28,8 +28,8 @@ void EpubReaderChapterSelectionActivity::onEnter() {
 void EpubReaderChapterSelectionActivity::onExit() { Activity::onExit(); }
 
 void EpubReaderChapterSelectionActivity::loop() {
-  const int pageItems = UITheme::getInstance().getNumberOfItemsPerPage(renderer, true, false, true, false);
   const int totalItems = getTotalItems();
+  constexpr int kChapterJump = 5;
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     const auto tocItem = epub->getTocItem(selectorIndex);
@@ -49,25 +49,34 @@ void EpubReaderChapterSelectionActivity::loop() {
     finish();
   }
 
-  buttonNavigator.onNextRelease([this, totalItems] {
+  // Chapter selector: a short press always moves exactly one chapter so the
+  // user can land on any TOC entry. Holding any navigation button accelerates
+  // movement in fixed groups of five. ButtonNavigator suppresses the release
+  // callback after continuous navigation has fired, so a long press does not
+  // add an extra +/-1 step when the button is released.
+  auto nextOne = [this, totalItems] {
     selectorIndex = ButtonNavigator::nextIndex(selectorIndex, totalItems);
     requestUpdate();
-  });
-
-  buttonNavigator.onPreviousRelease([this, totalItems] {
+  };
+  auto previousOne = [this, totalItems] {
     selectorIndex = ButtonNavigator::previousIndex(selectorIndex, totalItems);
     requestUpdate();
-  });
-
-  buttonNavigator.onNextContinuous([this, totalItems, pageItems] {
-    selectorIndex = ButtonNavigator::nextPageIndex(selectorIndex, totalItems, pageItems);
+  };
+  auto jumpForward = [this, totalItems] {
+    if (totalItems <= 0) return;
+    selectorIndex = (selectorIndex + kChapterJump) % totalItems;
     requestUpdate();
-  });
-
-  buttonNavigator.onPreviousContinuous([this, totalItems, pageItems] {
-    selectorIndex = ButtonNavigator::previousPageIndex(selectorIndex, totalItems, pageItems);
+  };
+  auto jumpBackward = [this, totalItems] {
+    if (totalItems <= 0) return;
+    selectorIndex = (selectorIndex - (kChapterJump % totalItems) + totalItems) % totalItems;
     requestUpdate();
-  });
+  };
+
+  buttonNavigator.onNextRelease(nextOne);
+  buttonNavigator.onPreviousRelease(previousOne);
+  buttonNavigator.onNextContinuous(jumpForward);
+  buttonNavigator.onPreviousContinuous(jumpBackward);
 }
 
 void EpubReaderChapterSelectionActivity::render(RenderLock&&) {

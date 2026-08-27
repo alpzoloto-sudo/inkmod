@@ -169,7 +169,7 @@ void fb2ZipScanTask(void* arg) {
 }
 
 
-constexpr uint8_t PACKAGE_VERSION = 16;  // dedicated first cover page; invalidates older package indexes
+constexpr uint8_t PACKAGE_VERSION = 19;  // normalize OCR-style NBSP letter spacing; invalidate older packages
 // A single FB2 <section> with more inline images than this gets split into
 // several virtual chapters while its SD-card index is written, so a chapter
 // that's actually opened never needs to extract more than this many images
@@ -702,6 +702,116 @@ bool findIndexedImageFilename(const std::string& imageIndexPath, const std::stri
   return false;
 }
 
+
+
+// Some FB2 files (especially OCR/converted sources) contain accidental NBSP or
+// narrow-NBSP between every Cyrillic letter of a word.  Keeping these as real
+// spaces produces visible runs such as "д в у х" or "т е п е р ь".  Do not
+// collapse a single NBSP ("в\u00A0доме" is legitimate typography); only collapse
+// runs with at least two no-break separators between lowercase Cyrillic letters.
+// This also avoids touching initials such as "А. Б. В.".
+static bool decodeLowerCyrillicAt(const std::string& s, size_t pos, size_t& cpLen) {
+  cpLen = 0;
+  if (pos + 1 >= s.size()) return false;
+  const uint8_t b0 = static_cast<uint8_t>(s[pos]);
+  const uint8_t b1 = static_cast<uint8_t>(s[pos + 1]);
+  if ((b0 != 0xD0 && b0 != 0xD1) || (b1 & 0xC0) != 0x80) return false;
+  const uint32_t cp = ((b0 & 0x1F) << 6) | (b1 & 0x3F);
+  cpLen = 2;
+  return cp >= 0x0430 && cp <= 0x045F;  // а..я + ё and nearby lowercase Cyrillic
+}
+
+static size_t noBreakSpaceLenAt(const std::string& s, size_t pos) {
+  if (pos + 1 < s.size() && static_cast<uint8_t>(s[pos]) == 0xC2 &&
+      static_cast<uint8_t>(s[pos + 1]) == 0xA0) {
+    return 2;  // U+00A0 NBSP
+  }
+  if (pos + 2 < s.size() && static_cast<uint8_t>(s[pos]) == 0xE2 &&
+      static_cast<uint8_t>(s[pos + 1]) == 0x80 && static_cast<uint8_t>(s[pos + 2]) == 0xAF) {
+    return 3;  // U+202F narrow NBSP
+  }
+  return 0;
+}
+
+static bool normalizeFb2LetterSpacing(const std::string& input, std::string& out) {
+  bool found = false;
+  for (size_t i = 0; i < input.size() && !found;) {
+    size_t cpLen = 0;
+    if (!decodeLowerCyrillicAt(input, i, cpLen)) {
+      ++i;
+      continue;
+    }
+    size_t p = i + cpLen;
+    const size_t sep1 = noBreakSpaceLenAt(input, p);
+    if (!sep1) {
+      i += cpLen;
+      continue;
+    }
+    p += sep1;
+    size_t cp2Len = 0;
+    if (!decodeLowerCyrillicAt(input, p, cp2Len)) {
+      i += cpLen;
+      continue;
+    }
+    p += cp2Len;
+    const size_t sep2 = noBreakSpaceLenAt(input, p);
+    if (!sep2) {
+      i += cpLen;
+      continue;
+    }
+    p += sep2;
+    size_t cp3Len = 0;
+    found = decodeLowerCyrillicAt(input, p, cp3Len);
+    i += cpLen;
+  }
+  if (!found) return false;
+
+  out.clear();
+  out.reserve(input.size());
+  for (size_t i = 0; i < input.size();) {
+    size_t cpLen = 0;
+    if (!decodeLowerCyrillicAt(input, i, cpLen)) {
+      out.push_back(input[i++]);
+      continue;
+    }
+
+    size_t scan = i;
+    size_t letters = 0;
+    size_t runEnd = i;
+    while (scan < input.size()) {
+      size_t letterLen = 0;
+      if (!decodeLowerCyrillicAt(input, scan, letterLen)) break;
+      ++letters;
+      scan += letterLen;
+      runEnd = scan;
+      const size_t sepLen = noBreakSpaceLenAt(input, scan);
+      if (!sepLen) break;
+      size_t nextLen = 0;
+      if (!decodeLowerCyrillicAt(input, scan + sepLen, nextLen)) break;
+      scan += sepLen;
+    }
+
+    if (letters >= 3) {
+      size_t q = i;
+      size_t copied = 0;
+      while (q < runEnd && copied < letters) {
+        size_t letterLen = 0;
+        if (!decodeLowerCyrillicAt(input, q, letterLen)) break;
+        out.append(input, q, letterLen);
+        q += letterLen;
+        ++copied;
+        const size_t sepLen = noBreakSpaceLenAt(input, q);
+        if (sepLen && copied < letters) q += sepLen;
+      }
+      i = runEnd;
+    } else {
+      out.append(input, i, cpLen);
+      i += cpLen;
+    }
+  }
+  return true;
+}
+
 class StreamSink : public Fb2ContentSink {
  public:
   // resolveLink(targetId) -> XHTML href to point at (e.g. "chapter_5.xhtml#fb2-...")
@@ -717,32 +827,53 @@ class StreamSink : public Fb2ContentSink {
   void onParagraphEnd() override { writeBytes(out_, "</p>"); }
 
   void onSubtitle(const std::string& text) override {
-    writeBytes(out_, "<h3 class=\"subtitle\">");
-    writeXmlEscaped(out_, text);
-    writeBytes(out_, "</h3>");
+    onSubtitleBegin(); writeXmlEscaped(out_, text); onSubtitleEnd();
   }
+  void onSubtitleBegin() override { writeBytes(out_, "<h3 class=\"subtitle\">"); }
+  void onSubtitleEnd() override { writeBytes(out_, "</h3>"); }
+  void onTitleBegin(uint8_t level) override {
+    const int h = std::min(std::max(static_cast<int>(level) + 1, 1), 6);
+    writeHeadingTag(out_, h, false);
+  }
+  void onTitleEnd(uint8_t level) override {
+    const int h = std::min(std::max(static_cast<int>(level) + 1, 1), 6);
+    writeHeadingTag(out_, h, true);
+  }
+  void onTitleLineBreak() override { writeBytes(out_, "<br/>"); }
   void onEmptyLine() override { writeBytes(out_, "<p class=\"empty-line\">&#160;</p>"); }
   void onHorizontalRule() override { writeBytes(out_, "<hr/>"); }
 
-  void onPoemBegin() override { writeBytes(out_, "<div class=\"poem\">"); }
-  void onPoemEnd() override { writeBytes(out_, "</div>"); }
-  void onStanzaBegin() override { writeBytes(out_, "<div class=\"stanza\">"); }
+  void onPoemBegin() override {
+    stanzaIndexStack_.push_back(0);
+    writeBytes(out_, "<div class=\"poem\">");
+  }
+  void onPoemEnd() override {
+    writeBytes(out_, "</div>");
+    if (!stanzaIndexStack_.empty()) stanzaIndexStack_.pop_back();
+  }
+  void onStanzaBegin() override {
+    const bool isContinuationStanza = !stanzaIndexStack_.empty() && stanzaIndexStack_.back() > 0;
+    writeBytes(out_, isContinuationStanza ? "<div class=\"stanza stanza-break\">" : "<div class=\"stanza\">");
+    if (!stanzaIndexStack_.empty()) ++stanzaIndexStack_.back();
+  }
   void onStanzaEnd() override { writeBytes(out_, "</div>"); }
   void onVerseLine(const std::string& text) override {
     writeBytes(out_, "<p class=\"v\">");
     writeXmlEscaped(out_, text);
     writeBytes(out_, "</p>");
   }
+  void onVerseBegin() override { writeBytes(out_, "<p class=\"v\">"); }
+  void onVerseEnd() override { writeBytes(out_, "</p>"); }
 
   void onCiteBegin() override { writeBytes(out_, "<blockquote class=\"cite\">"); }
   void onCiteEnd() override { writeBytes(out_, "</blockquote>"); }
   void onEpigraphBegin() override { writeBytes(out_, "<div class=\"epigraph\">"); }
   void onEpigraphEnd() override { writeBytes(out_, "</div>"); }
   void onTextAuthor(const std::string& text) override {
-    writeBytes(out_, "<p class=\"text-author\">");
-    writeXmlEscaped(out_, text);
-    writeBytes(out_, "</p>");
+    onTextAuthorBegin(); writeXmlEscaped(out_, text); onTextAuthorEnd();
   }
+  void onTextAuthorBegin() override { writeBytes(out_, "<p class=\"text-author\">"); }
+  void onTextAuthorEnd() override { writeBytes(out_, "</p>"); }
 
   void onText(const std::string& text, Fb2InlineStyle style) override {
     const uint8_t bits = static_cast<uint8_t>(style);
@@ -762,7 +893,12 @@ class StreamSink : public Fb2ContentSink {
     if (has(Fb2InlineStyle::Superscript)) writeBytes(out_, "<sup>");
     if (has(Fb2InlineStyle::Subscript)) writeBytes(out_, "<sub>");
 
-    writeXmlEscaped(out_, text);
+    std::string normalizedText;
+    if (normalizeFb2LetterSpacing(text, normalizedText)) {
+      writeXmlEscaped(out_, normalizedText);
+    } else {
+      writeXmlEscaped(out_, text);
+    }
 
     if (has(Fb2InlineStyle::Subscript)) writeBytes(out_, "</sub>");
     if (has(Fb2InlineStyle::Superscript)) writeBytes(out_, "</sup>");
@@ -825,6 +961,7 @@ class StreamSink : public Fb2ContentSink {
   // path after the constructor returned.
   std::string imageIndexPath_;
   LinkResolver resolveLink_;
+  std::vector<uint16_t> stanzaIndexStack_;
   bool linkWasEmitted_ = false;  // whether onLinkBegin actually wrote an <a> for the currently-open link
 };
 
@@ -840,6 +977,10 @@ class RangeFilterSink : public Fb2ContentSink {
 
   void onParagraphBegin() override { beginScope(Scope::Paragraph); }
   void onParagraphEnd() override { endScope(Scope::Paragraph); }
+  void onSubtitleBegin() override { if (ensureEmitting()) inner_.onSubtitleBegin(); }
+  void onSubtitleEnd() override { if (emitting_) inner_.onSubtitleEnd(); safeBoundary(); }
+  void onTextAuthorBegin() override { if (ensureEmitting()) inner_.onTextAuthorBegin(); }
+  void onTextAuthorEnd() override { if (emitting_) inner_.onTextAuthorEnd(); safeBoundary(); }
   void onSubtitle(const std::string& text) override {
     if (ensureEmitting()) inner_.onSubtitle(text);
     safeBoundary();
@@ -860,6 +1001,8 @@ class RangeFilterSink : public Fb2ContentSink {
     if (ensureEmitting()) inner_.onVerseLine(text);
     safeBoundary();
   }
+  void onVerseBegin() override { beginScope(Scope::Verse); }
+  void onVerseEnd() override { endScope(Scope::Verse); }
   void onCiteBegin() override { beginScope(Scope::Cite); }
   void onCiteEnd() override { endScope(Scope::Cite); }
   void onEpigraphBegin() override { beginScope(Scope::Epigraph); }
@@ -896,7 +1039,7 @@ class RangeFilterSink : public Fb2ContentSink {
   }
 
  private:
-  enum class Scope : uint8_t { Paragraph, Poem, Stanza, Cite, Epigraph, Table, TableRow };
+  enum class Scope : uint8_t { Paragraph, Poem, Stanza, Verse, Cite, Epigraph, Table, TableRow };
   static constexpr size_t MAX_SCOPES = 16;
 
   void beginScope(Scope scope) {
@@ -947,6 +1090,7 @@ class RangeFilterSink : public Fb2ContentSink {
       case Scope::Paragraph: inner_.onParagraphBegin(); break;
       case Scope::Poem: inner_.onPoemBegin(); break;
       case Scope::Stanza: inner_.onStanzaBegin(); break;
+      case Scope::Verse: inner_.onVerseBegin(); break;
       case Scope::Cite: inner_.onCiteBegin(); break;
       case Scope::Epigraph: inner_.onEpigraphBegin(); break;
       case Scope::Table: inner_.onTableBegin(); break;
@@ -959,6 +1103,7 @@ class RangeFilterSink : public Fb2ContentSink {
       case Scope::Paragraph: inner_.onParagraphEnd(); break;
       case Scope::Poem: inner_.onPoemEnd(); break;
       case Scope::Stanza: inner_.onStanzaEnd(); break;
+      case Scope::Verse: inner_.onVerseEnd(); break;
       case Scope::Cite: inner_.onCiteEnd(); break;
       case Scope::Epigraph: inner_.onEpigraphEnd(); break;
       case Scope::Table: inner_.onTableEnd(); break;
@@ -996,6 +1141,10 @@ class TextRangeFilterSink : public Fb2ContentSink {
 
   void onParagraphBegin() override { beginScope(Scope::Paragraph); }
   void onParagraphEnd() override { endScope(Scope::Paragraph); }
+  void onSubtitleBegin() override { if (ensureEmitting()) inner_.onSubtitleBegin(); }
+  void onSubtitleEnd() override { if (emitting_) inner_.onSubtitleEnd(); safeBoundary(); }
+  void onTextAuthorBegin() override { if (ensureEmitting()) inner_.onTextAuthorBegin(); }
+  void onTextAuthorEnd() override { if (emitting_) inner_.onTextAuthorEnd(); safeBoundary(); }
   void onPoemBegin() override { beginScope(Scope::Poem); }
   void onPoemEnd() override { endScope(Scope::Poem); }
   void onStanzaBegin() override { beginScope(Scope::Stanza); }
@@ -1015,6 +1164,8 @@ class TextRangeFilterSink : public Fb2ContentSink {
   void onVerseLine(const std::string& text) override {
     emitAtomicText(text, [&](const std::string& part) { inner_.onVerseLine(part); });
   }
+  void onVerseBegin() override { beginScope(Scope::Verse); }
+  void onVerseEnd() override { endScope(Scope::Verse); }
   void onTextAuthor(const std::string& text) override {
     emitAtomicText(text, [&](const std::string& part) { inner_.onTextAuthor(part); });
   }
@@ -1042,7 +1193,7 @@ class TextRangeFilterSink : public Fb2ContentSink {
   }
 
  private:
-  enum class Scope : uint8_t { Paragraph, Poem, Stanza, Cite, Epigraph, Table, TableRow };
+  enum class Scope : uint8_t { Paragraph, Poem, Stanza, Verse, Cite, Epigraph, Table, TableRow };
   static constexpr size_t MAX_SCOPES = 16;
 
   template <typename EmitFn>
@@ -1114,6 +1265,7 @@ class TextRangeFilterSink : public Fb2ContentSink {
       case Scope::Paragraph: inner_.onParagraphBegin(); break;
       case Scope::Poem: inner_.onPoemBegin(); break;
       case Scope::Stanza: inner_.onStanzaBegin(); break;
+      case Scope::Verse: inner_.onVerseBegin(); break;
       case Scope::Cite: inner_.onCiteBegin(); break;
       case Scope::Epigraph: inner_.onEpigraphBegin(); break;
       case Scope::Table: inner_.onTableBegin(); break;
@@ -1126,6 +1278,7 @@ class TextRangeFilterSink : public Fb2ContentSink {
       case Scope::Paragraph: inner_.onParagraphEnd(); break;
       case Scope::Poem: inner_.onPoemEnd(); break;
       case Scope::Stanza: inner_.onStanzaEnd(); break;
+      case Scope::Verse: inner_.onVerseEnd(); break;
       case Scope::Cite: inner_.onCiteEnd(); break;
       case Scope::Epigraph: inner_.onEpigraphEnd(); break;
       case Scope::Table: inner_.onTableEnd(); break;
@@ -1469,7 +1622,15 @@ bool Fb2::loadMetadataCache() {
   if (!second) return false;
   title.assign(buffer, first - buffer);
   author.assign(first + 1, second - first - 1);
-  language.assign(second + 1);
+  const char* third = strchr(second + 1, '\n');
+  if (third) {
+    language.assign(second + 1, third - second - 1);
+    date.assign(third + 1);
+    while (!date.empty() && (date.back() == '\n' || date.back() == '\r')) date.pop_back();
+  } else {
+    language.assign(second + 1);
+    date.clear();
+  }
   while (!language.empty() && (language.back() == '\n' || language.back() == '\r')) language.pop_back();
   if (language.empty()) language = "und";
   return !title.empty();
@@ -1483,6 +1644,8 @@ void Fb2::saveMetadataCache() const {
   writeBytes(metadata, author);
   metadata.write(static_cast<uint8_t>('\n'));
   writeBytes(metadata, language);
+  metadata.write(static_cast<uint8_t>('\n'));
+  writeBytes(metadata, date);
   metadata.write(static_cast<uint8_t>('\n'));
   metadata.close();
 }
@@ -1726,9 +1889,11 @@ bool Fb2::convertToPackage(const ProgressFn& onProgress) {
   title = scan.metadata.title;
   author = scan.metadata.author;
   language = scan.metadata.language;
+  date = scan.metadata.date;
   normalizeText(title);
   normalizeText(author);
   normalizeText(language);
+  normalizeText(date);
   if (title.empty()) {
     const size_t slash = filepath.find_last_of('/');
     const size_t start = slash == std::string::npos ? 0 : slash + 1;
@@ -1935,6 +2100,67 @@ constexpr int MAX_CACHED_RAW_IMAGES = 3;
 constexpr char IMAGE_LRU_FILE[] = "/.fb2_image_lru";
 }  // namespace
 
+bool sanitizeFb2JpegMetadata(const std::string& path) {
+  HalFile in;
+  if (!Storage.openFileForRead("FB2", path, in)) return false;
+  uint8_t soi[2] = {};
+  if (in.read(soi, 2) != 2 || soi[0] != 0xFF || soi[1] != 0xD8) { in.close(); return false; }
+  const std::string tmp = path + ".clean";
+  HalFile out;
+  if (!Storage.openFileForWrite("FB2", tmp, out)) { in.close(); return false; }
+  bool ok = out.write(soi, 2) == 2;
+  std::array<uint8_t, 512> buf{};
+  auto copyN = [&](uint32_t n) {
+    while (ok && n) {
+      const size_t chunk = std::min<size_t>(buf.size(), n);
+      const int got = in.read(buf.data(), chunk);
+      if (got != static_cast<int>(chunk) || out.write(buf.data(), chunk) != chunk) { ok = false; return; }
+      n -= static_cast<uint32_t>(chunk);
+    }
+  };
+  auto skipN = [&](uint32_t n) {
+    while (ok && n) {
+      const size_t chunk = std::min<size_t>(buf.size(), n);
+      if (in.read(buf.data(), chunk) != static_cast<int>(chunk)) { ok = false; return; }
+      n -= static_cast<uint32_t>(chunk);
+    }
+  };
+  while (ok) {
+    int b = in.read();
+    if (b < 0) { ok = false; break; }
+    if (b != 0xFF) { ok = false; break; }
+    int marker = in.read();
+    while (marker == 0xFF) marker = in.read();
+    if (marker < 0) { ok = false; break; }
+    if (marker == 0xD9) { uint8_t m[2]={0xFF,0xD9}; ok = out.write(m,2)==2; break; }
+    if (marker == 0xDA) {
+      uint8_t lenb[2]; if (in.read(lenb,2)!=2) { ok=false; break; }
+      const uint16_t len=(uint16_t(lenb[0])<<8)|lenb[1];
+      uint8_t head[4]={0xFF,static_cast<uint8_t>(marker),lenb[0],lenb[1]};
+      if (len < 2 || out.write(head,4)!=4) { ok=false; break; }
+      copyN(len-2);
+      while (ok) { const int got=in.read(buf.data(),buf.size()); if (got<=0) break; if (out.write(buf.data(),got)!=static_cast<size_t>(got)) ok=false; }
+      break;
+    }
+    // Standalone markers have no length.
+    if ((marker >= 0xD0 && marker <= 0xD7) || marker == 0x01) {
+      uint8_t m[2]={0xFF,static_cast<uint8_t>(marker)}; ok = out.write(m,2)==2; continue;
+    }
+    uint8_t lenb[2]; if (in.read(lenb,2)!=2) { ok=false; break; }
+    const uint16_t len=(uint16_t(lenb[0])<<8)|lenb[1]; if (len<2) { ok=false; break; }
+    const bool drop = marker == 0xE1 || marker == 0xE2 || marker == 0xFE;
+    if (drop) { skipN(len-2); continue; }
+    uint8_t head[4]={0xFF,static_cast<uint8_t>(marker),lenb[0],lenb[1]};
+    if (out.write(head,4)!=4) { ok=false; break; }
+    copyN(len-2);
+  }
+  in.close(); out.close();
+  if (!ok) { Storage.remove(tmp.c_str()); return false; }
+  Storage.remove(path.c_str());
+  if (!Storage.rename(tmp.c_str(), path.c_str())) { Storage.remove(tmp.c_str()); return false; }
+  return true;
+}
+
 // static
 bool Fb2::decodeImageOnDemand(const std::string& imagePath,
                               const reader::ReaderCancellationToken* cancellationToken) {
@@ -2047,6 +2273,10 @@ bool Fb2::decodeImageOnDemand(const std::string& imagePath,
   }
   out.close();
   source.close();
+  // Some large FB2 covers carry EXIF thumbnails/ICC chunks that confuse the
+  // tiny embedded JPEG decoder even though desktop decoders accept them.
+  // Strip only non-rendering metadata; pixel data remains byte-for-byte intact.
+  if (decoded && writeOk && binary.id == "cover.jpg") sanitizeFb2JpegMetadata(imagePath);
   if (!decoded || !writeOk || (cancellationToken && cancellationToken->isCancellationRequested())) {
     Storage.remove(imagePath.c_str());
     LOG_INF("FB2", "Lazy image decode incomplete/cancelled: %s", filename.c_str());
@@ -2147,6 +2377,54 @@ bool Fb2::loadApproxChapterSizes(const std::string& packageCachePath, std::deque
   return !outSizes.empty();
 }
 
+
+// static
+bool Fb2::getOriginalSectionOrdinal(const std::string& packageCachePath, int chapterIndex, int& ordinal) {
+  ordinal = 0;
+  if (chapterIndex < 0) return false;
+
+  HalFile sectionsIn;
+  if (!Storage.openFileForRead("FB2", packageCachePath + SECTIONS_INDEX_FILE, sectionsIn)) return false;
+  if (!readAndCheckCacheHeader(sectionsIn)) {
+    sectionsIn.close();
+    return false;
+  }
+
+  uint32_t previousOffset = UINT32_MAX;
+  int distinctSections = 0;
+  for (int i = 0; i <= chapterIndex; ++i) {
+    uint8_t level = 0;
+    uint32_t innerStartOffset = 0;
+    uint16_t idLen = 0, titleLen = 0;
+    uint32_t approxTextBytes = 0;
+    uint32_t imageRangeStart = 0, imageRangeEnd = 0, textRangeStart = 0, textRangeEnd = 0;
+
+    if (sectionsIn.read(&level, sizeof(level)) != sizeof(level) ||
+        sectionsIn.read(&innerStartOffset, sizeof(innerStartOffset)) != sizeof(innerStartOffset) ||
+        sectionsIn.read(&idLen, sizeof(idLen)) != sizeof(idLen)) break;
+    if (idLen && !skipCacheBytes(sectionsIn, idLen)) break;
+    if (sectionsIn.read(&titleLen, sizeof(titleLen)) != sizeof(titleLen)) break;
+    if (titleLen && !skipCacheBytes(sectionsIn, titleLen)) break;
+    if (sectionsIn.read(&approxTextBytes, sizeof(approxTextBytes)) != sizeof(approxTextBytes) ||
+        sectionsIn.read(&imageRangeStart, sizeof(imageRangeStart)) != sizeof(imageRangeStart) ||
+        sectionsIn.read(&imageRangeEnd, sizeof(imageRangeEnd)) != sizeof(imageRangeEnd) ||
+        sectionsIn.read(&textRangeStart, sizeof(textRangeStart)) != sizeof(textRangeStart) ||
+        sectionsIn.read(&textRangeEnd, sizeof(textRangeEnd)) != sizeof(textRangeEnd)) break;
+
+    if (i == 0 || innerStartOffset != previousOffset) {
+      ++distinctSections;
+      previousOffset = innerStartOffset;
+    }
+    if (i == chapterIndex) {
+      ordinal = distinctSections;
+      sectionsIn.close();
+      return ordinal > 0;
+    }
+  }
+
+  sectionsIn.close();
+  return false;
+}
 
 // static
 std::string Fb2::resolveOriginalPath(const std::string& packagePath) {
@@ -2419,51 +2697,81 @@ bool Fb2::renderChapterOnDemand(const std::string& packageCachePath, int chapter
     writeBytes(out, "<div class=\"inkmod-fb2-cover-page-break\"></div>");
   }
 
-  if (!title.empty()) {
-    const int heading = std::min(std::max(static_cast<int>(level) + 1, 1), 6);
-    writeHeadingTag(out, heading, false);
-    writeXmlEscaped(out, title);
-    writeHeadingTag(out, heading, true);
-  }
-
-  // An FB2 annotation belongs to <description>, not to a body section.  It
-  // is persisted during indexing and streamed only into the first chapter;
-  // this keeps the original source closed while pagination is running and
-  // bounds temporary storage to a small fixed buffer.
+  // Render the synthetic FB2 front matter from the ORIGINAL source so inline
+  // markup in <annotation> (especially <emphasis>) is not flattened away.
+  // Author/title/date come from the tiny metadata cache and are followed by
+  // the styled annotation. All of it is marked front-matter so the first real
+  // section starts a fresh page counter/footer after the hard break below.
   if (chapterIndex == 0) {
-    HalFile annotation;
-    if (Storage.openFileForRead("FB2", packageCachePath + ANNOTATION_FILE, annotation)) {
-      std::array<char, 128> chunk = {};
-      bool emitted = false;
-      bool paragraphOpen = false;
-      while (true) {
-        if (cancellationToken && cancellationToken->isCancellationRequested()) {
-          annotation.close();
-          source.close();
-          return false;
-        }
-        const int bytesRead = annotation.read(chunk.data(), chunk.size());
-        if (bytesRead <= 0) break;
-        for (int i = 0; i < bytesRead; ++i) {
-          const char c = chunk[static_cast<size_t>(i)];
-          if (c == '\r') continue;
-          if (c == '\n') {
-            if (paragraphOpen) writeBytes(out, "</p>");
-            paragraphOpen = false;
-            continue;
-          }
-          if (!paragraphOpen) {
-            if (!emitted) writeBytes(out, "<div class=\"annotation\">");
-            writeBytes(out, "<p class=\"inkmod-fb2-frontmatter\">");
-            emitted = true;
-            paragraphOpen = true;
-          }
-          writeXmlEscaped(out, &c, 1);
+    std::string metaTitle;
+    std::string metaAuthor;
+    std::string metaDate;
+    {
+      char meta[2048] = {};
+      const size_t n = Storage.readFileToBuffer((packageCachePath + METADATA_FILE).c_str(), meta, sizeof(meta));
+      if (n > 0) {
+        const char* a = strchr(meta, '\n');
+        const char* b = a ? strchr(a + 1, '\n') : nullptr;
+        const char* c = b ? strchr(b + 1, '\n') : nullptr;
+        if (a) metaTitle.assign(meta, a - meta);
+        if (a && b) metaAuthor.assign(a + 1, b - a - 1);
+        if (c) {
+          metaDate.assign(c + 1);
+          while (!metaDate.empty() && (metaDate.back() == '\n' || metaDate.back() == '\r')) metaDate.pop_back();
         }
       }
-      if (paragraphOpen) writeBytes(out, "</p>");
-      if (emitted) writeBytes(out, "</div>");
-      annotation.close();
+    }
+
+    const bool hasMetadataFrontMatter = !metaAuthor.empty() || !metaTitle.empty() || !metaDate.empty();
+    writeBytes(out, "<div class=\"annotation inkmod-fb2-frontmatter\">");
+    if (!metaAuthor.empty()) {
+      writeBytes(out, "<h2 class=\"fb2-book-author\">");
+      writeXmlEscaped(out, metaAuthor);
+      writeBytes(out, "</h2>");
+    }
+    if (!metaTitle.empty()) {
+      writeBytes(out, "<h2 class=\"fb2-book-title\">");
+      writeXmlEscaped(out, metaTitle);
+      writeBytes(out, "</h2>");
+    }
+    const bool annotationOk = parser.renderAnnotation(reader, sink, cancellationToken);
+    if (!annotationOk) {
+      source.close();
+      return false;
+    }
+    if (!metaDate.empty()) {
+      writeBytes(out, "<p class=\"fb2-book-date\">");
+      writeXmlEscaped(out, metaDate);
+      writeBytes(out, "</p>");
+    }
+    writeBytes(out, "</div>");
+    if (hasMetadataFrontMatter || Storage.exists((packageCachePath + ANNOTATION_FILE).c_str())) {
+      writeBytes(out, "<div class=\"inkmod-fb2-frontmatter-page-break\"></div>");
+    }
+
+    // FB2 also allows an epigraph directly under <body>, before the first
+    // <section>. Such content is outside the section index, so recover it in a
+    // bounded preamble pass that stops as soon as the first section starts.
+    writeBytes(out, "<div class=\"inkmod-fb2-frontmatter\">");
+    if (!parser.renderBodyPreambleForFirstSection(reader, sink, cancellationToken)) {
+      source.close();
+      return false;
+    }
+    writeBytes(out, "</div>");
+    // A real FB2 section after the body-level epigraph starts on a fresh page.
+    // Reuse the parser-level hard page-break marker so CSS cannot collapse it.
+    writeBytes(out, "<div class=\"inkmod-fb2-frontmatter-page-break\"></div>");
+  }
+
+  if (!title.empty()) {
+    // Re-read only the section title so inline FB2 emphasis/strong markup is
+    // preserved in the visible heading. The scan index intentionally keeps a
+    // plain-text title for TOC/search.
+    if (!parser.renderSectionTitle(reader, section, sink, level, cancellationToken)) {
+      const int heading = std::min(std::max(static_cast<int>(level) + 1, 1), 6);
+      writeHeadingTag(out, heading, false);
+      writeXmlEscaped(out, title);
+      writeHeadingTag(out, heading, true);
     }
   }
 
@@ -2492,15 +2800,21 @@ bool Fb2::writeStyleFile() const {
       packagePath + "/OEBPS/style.css",
       "body { text-align: justify; }\n"
       "h1, h2, h3, h4, h5, h6 { text-align: center; font-weight: bold; margin: 1em 0 0.7em 0; }\n"
-      ".subtitle { text-align: center; font-style: italic; }\n"
+      ".subtitle { text-align: center; }\n"
       "p { margin: 0.25em 0; }\n"
-      ".epigraph, .cite { margin: 0.7em 1.5em; font-style: italic; text-indent: 0; }\n"
+      ".epigraph, .cite { margin: 0.7em 1.5em; text-indent: 0; }\n"
       ".poem { margin: 0.7em 1em; }\n"
+      ".epigraph > .poem { margin-bottom: 0; }\n"
       ".stanza { margin: 0; padding: 0; }\n"
+      ".stanza-break { margin-top: 0.5em; }\n"
       ".v { text-indent: 0; text-align: left; margin: 0; }\n"
-      ".text-author { text-align: right; font-style: italic; text-indent: 0; margin: 0.2em 0 0 0; }\n"
+      ".text-author { text-align: right; text-indent: 0; margin: 0.5em 0 0 0; }\n"
+      ".epigraph > .text-author { margin-top: 0.5em; }\n"
+      ".fb2-book-author { text-align: center; margin: 0.6em 0 0 0; }\n"
+      ".fb2-book-title { text-align: center; margin: 0.6em 0 0.6em 0; }\n"
+      ".fb2-book-date { text-align: right; text-indent: 0; margin: 0.5em 0 0 0; }\n"
       ".empty-line { margin: 0.6em 0; text-indent: 0; }\n"
-      ".annotation { font-style: italic; }\n"
+      ".annotation { }\n"
       ".strike { text-decoration: line-through; }\n"
       ".underline { text-decoration: underline; }\n"
       ".smallcaps { font-variant: small-caps; }\n"

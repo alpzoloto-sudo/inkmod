@@ -76,5 +76,5 @@ class ProgressMapper {
   // opens the original FB2 with crengine. Convert an InkMOD location to a
   // conservative crengine-compatible FB2 XPointer instead of publishing the
   // synthetic XHTML ancestry.
-  static std::string generateFb2CompatibleXPath(const InkMODPosition& pos);
+  static std::string generateFb2CompatibleXPath(const InkMODPosition& pos, int originalSectionOrdinal);
 };

@@ -37,7 +37,6 @@ void LanguageSelectActivity::loop() {
     return;
   }
 
-  const int pageItems = UITheme::getNumberOfItemsPerPage(renderer, true, false, true, false);
 
   // Handle navigation
   buttonNavigator.onNextRelease([this] {
@@ -50,13 +49,13 @@ void LanguageSelectActivity::loop() {
     requestUpdate();
   });
 
-  buttonNavigator.onNextContinuous([this, pageItems] {
-    selectedIndex = ButtonNavigator::nextPageIndex(static_cast<int>(selectedIndex), totalItems, pageItems);
+  buttonNavigator.onNextContinuous([this] {
+    selectedIndex = ButtonNavigator::nextIndex(static_cast<int>(selectedIndex), totalItems);
     requestUpdate();
   });
 
-  buttonNavigator.onPreviousContinuous([this, pageItems] {
-    selectedIndex = ButtonNavigator::previousPageIndex(static_cast<int>(selectedIndex), totalItems, pageItems);
+  buttonNavigator.onPreviousContinuous([this] {
+    selectedIndex = ButtonNavigator::previousIndex(static_cast<int>(selectedIndex), totalItems);
     requestUpdate();
   });
 }

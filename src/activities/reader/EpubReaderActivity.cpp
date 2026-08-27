@@ -82,6 +82,114 @@ constexpr uint8_t BOOK_PROGRESS_ESTIMATE_FLOOR_PERCENT = 90;
 constexpr uint8_t PUBLISHER_PAGE_NUMBER_LEFT_MARGIN_MIN = 15;
 constexpr int PUBLISHER_PAGE_NUMBER_X = 5;
 
+
+constexpr uint32_t FB2_LOGICAL_PAGES_MAGIC = 0x4C504246U;  // "FBPL"
+constexpr uint16_t FB2_LOGICAL_PAGES_VERSION = 1;
+constexpr uint32_t FB2_LAYOUT_SEMANTICS_GENERATION = 62;
+constexpr char FB2_LOGICAL_PAGES_FILE_NAME[] = "/logical_pages.bin";
+
+struct Fb2LogicalPagesRecord {
+  uint32_t magic;
+  uint16_t version;
+  uint16_t reserved;
+  uint32_t layoutSignature;
+  int32_t logicalStart;
+  int32_t logicalEnd;
+  int32_t totalPages;
+};
+
+void hashLayoutBytes(uint32_t& hash, const void* data, const size_t size) {
+  const auto* bytes = static_cast<const uint8_t*>(data);
+  for (size_t i = 0; i < size; ++i) {
+    hash ^= bytes[i];
+    hash *= 16777619U;
+  }
+}
+
+template <typename T>
+void hashLayoutValue(uint32_t& hash, const T& value) {
+  hashLayoutBytes(hash, &value, sizeof(value));
+}
+
+uint32_t fb2LogicalPagesLayoutSignature(const int fontId, const uint16_t viewportWidth,
+                                        const uint16_t viewportHeight) {
+  uint32_t hash = 2166136261U;
+  hashLayoutValue(hash, FB2_LAYOUT_SEMANTICS_GENERATION);
+  hashLayoutValue(hash, fontId);
+  const float lineCompression = SETTINGS.getReaderLineCompression();
+  hashLayoutValue(hash, lineCompression);
+  hashLayoutValue(hash, SETTINGS.extraParagraphSpacing);
+  hashLayoutValue(hash, SETTINGS.forceParagraphIndents);
+  hashLayoutValue(hash, SETTINGS.paragraphAlignment);
+  hashLayoutValue(hash, viewportWidth);
+  hashLayoutValue(hash, viewportHeight);
+  hashLayoutValue(hash, SETTINGS.hyphenationEnabled);
+  hashLayoutValue(hash, SETTINGS.embeddedStyle);
+  hashLayoutValue(hash, SETTINGS.imageRendering);
+  hashLayoutValue(hash, SETTINGS.bionicReadingEnabled);
+  hashLayoutValue(hash, SETTINGS.guideReadingEnabled);
+  return hash;
+}
+
+bool loadFb2LogicalPagesTotal(const std::shared_ptr<Epub>& epub, const int logicalStart,
+                              const int logicalEnd, const uint32_t layoutSignature,
+                              int& totalPagesOut) {
+  if (!epub || !epub->isFb2Package()) return false;
+  const std::string path = epub->getCachePath() + FB2_LOGICAL_PAGES_FILE_NAME;
+  if (!Storage.exists(path.c_str())) return false;
+
+  HalFile file;
+  if (!Storage.openFileForRead("ERS", path, file)) return false;
+
+  Fb2LogicalPagesRecord record{};
+  bool found = false;
+  int latestTotal = 0;
+  while (file.available() >= static_cast<int>(sizeof(record))) {
+    if (file.read(&record, sizeof(record)) != static_cast<int>(sizeof(record))) break;
+    if (record.magic != FB2_LOGICAL_PAGES_MAGIC || record.version != FB2_LOGICAL_PAGES_VERSION) continue;
+    if (record.layoutSignature != layoutSignature || record.logicalStart != logicalStart ||
+        record.logicalEnd != logicalEnd || record.totalPages <= 0) {
+      continue;
+    }
+    latestTotal = record.totalPages;
+    found = true;  // Last matching append wins.
+  }
+  file.close();
+
+  if (!found) return false;
+  totalPagesOut = latestTotal;
+  return true;
+}
+
+bool saveFb2LogicalPagesTotal(const std::shared_ptr<Epub>& epub, const int logicalStart,
+                              const int logicalEnd, const uint32_t layoutSignature,
+                              const int totalPages) {
+  if (!epub || !epub->isFb2Package() || totalPages <= 0) return false;
+  const std::string path = epub->getCachePath() + FB2_LOGICAL_PAGES_FILE_NAME;
+
+  // Avoid repeated SD writes when the exact same record is already present.
+  int cachedTotal = 0;
+  if (loadFb2LogicalPagesTotal(epub, logicalStart, logicalEnd, layoutSignature, cachedTotal) &&
+      cachedTotal == totalPages) {
+    return true;
+  }
+
+  HalFile file = Storage.open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND);
+  if (!file) {
+    LOG_ERR("ERS", "Failed to open FB2 logical page cache for append: %s", path.c_str());
+    return false;
+  }
+
+  const Fb2LogicalPagesRecord record{FB2_LOGICAL_PAGES_MAGIC, FB2_LOGICAL_PAGES_VERSION, 0,
+                                     layoutSignature, logicalStart, logicalEnd, totalPages};
+  const bool ok = file.write(&record, sizeof(record)) == sizeof(record) && file.sync();
+  file.close();
+  if (!ok) {
+    LOG_ERR("ERS", "Failed to persist FB2 logical page total: %d..%d", logicalStart, logicalEnd);
+  }
+  return ok;
+}
+
 struct SectionMemoryConfig {
   reader::ReaderMemoryMode mode;
   const char* suffix;
@@ -1361,6 +1469,12 @@ void EpubReaderActivity::loop() {
     const int bookProgressPercent = clampPercent(static_cast<int>(bookProgress + 0.5f));
 
     pauseReadingPaceTimer("reader_menu");
+    // The book menu itself is lightweight. Keep the current Section alive while
+    // it is on top so actions that need the current page immediately (notably
+    // Create clipping) do not rebuild an FB2 logical chapter just because the
+    // menu was opened. If the chosen action pushes a heavier activity, the
+    // normal release hook runs again for that next push.
+    preserveSectionForNextBackgroundPush = true;
     startActivityForResult(std::make_unique<EpubReaderMenuActivity>(
                                renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent,
                                SETTINGS.orientation, !currentPageFootnotes.empty(), !BOOKMARKS.getBookmarks().empty(),
@@ -1437,7 +1551,9 @@ void EpubReaderActivity::loop() {
       SETTINGS.sideButtonLongPress == InkMODSettings::SIDE_LONG_PRESS::SIDE_LONG_FONT_SIZE;
   const bool sideLongPressChangesOrientation =
       SETTINGS.sideButtonLongPress == InkMODSettings::SIDE_LONG_PRESS::SIDE_LONG_ORIENTATION_CHANGE;
-  if (sideLongPressChangesFont || sideLongPressChangesOrientation) {
+  const bool sideLongPressCreatesClipping =
+      SETTINGS.sideButtonLongPress == InkMODSettings::SIDE_LONG_PRESS::SIDE_LONG_CREATE_CLIPPING;
+  if (sideLongPressChangesFont || sideLongPressChangesOrientation || sideLongPressCreatesClipping) {
     const bool topReleased = mappedInput.wasReleased(MappedInputManager::Button::Up);
     const bool bottomReleased = mappedInput.wasReleased(MappedInputManager::Button::Down);
     if (sideButtonLongPressHandled && (topReleased || bottomReleased)) {
@@ -1457,6 +1573,8 @@ void EpubReaderActivity::loop() {
         if (sdFontSystem.changeReaderFontSize(/*larger=*/true)) {
           reindexCurrentSection();
         }
+      } else if (sideLongPressCreatesClipping) {
+        executeReaderQuickAction(InkMODSettings::LONG_MENU_CREATE_CLIPPING);
       } else {
         applyOrientation(ReaderUtils::rotatedOrientation(SETTINGS.orientation, /*clockwise=*/false));
         requestUpdate();
@@ -1469,6 +1587,8 @@ void EpubReaderActivity::loop() {
         if (sdFontSystem.changeReaderFontSize(/*larger=*/false)) {
           reindexCurrentSection();
         }
+      } else if (sideLongPressCreatesClipping) {
+        executeReaderQuickAction(InkMODSettings::LONG_MENU_CREATE_CLIPPING);
       } else {
         applyOrientation(ReaderUtils::rotatedOrientation(SETTINGS.orientation, /*clockwise=*/true));
         requestUpdate();
@@ -1488,8 +1608,10 @@ void EpubReaderActivity::loop() {
   }
 
   const bool frontLongPressChangesFont = SETTINGS.longPressButtonBehavior == InkMODSettings::FONT_SIZE_CHANGE;
+  const bool frontLongPressCreatesClipping =
+      SETTINGS.longPressButtonBehavior == InkMODSettings::LONG_PRESS_CREATE_CLIPPING;
   const bool frontLongPressAction = SETTINGS.longPressButtonBehavior == InkMODSettings::ORIENTATION_CHANGE ||
-                                    frontLongPressChangesFont;
+                                    frontLongPressChangesFont || frontLongPressCreatesClipping;
   if (frontLongPressAction) {
     const bool leftReleased = mappedInput.wasReleased(MappedInputManager::Button::Left);
     const bool rightReleased = mappedInput.wasReleased(MappedInputManager::Button::Right);
@@ -1507,6 +1629,10 @@ void EpubReaderActivity::loop() {
         if (sdFontSystem.changeReaderFontSize(/*larger=*/nextLongPressed)) {
           reindexCurrentSection();
         }
+        return;
+      }
+      if (frontLongPressCreatesClipping) {
+        executeReaderQuickAction(InkMODSettings::LONG_MENU_CREATE_CLIPPING);
         return;
       }
 
@@ -1566,7 +1692,18 @@ void EpubReaderActivity::loop() {
   }
 
   if (skipChapter) {
-    const int targetSpine = logicalChapterSkipTarget(*epub, currentSpineIndex, nextTriggered);
+    int targetSpine = logicalChapterSkipTarget(*epub, currentSpineIndex, nextTriggered);
+    if (!nextTriggered && section) {
+      int logicalStart = currentSpineIndex;
+      int logicalEnd = currentSpineIndex;
+      epub->getLogicalChapterBounds(currentSpineIndex, logicalStart, logicalEnd);
+      // Backward chapter-skip behaves like most readers: from the middle of a
+      // chapter, first jump to THIS chapter's beginning. Only when already at
+      // that beginning does the next long-press go to the previous chapter.
+      if (currentSpineIndex > logicalStart || section->currentPage > 0) {
+        targetSpine = logicalStart;
+      }
+    }
     {
       RenderLock lock(*this);
       clearLogicalPageCarry();
@@ -2286,11 +2423,10 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       const int tocIndex = epub->getTocIndexForSpineIndex(currentSpineIndex);
       if (tocIndex >= 0) chapterTitle = epub->getTocItem(tocIndex).title;
 
-      // Consume any release that belonged to the menu action itself before
-      // the clipping modal becomes active.
-      mappedInput.suppressNextBackRelease();
-      mappedInput.suppressNextConfirmRelease();
-      mappedInput.suppressNextPowerConfirmRelease();
+      // ClippingSelectionActivity now quarantines the launch gesture until a
+      // fully quiet frame. Do not queue suppressNext* here: when the menu
+      // release has already been consumed those flags swallow the first real
+      // selection press.
       // ActivityManager normally frees the reader Section before pushing a
       // background activity.  ClippingSelectionActivity deliberately reads the
       // current/adjacent pages through this Section, so keep it alive for this
@@ -2605,6 +2741,9 @@ void EpubReaderActivity::executeReaderQuickAction(InkMODSettings::LONG_PRESS_MEN
     case InkMODSettings::LONG_MENU_DICTIONARY_LOOKUP:
       onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction::DICTIONARY);
       break;
+    case InkMODSettings::LONG_MENU_CREATE_CLIPPING:
+      onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction::CREATE_CLIPPING);
+      break;
     case InkMODSettings::LONG_MENU_OFF:
     default:
       break;
@@ -2698,6 +2837,9 @@ bool EpubReaderActivity::executeShortPowerButtonAction() {
     case InkMODSettings::SHORT_PWRBTN::DICTIONARY_LOOKUP:
       executeReaderQuickAction(InkMODSettings::LONG_MENU_DICTIONARY_LOOKUP);
       return true;
+    case InkMODSettings::SHORT_PWRBTN::CREATE_CLIPPING:
+      executeReaderQuickAction(InkMODSettings::LONG_MENU_CREATE_CLIPPING);
+      return true;
     default:
       return false;
   }
@@ -2781,6 +2923,9 @@ bool EpubReaderActivity::executeLongPowerButtonAction() {
       return true;
     case InkMODSettings::SHORT_PWRBTN::DICTIONARY_LOOKUP:
       executeReaderQuickAction(InkMODSettings::LONG_MENU_DICTIONARY_LOOKUP);
+      return true;
+    case InkMODSettings::SHORT_PWRBTN::CREATE_CLIPPING:
+      executeReaderQuickAction(InkMODSettings::LONG_MENU_CREATE_CLIPPING);
       return true;
     default:
       return false;
@@ -3198,23 +3343,33 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         // solely because the largest free block fell below ReaderWork's
         // conservative pre-flight threshold.  First reclaim every rebuildable
         // font/glyph allocation, then allow one publisher-quality attempt.
-        if (!epub->isFb2Package() && heap.freeHeap >= 48U * 1024U && heap.maxAllocHeap >= 12U * 1024U) {
+        // Both EPUB and FB2 use bounded/streaming section builders now. A
+        // fragmented heap is therefore not a reason to throw the reader back
+        // to Home while there is still plenty of total RAM. Reclaim only
+        // rebuildable renderer/font caches, then allow one publisher-quality
+        // Normal attempt. FB2 images have their own low-memory streaming
+        // decoder, so keeping imageRendering enabled here is intentional.
+        const bool fragmentedStreamingSource =
+            heap.freeHeap >= 48U * 1024U && heap.maxAllocHeap >= 12U * 1024U;
+        if (fragmentedStreamingSource) {
           if (auto* fcm = renderer.getFontCacheManager()) {
             fcm->clearCache();
           }
           if (renderer.isSdCardFont(readerFontId)) {
-            releaseReaderSdFontCachesForLowMemory(renderer, "ERS", "fragmented EPUB preflight");
+            releaseReaderSdFontCachesForLowMemory(
+                renderer, "ERS", epub->isFb2Package() ? "fragmented FB2 preflight" : "fragmented EPUB preflight");
           }
           delay(1);
           yield();
           const auto reclaimed = MemoryBudget::snapshot();
           LOG_INF("ERS",
-                  "Fragmented EPUB heap: allowing streaming normal attempt (free=%u->%u maxAlloc=%u->%u)",
-                  heap.freeHeap, reclaimed.freeHeap, heap.maxAllocHeap, reclaimed.maxAllocHeap);
+                  "Fragmented %s heap: allowing streaming normal attempt (free=%u->%u maxAlloc=%u->%u)",
+                  epub->isFb2Package() ? "FB2" : "EPUB", heap.freeHeap, reclaimed.freeHeap,
+                  heap.maxAllocHeap, reclaimed.maxAllocHeap);
           heap = reclaimed;
-          // The build loop below always starts in Normal mode and will fall
-          // back only after a real parser/allocation failure.  This preserves
-          // CSS/images while avoiding the false 'no safe memory mode' exit.
+          // The build loop below starts in Normal mode and falls back only
+          // after a real parser/allocation failure. This keeps publisher CSS,
+          // paragraph geometry and illustrations identical to a healthy open.
           memoryPolicy = {reader::ReaderMemoryMode::Normal, true, true, true, true, true};
         } else {
           LOG_ERR("ERS", "Reader has no safe memory mode (free=%u maxAlloc=%u)", heap.freeHeap, heap.maxAllocHeap);
@@ -3390,7 +3545,24 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         return;
       }
 
-      releaseReaderSdFontCachesForLowMemory(renderer, "ERS", "section cache build");
+      // Keep the selected SD-font page glyphs hot after a successful build.
+      // Dictionary/clipping overlays reuse the exact reader font and used to
+      // spend many seconds re-reading those glyph bitmaps from SD because this
+      // cache was discarded unconditionally here. Reclaim it lazily only when
+      // the heap is genuinely tight; parser/preflight pressure paths can still
+      // trim it later if a following section needs the memory.
+      {
+        const auto postBuildHeap = MemoryBudget::snapshot();
+        constexpr uint32_t kTrimGlyphCacheFreeHeap = 48u * 1024u;
+        constexpr uint32_t kTrimGlyphCacheMaxAlloc = 24u * 1024u;
+        if (postBuildHeap.freeHeap < kTrimGlyphCacheFreeHeap ||
+            postBuildHeap.maxAllocHeap < kTrimGlyphCacheMaxAlloc) {
+          releaseReaderSdFontCachesForLowMemory(renderer, "ERS", "low-memory section cache build");
+        } else {
+          LOG_DBG("ERS", "Keeping reader SD glyph cache hot after section build: free=%u maxAlloc=%u",
+                  postBuildHeap.freeHeap, postBuildHeap.maxAllocHeap);
+        }
+      }
       LOG_INF("ERS", "Cache build complete: pages=%u mode=%s font=%d free=%u maxAlloc=%u", section->pageCount,
               readerMemoryModeName(activeMemoryMode), activeSectionFontId, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
       {
@@ -3444,38 +3616,78 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       int logicalStart = currentSpineIndex;
       int logicalEnd = currentSpineIndex;
       if (epub->getLogicalChapterBounds(currentSpineIndex, logicalStart, logicalEnd) && logicalStart != logicalEnd) {
-        LOG_INF("ERS", "Preparing exact logical chapter page map: %d..%d", logicalStart, logicalEnd);
+        const uint32_t logicalPagesLayoutSignature =
+            fb2LogicalPagesLayoutSignature(readerFontId, viewportWidth, viewportHeight);
+        int persistedLogicalTotalPages = 0;
+        if (loadFb2LogicalPagesTotal(epub, logicalStart, logicalEnd, logicalPagesLayoutSignature,
+                                     persistedLogicalTotalPages)) {
+          fb2ExactLogicalStart = logicalStart;
+          fb2ExactLogicalEnd = logicalEnd;
+          fb2ExactLogicalTotalPages = persistedLogicalTotalPages;
+          LOG_INF("ERS", "Loaded exact logical chapter total from SD: %d pages (%d..%d)",
+                  fb2ExactLogicalTotalPages, logicalStart, logicalEnd);
+        }
 
-        auto loadSiblingCache = [&](const int siblingSpine, const SectionMemoryConfig& config) -> bool {
+        const bool needExactLogicalPagination = fb2ExactLogicalTotalPages <= 0 ||
+                                                fb2ExactLogicalStart != logicalStart ||
+                                                fb2ExactLogicalEnd != logicalEnd;
+        if (needExactLogicalPagination) {
+          LOG_INF("ERS", "Preparing exact logical chapter page map: %d..%d", logicalStart, logicalEnd);
+
+        auto loadSiblingCache = [&](const int siblingSpine, const SectionMemoryConfig& config,
+                                    int& pagesOut) -> bool {
           Section cached(epub, siblingSpine, renderer, config.suffix);
-          return cached.loadSectionFile(
-              config.fontId, SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
-              SETTINGS.forceParagraphIndents, SETTINGS.paragraphAlignment, viewportWidth, viewportHeight,
-              config.hyphenationEnabled, config.embeddedStyle, config.imageRendering, config.bionicReadingEnabled,
-              config.guideReadingEnabled);
+          // A cache variant that has never been generated is a normal miss.
+          // Skip the file-open/deserialize path entirely and let the build path
+          // below create the required fragment directly.
+          if (!cached.hasSectionFile()) return false;
+          if (!cached.loadSectionFile(
+                  config.fontId, SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
+                  SETTINGS.forceParagraphIndents, SETTINGS.paragraphAlignment, viewportWidth, viewportHeight,
+                  config.hyphenationEnabled, config.embeddedStyle, config.imageRendering, config.bionicReadingEnabled,
+                  config.guideReadingEnabled)) {
+            return false;
+          }
+          pagesOut = std::max(0, static_cast<int>(cached.pageCount) -
+                                     (siblingSpine == 0 ? cached.leadingFrontMatterPages : 0));
+          return pagesOut > 0;
         };
 
         bool logicalChapterReady = true;
         bool preparationPopupShown = false;
+        bool exactLogicalPublisherQuality =
+            activeMemoryMode == reader::ReaderMemoryMode::Normal && !activeSectionUsesFallbackFont;
+        int exactLogicalTotalPages =
+            std::max(0, static_cast<int>(section->pageCount) -
+                            (currentSpineIndex == 0 ? section->leadingFrontMatterPages : 0));
         for (int siblingSpine = logicalStart; siblingSpine <= logicalEnd; ++siblingSpine) {
           if (siblingSpine == currentSpineIndex) continue;
 
+          int siblingPageCount = 0;
           auto normal = sectionMemoryConfig(reader::ReaderMemoryMode::Normal, readerFontId, fallbackFontId);
-          bool siblingReady = loadSiblingCache(siblingSpine, normal);
+          bool siblingReady = loadSiblingCache(siblingSpine, normal, siblingPageCount);
           if (!siblingReady && canUseFallbackFont) {
             normal.fontId = fallbackFontId;
             normal.suffix = FALLBACK_FONT_SECTION_CACHE_SUFFIX;
-            siblingReady = loadSiblingCache(siblingSpine, normal);
+            siblingReady = loadSiblingCache(siblingSpine, normal, siblingPageCount);
+            if (siblingReady) exactLogicalPublisherQuality = false;
           }
           if (!siblingReady) {
             siblingReady = loadSiblingCache(
-                siblingSpine, sectionMemoryConfig(reader::ReaderMemoryMode::Safe, readerFontId, fallbackFontId));
+                siblingSpine, sectionMemoryConfig(reader::ReaderMemoryMode::Safe, readerFontId, fallbackFontId),
+                siblingPageCount);
+            if (siblingReady) exactLogicalPublisherQuality = false;
           }
           if (!siblingReady) {
             siblingReady = loadSiblingCache(
-                siblingSpine, sectionMemoryConfig(reader::ReaderMemoryMode::Survival, readerFontId, fallbackFontId));
+                siblingSpine, sectionMemoryConfig(reader::ReaderMemoryMode::Survival, readerFontId, fallbackFontId),
+                siblingPageCount);
+            if (siblingReady) exactLogicalPublisherQuality = false;
           }
-          if (siblingReady) continue;
+          if (siblingReady) {
+            exactLogicalTotalPages += siblingPageCount;
+            continue;
+          }
 
           if (!preparationPopupShown) {
             // If the active section came from cache, the framebuffer still
@@ -3522,6 +3734,15 @@ void EpubReaderActivity::render(RenderLock&& lock) {
                   config.hyphenationEnabled, config.embeddedStyle, config.imageRendering, config.bionicReadingEnabled,
                   config.guideReadingEnabled, []() {}, &imagesSuppressed, &lowMemory, &siblingWork.token(),
                   &siblingCancelled);
+              if (siblingReady) {
+                siblingPageCount =
+                    std::max(0, static_cast<int>(sibling.pageCount) -
+                                    (siblingSpine == 0 ? sibling.leadingFrontMatterPages : 0));
+                if (config.mode != reader::ReaderMemoryMode::Normal || config.fontId != readerFontId ||
+                    std::strcmp(config.suffix, "") != 0) {
+                  exactLogicalPublisherQuality = false;
+                }
+              }
             }
 
             if (siblingCancelled) return;
@@ -3544,13 +3765,37 @@ void EpubReaderActivity::render(RenderLock&& lock) {
             logicalChapterReady = false;
             break;
           }
+          exactLogicalTotalPages += siblingPageCount;
           LOG_INF("ERS", "Prepared logical fragment %d/%d", siblingSpine - logicalStart + 1,
                   logicalEnd - logicalStart + 1);
         }
 
         if (!logicalChapterReady) {
           LOG_ERR("ERS", "Logical chapter page total remains incomplete");
+          if (fb2ExactLogicalStart == logicalStart && fb2ExactLogicalEnd == logicalEnd) {
+            fb2ExactLogicalStart = -1;
+            fb2ExactLogicalEnd = -1;
+            fb2ExactLogicalTotalPages = 0;
+          }
+        } else if (exactLogicalTotalPages > 0) {
+          fb2ExactLogicalStart = logicalStart;
+          fb2ExactLogicalEnd = logicalEnd;
+          fb2ExactLogicalTotalPages = exactLogicalTotalPages;
+          LOG_INF("ERS", "Exact logical chapter total locked: %d pages (%d..%d)",
+                  fb2ExactLogicalTotalPages, fb2ExactLogicalStart, fb2ExactLogicalEnd);
+
+          // Persist only publisher-quality Normal pagination. Safe/Survival may
+          // intentionally alter layout and therefore must never become the
+          // long-lived denominator for this book/layout signature.
+          if (exactLogicalPublisherQuality) {
+            if (saveFb2LogicalPagesTotal(epub, logicalStart, logicalEnd, logicalPagesLayoutSignature,
+                                         fb2ExactLogicalTotalPages)) {
+              LOG_INF("ERS", "Persisted exact logical chapter total to SD: %d pages (%d..%d)",
+                      fb2ExactLogicalTotalPages, logicalStart, logicalEnd);
+            }
+          }
         }
+        }  // needExactLogicalPagination
       }
     }
 
@@ -3774,12 +4019,36 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
                                         const int orientedMarginLeft) {
   const auto t0 = millis();
 
+  // Keep an image-only cover on the very first book page vertically centered
+  // inside the reader content area. This is a render-time offset on purpose:
+  // existing section caches do not need to be invalidated/rebuilt, and inline
+  // illustrations on every other page keep their original EPUB/FB2 layout.
+  const int contentBottom = renderer.getScreenHeight() - orientedMarginBottom;
+  const bool pageHasImages = page->hasImages();
+  int pageRenderY = orientedMarginTop;
+  const bool firstBookPage = currentSpineIndex == 0 && section && section->currentPage == 0;
+  const bool imageOnlyPage = pageHasImages && !page->elements.empty() &&
+                             std::all_of(page->elements.begin(), page->elements.end(),
+                                         [](const std::shared_ptr<PageElement>& element) {
+                                           return element && element->getTag() == TAG_PageImage;
+                                         });
+  if (firstBookPage && imageOnlyPage) {
+    int16_t imageX = 0, imageY = 0, imageW = 0, imageH = 0;
+    if (page->getImageBoundingBox(imageX, imageY, imageW, imageH)) {
+      const int availableHeight = std::max(0, contentBottom - orientedMarginTop);
+      if (imageH > 0 && imageH <= availableHeight) {
+        const int centeredImageTop = orientedMarginTop + (availableHeight - imageH) / 2;
+        pageRenderY = centeredImageTop - imageY;
+      }
+    }
+  }
+
   // Font prewarm: scan pass accumulates text, then prewarm, then real render
   auto* fcm = renderer.getFontCacheManager();
   fcm->resetStats();
   const auto heapBefore = MemoryBudget::snapshot();
   auto scope = fcm->createPrewarmScope();
-  page->renderText(renderer, fontId, orientedMarginLeft, orientedMarginTop);  // scan pass
+  page->renderText(renderer, fontId, orientedMarginLeft, pageRenderY);  // scan pass
   scope.endScanAndPrewarm();
   const auto heapAfter = MemoryBudget::snapshot();
   fcm->logStats("prewarm");
@@ -3793,33 +4062,31 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
       static_cast<long>(static_cast<int32_t>(heapAfter.maxAllocHeap) - static_cast<int32_t>(heapBefore.maxAllocHeap)),
       largestBlockPercent(heapBefore), largestBlockPercent(heapAfter));
 
-  const bool pageHasImages = page->hasImages();
   const bool foregroundBlack = ReaderUtils::readerForegroundBlack();
   const bool needsImageGrayscale = pageHasImages;
   const bool needsTextGrayscale = SETTINGS.textAntiAliasing && foregroundBlack;
   const bool needsAnyGrayscale = needsTextGrayscale || needsImageGrayscale;
-  const int contentBottom = renderer.getScreenHeight() - orientedMarginBottom;
 
   const auto finalizeBufferComposition = [&]() {
-    drawPublisherPageMarkers(renderer, *page, orientedMarginTop, contentBottom, foregroundBlack);
+    drawPublisherPageMarkers(renderer, *page, pageRenderY, contentBottom, foregroundBlack);
     if (section && section->currentPage >= 0) {
       ClippingUtils::drawSavedHighlights(renderer, *page, clippings.getClippings(),
                                          static_cast<uint16_t>(currentSpineIndex),
                                          static_cast<uint16_t>(section->currentPage), fontId,
-                                         orientedMarginLeft, orientedMarginTop, foregroundBlack);
+                                         orientedMarginLeft, pageRenderY, foregroundBlack);
     }
   };
 
   const auto composePageBuffer = [&]() {
-    page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop, foregroundBlack);
+    page->render(renderer, fontId, orientedMarginLeft, pageRenderY, foregroundBlack);
     finalizeBufferComposition();
   };
 
   const auto composeGrayscaleBuffer = [&]() {
     if (needsTextGrayscale) {
-      page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop, foregroundBlack);
+      page->render(renderer, fontId, orientedMarginLeft, pageRenderY, foregroundBlack);
     } else {
-      page->renderImages(renderer, fontId, orientedMarginLeft, orientedMarginTop);
+      page->renderImages(renderer, fontId, orientedMarginLeft, pageRenderY);
     }
     finalizeBufferComposition();
   };
@@ -3865,7 +4132,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
     // Step 2: Re-render with images and display again (images appear clean)
     int16_t imgX, imgY, imgW, imgH;
     if (page->getImageBoundingBox(imgX, imgY, imgW, imgH)) {
-      renderer.fillRect(imgX + orientedMarginLeft, imgY + orientedMarginTop, imgW, imgH, false);
+      renderer.fillRect(imgX + orientedMarginLeft, imgY + pageRenderY, imgW, imgH, false);
       const auto tImageBlankDisplay = millis();
       renderer.displayBuffer(HalDisplay::FAST_REFRESH);
       const uint32_t imageBlankDisplayMs = millis() - tImageBlankDisplay;
@@ -3895,7 +4162,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
   const auto tDisplay = millis();
 
   TiledGrayscaleTimings tiledTimings;
-  if (runTiledGrayscalePass(renderer, *page, fontId, orientedMarginLeft, orientedMarginTop, foregroundBlack,
+  if (runTiledGrayscalePass(renderer, *page, fontId, orientedMarginLeft, pageRenderY, foregroundBlack,
                             needsTextGrayscale, needsImageGrayscale, tiledTimings)) {
     const auto tEnd = millis();
     LOG_DBG("ERS",
@@ -3979,8 +4246,13 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
 }
 
 void EpubReaderActivity::renderStatusBar() const {
-  int currentPage = section->currentPage + 1;
-  int pageCount = section->pageCount;
+  const int leadingFrontMatter =
+      (epub && epub->isFb2Package() && currentSpineIndex == 0) ? section->leadingFrontMatterPages : 0;
+  const bool onFb2FrontMatter = leadingFrontMatter > 0 && section->currentPage < leadingFrontMatter;
+  int currentPage = onFb2FrontMatter ? section->currentPage + 1
+                                     : std::max(1, section->currentPage - leadingFrontMatter + 1);
+  int pageCount = onFb2FrontMatter ? leadingFrontMatter
+                                   : std::max(1, static_cast<int>(section->pageCount) - leadingFrontMatter);
   const float bookProgress = getCurrentBookProgressPercent();
 
   // One logical TOC chapter may be split into several spine items:
@@ -3991,13 +4263,15 @@ void EpubReaderActivity::renderStatusBar() const {
   // chunks. The just-finished chunk is carried in RAM; older chunks are
   // recovered only from tiny existing section-cache headers when needed.
   // No unopened chunk is paginated ahead of time.
-  if (epub && section && pageCount > 0) {
+  if (epub && section && pageCount > 0 && !onFb2FrontMatter) {
+    const int currentEffectivePageCount =
+        std::max(0, static_cast<int>(section->pageCount) - (currentSpineIndex == 0 ? leadingFrontMatter : 0));
     if (logicalStatusCacheSpineIndex != currentSpineIndex ||
-        logicalStatusCacheLocalPageCount != section->pageCount) {
+        logicalStatusCacheLocalPageCount != currentEffectivePageCount) {
       logicalStatusCacheSpineIndex = currentSpineIndex;
-      logicalStatusCacheLocalPageCount = section->pageCount;
+      logicalStatusCacheLocalPageCount = currentEffectivePageCount;
       logicalStatusPagesBefore = 0;
-      logicalStatusKnownPageCount = section->pageCount;
+      logicalStatusKnownPageCount = currentEffectivePageCount;
 
       int logicalStart = currentSpineIndex;
       int logicalEnd = currentSpineIndex;
@@ -4005,6 +4279,10 @@ void EpubReaderActivity::renderStatusBar() const {
           epub->getLogicalChapterBounds(currentSpineIndex, logicalStart, logicalEnd) && logicalStart != logicalEnd;
 
       if (splitLogicalChapter) {
+        const bool hasLockedFb2Total =
+            epub->isFb2Package() && fb2ExactLogicalStart == logicalStart &&
+            fb2ExactLogicalEnd == logicalEnd && fb2ExactLogicalTotalPages > 0;
+
         // Exact/recovery path: read only tiny headers for sibling caches that
         // already exist. Unopened fragments are deliberately not paginated.
         const auto layout = computeReaderViewportLayout(renderer, automaticPageTurnActive);
@@ -4015,6 +4293,7 @@ void EpubReaderActivity::renderStatusBar() const {
         auto cachedPageCount = [&](const int spineIndex) -> int {
           auto tryCache = [&](const SectionMemoryConfig& config) -> int {
             Section cached(epub, spineIndex, renderer, config.suffix);
+            if (!cached.hasSectionFile()) return 0;
             if (!cached.loadSectionFile(config.fontId, SETTINGS.getReaderLineCompression(),
                                         SETTINGS.extraParagraphSpacing, SETTINGS.forceParagraphIndents,
                                         SETTINGS.paragraphAlignment, layout.viewportWidth, layout.viewportHeight,
@@ -4022,7 +4301,8 @@ void EpubReaderActivity::renderStatusBar() const {
                                         config.bionicReadingEnabled, config.guideReadingEnabled)) {
               return 0;
             }
-            return cached.pageCount;
+            const int front = (spineIndex == 0) ? cached.leadingFrontMatterPages : 0;
+            return std::max(0, static_cast<int>(cached.pageCount) - front);
           };
 
           auto normal = sectionMemoryConfig(reader::ReaderMemoryMode::Normal, readerFontId, fallbackFontId);
@@ -4046,7 +4326,7 @@ void EpubReaderActivity::renderStatusBar() const {
 
         logicalStatusKnownPageCount = 0;
         for (int spine = logicalStart; spine <= logicalEnd; ++spine) {
-          const int pages = spine == currentSpineIndex ? section->pageCount : cachedPageCount(spine);
+          const int pages = spine == currentSpineIndex ? currentEffectivePageCount : cachedPageCount(spine);
           if (pages <= 0) {
             // If a sibling has not been opened yet, report only the known part
             // rather than inventing an estimated total.
@@ -4058,8 +4338,8 @@ void EpubReaderActivity::renderStatusBar() const {
           logicalStatusKnownPageCount += pages;
         }
 
-        if (logicalStatusKnownPageCount < section->pageCount) {
-          logicalStatusKnownPageCount = section->pageCount;
+        if (logicalStatusKnownPageCount < currentEffectivePageCount) {
+          logicalStatusKnownPageCount = currentEffectivePageCount;
         }
 
         // Sequential navigation knows the exact number of pages already
@@ -4070,15 +4350,23 @@ void EpubReaderActivity::renderStatusBar() const {
           logicalStatusPagesBefore =
               std::max(logicalStatusPagesBefore, logicalPageCarryPagesBefore);
           logicalStatusKnownPageCount =
-              std::max(logicalStatusKnownPageCount, logicalStatusPagesBefore + section->pageCount);
+              std::max(logicalStatusKnownPageCount, logicalStatusPagesBefore + currentEffectivePageCount);
+        }
+
+        // FB2 siblings were already fully paginated before the first page was
+        // shown. Never let a transient cache-variant miss shrink the denominator
+        // (e.g. 40/40 followed by 41/45 after entering the next fragment).
+        if (hasLockedFb2Total) {
+          logicalStatusKnownPageCount = fb2ExactLogicalTotalPages;
         }
       }
 
     }
 
-    if (logicalStatusKnownPageCount > section->pageCount || logicalStatusPagesBefore > 0) {
-      currentPage = logicalStatusPagesBefore + section->currentPage + 1;
-      pageCount = logicalStatusKnownPageCount;
+    if (logicalStatusKnownPageCount > currentEffectivePageCount || logicalStatusPagesBefore > 0) {
+      const int localPageIndex = section->currentPage - (currentSpineIndex == 0 ? leadingFrontMatter : 0);
+      currentPage = logicalStatusPagesBefore + std::max(0, localPageIndex) + 1;
+      pageCount = std::max(1, logicalStatusKnownPageCount);
     }
   }
 

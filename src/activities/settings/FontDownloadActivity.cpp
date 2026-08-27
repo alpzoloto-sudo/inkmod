@@ -775,7 +775,6 @@ void FontDownloadActivity::loop() {
     }
 
     const int listSize = listItemCount();
-    const int pageItems = fontListPageItems();
 
     buttonNavigator_.onNextRelease([this, listSize] {
       selectedIndex_ = ButtonNavigator::nextIndex(selectedIndex_, listSize);
@@ -787,13 +786,13 @@ void FontDownloadActivity::loop() {
       requestUpdate();
     });
 
-    buttonNavigator_.onNextContinuous([this, listSize, pageItems] {
-      selectedIndex_ = ButtonNavigator::nextPageIndex(selectedIndex_, listSize, pageItems);
+    buttonNavigator_.onNextContinuous([this, listSize] {
+      selectedIndex_ = ButtonNavigator::nextIndex(selectedIndex_, listSize);
       requestUpdate();
     });
 
-    buttonNavigator_.onPreviousContinuous([this, listSize, pageItems] {
-      selectedIndex_ = ButtonNavigator::previousPageIndex(selectedIndex_, listSize, pageItems);
+    buttonNavigator_.onPreviousContinuous([this, listSize] {
+      selectedIndex_ = ButtonNavigator::previousIndex(selectedIndex_, listSize);
       requestUpdate();
     });
 

@@ -117,7 +117,6 @@ void EpubReaderBookmarkListActivity::loop() {
   const int total = static_cast<int>(bookmarks.size());
   if (total == 0) return;
 
-  const int pageItems = getPageItems();
 
   buttonNavigator.onNextRelease([this, total] {
     selectedIndex = ButtonNavigator::nextIndex(selectedIndex, total);
@@ -129,13 +128,13 @@ void EpubReaderBookmarkListActivity::loop() {
     requestUpdate();
   });
 
-  buttonNavigator.onNextContinuous([this, total, pageItems] {
-    selectedIndex = ButtonNavigator::nextPageIndex(selectedIndex, total, pageItems);
+  buttonNavigator.onNextContinuous([this, total] {
+    selectedIndex = ButtonNavigator::nextIndex(selectedIndex, total);
     requestUpdate();
   });
 
-  buttonNavigator.onPreviousContinuous([this, total, pageItems] {
-    selectedIndex = ButtonNavigator::previousPageIndex(selectedIndex, total, pageItems);
+  buttonNavigator.onPreviousContinuous([this, total] {
+    selectedIndex = ButtonNavigator::previousIndex(selectedIndex, total);
     requestUpdate();
   });
 }

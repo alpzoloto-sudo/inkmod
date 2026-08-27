@@ -26,6 +26,12 @@ class ParsedText {
   bool guideReadingEnabled;
   BlockStyle blockStyle;
   bool hasRtlWord;
+  // Once a paragraph has been drained in RAM windows, keep using a local/greedy
+  // line breaker for the rest of that *same* paragraph. Unlike the legacy DP
+  // breaker, greedy breaks are prefix-stable: a line already known to be full
+  // can never move just because more words arrive in the next RAM chunk.
+  // This makes internal streaming boundaries completely invisible to pagination.
+  bool streamingParagraphMode = false;
   std::vector<std::string> reorderedWordsScratch;
   std::vector<EpdFontFamily::Style> reorderedStylesScratch;
   std::vector<uint16_t> reorderedWidthsScratch;
@@ -37,9 +43,14 @@ class ParsedText {
 
   int resolveFirstLineIndent(bool isFirstLine, const GfxRenderer& renderer, int fontId) const;
   std::vector<size_t> computeLineBreaks(const GfxRenderer& renderer, int fontId, int pageWidth,
-                                        std::vector<uint16_t>& wordWidths, std::vector<bool>& continuesVec);
+                                        std::vector<uint16_t>& wordWidths, std::vector<bool>& continuesVec,
+                                        bool paragraphContinuation = false);
+  std::vector<size_t> computeGreedyLineBreaks(const GfxRenderer& renderer, int fontId, int pageWidth,
+                                             std::vector<uint16_t>& wordWidths, std::vector<bool>& continuesVec,
+                                             bool paragraphContinuation = false);
   std::vector<size_t> computeHyphenatedLineBreaks(const GfxRenderer& renderer, int fontId, int pageWidth,
-                                                  std::vector<uint16_t>& wordWidths, std::vector<bool>& continuesVec);
+                                                  std::vector<uint16_t>& wordWidths, std::vector<bool>& continuesVec,
+                                                  bool paragraphContinuation = false);
   bool hyphenateWordAtIndex(size_t wordIndex, int availableWidth, const GfxRenderer& renderer, int fontId,
                             std::vector<uint16_t>& wordWidths, bool allowFallbackBreaks);
   bool splitPathologicalTokenAtIndex(size_t wordIndex, int availableWidth, const GfxRenderer& renderer, int fontId,
@@ -47,7 +58,7 @@ class ParsedText {
   void extractLine(size_t breakIndex, int pageWidth, const std::vector<uint16_t>& wordWidths,
                    const std::vector<bool>& continuesVec, const std::vector<size_t>& lineBreakIndices,
                    const std::function<void(std::shared_ptr<TextBlock>)>& processLine, const GfxRenderer& renderer,
-                   int fontId);
+                   int fontId, bool paragraphContinuation = false);
   std::vector<uint16_t> calculateWordWidths(const GfxRenderer& renderer, int fontId);
 
  public:
@@ -69,8 +80,10 @@ class ParsedText {
   BlockStyle& getBlockStyle() { return blockStyle; }
   size_t size() const { return words.size(); }
   bool isEmpty() const { return words.empty(); }
+  void enableStreamingParagraphMode() { streamingParagraphMode = true; }
+  bool isStreamingParagraphMode() const { return streamingParagraphMode; }
   void layoutAndExtractLines(const GfxRenderer& renderer, int fontId, uint16_t viewportWidth,
                              const std::function<void(std::shared_ptr<TextBlock>)>& processLine,
                              bool includeLastLine = true, size_t maxLines = SIZE_MAX,
-                             size_t trailingLinesToKeep = 1);
+                             size_t trailingLinesToKeep = 1, bool paragraphContinuation = false);
 };

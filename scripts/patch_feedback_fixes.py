@@ -29,13 +29,35 @@ def has_marker(path: Path, marker: str) -> bool:
     return marker in path.read_text(encoding="utf-8")
 
 
-# "Clear reading cache" must only remove derived/cache state. OPDS server
-# credentials are user configuration, just like Wi-Fi and inkMOD settings.
-replace_once(
-    CLEAR_CACHE_CPP,
-    '''    const bool preserve = std::strcmp(name, "wifi.json") == 0 || std::strcmp(name, "inkmod-settings.json") == 0;\n''',
-    '''    const bool preserve = std::strcmp(name, "wifi.json") == 0 ||\n                          std::strcmp(name, "inkmod-settings.json") == 0 ||\n                          std::strcmp(name, "opds.json") == 0;\n''',
+# "Clear reading cache" must only remove derived/cache state. User
+# configuration must survive cache clearing. Older trees may have only the
+# original wifi/settings pair; newer trees may already preserve KOReader and
+# OPDS credentials. Treat either fully-patched form as success so this script
+# is safe to run repeatedly (PlatformIO builds multiple environments in the
+# same checkout).
+clear_cache_text = CLEAR_CACHE_CPP.read_text(encoding="utf-8")
+required_cache_preserve_markers = (
+    'std::strcmp(name, "wifi.json") == 0',
+    'std::strcmp(name, "inkmod-settings.json") == 0',
+    'std::strcmp(name, "koreader.json") == 0',
+    'std::strcmp(name, "koreader.bin") == 0',
+    'std::strcmp(name, "koreader.bin.bak") == 0',
+    'std::strcmp(name, "opds.json") == 0',
 )
+if not all(marker in clear_cache_text for marker in required_cache_preserve_markers):
+    old_preserve = '    const bool preserve = std::strcmp(name, "wifi.json") == 0 || std::strcmp(name, "inkmod-settings.json") == 0;\n'
+    new_preserve = '''    const bool preserve = std::strcmp(name, "wifi.json") == 0 ||
+                          std::strcmp(name, "inkmod-settings.json") == 0 ||
+                          std::strcmp(name, "koreader.json") == 0 ||
+                          std::strcmp(name, "koreader.bin") == 0 ||
+                          std::strcmp(name, "koreader.bin.bak") == 0 ||
+                          std::strcmp(name, "opds.json") == 0;
+'''
+    if old_preserve not in clear_cache_text:
+        raise SystemExit(
+            f"{CLEAR_CACHE_CPP}: cache-preserve block is neither legacy nor fully patched; refusing ambiguous patch"
+        )
+    CLEAR_CACHE_CPP.write_text(clear_cache_text.replace(old_preserve, new_preserve, 1), encoding="utf-8")
 
 # Minimal has its own home-menu builder. Keep Search visibility consistent
 # with every other theme and with the existing showHomeSearch setting.

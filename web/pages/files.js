@@ -3120,6 +3120,8 @@ function extractFb2Metadata(doc) {
   const lang = fb2TextOf(titleInfo ? fb2Child(titleInfo, 'lang') : null) || 'en';
   const annotationEl = titleInfo ? fb2Child(titleInfo, 'annotation') : null;
   const annotation = annotationEl ? fb2Children(annotationEl, 'p').map(fb2TextOf).filter(Boolean).join(' ') : '';
+  const dateEl = titleInfo ? fb2Child(titleInfo, 'date') : null;
+  const date = dateEl ? (dateEl.getAttribute('value') || fb2TextOf(dateEl)) : '';
 
   let coverId = null;
   const coverpage = titleInfo ? fb2Child(titleInfo, 'coverpage') : null;
@@ -3130,7 +3132,7 @@ function extractFb2Metadata(doc) {
       if (href) coverId = href.replace(/^#/, '');
     }
   }
-  return { title, authors, lang, annotation, coverId };
+  return { title, authors, lang, annotation, annotationEl, date, coverId };
 }
 
 function extractFb2Binaries(doc) {
@@ -3576,15 +3578,21 @@ function splitFb2ChildrenByHeadings(children) {
 }
 
 const FB2_EPUB_STYLESHEET =
-`body { font-family: serif; line-height: 1.4; margin: 1em; }
-h1, h2, h3, h4, h5, h6 { text-align: center; font-weight: bold; }
-p { margin: 0 0 0.6em 0; text-indent: 1.2em; }
-p.subtitle, p.text-author, p.date { text-align: center; text-indent: 0; font-style: italic; }
+`body { text-align: justify; }
+h1, h2, h3, h4, h5, h6 { text-align: center; font-weight: bold; margin: 1em 0 0.7em 0; }
+p.subtitle { text-align: center; }
+p { margin: 0.25em 0; }
+div.epigraph, div.cite { margin: 0.7em 1.5em; text-indent: 0; }
+div.poem { margin: 0.7em 1em; }
+div.epigraph > div.poem { margin-bottom: 0; }
+div.stanza { margin: 0; padding: 0; }
+p.verse { text-indent: 0; text-align: left; margin: 0; }
+p.text-author { text-align: right; text-indent: 0; margin: 0.5em 0 0 0; }
+p.date, p.fb2-book-date { text-indent: 0; text-align: right; }
+h2.fb2-book-author, h2.fb2-book-title { text-align: center; }
 p.title-line { text-align: center; font-weight: bold; text-indent: 0; }
-div.poem, div.cite, div.epigraph { margin: 1em 2em; font-style: italic; }
-p.verse { text-indent: 0; margin: 0; }
-div.illustration { text-align: center; margin: 1em 0; }
-div.illustration img, body.cover img, img { max-width: 100%; height: auto; }
+div.illustration { text-align: center; margin: 0.5em auto; }
+div.illustration img, body.cover img, img { display: block; margin: 0.5em auto; max-width: 100%; height: auto; }
 body.cover { text-align: center; margin: 0; }
 a.note-ref { text-decoration: none; font-size: 0.75em; vertical-align: super; }
 div.note { margin: 0 0 0.8em 0; font-size: 0.95em; }
@@ -3598,7 +3606,7 @@ div.note p { display: inline; text-indent: 0; margin: 0 0 0 0.3em; }
  * genuine format conversion, unlike convertFb2File which only re-encodes
  * the cover). Returns an EPUB Blob.
  */
-async function convertFb2ToEpub(file, progressCallback) {
+async function convertFb2ToEpub(file, progressCallback, optimizeImages = true) {
   const startTime = Date.now();
   const originalSize = file.size;
   const isZip = isFb2ZipName(file.name);
@@ -3632,7 +3640,7 @@ async function convertFb2ToEpub(file, progressCallback) {
   }
   if (progressCallback) progressCallback(25);
 
-  if (meta.coverId && imageMap[meta.coverId]) {
+  if (optimizeImages && meta.coverId && imageMap[meta.coverId]) {
     try {
       const cover = imageMap[meta.coverId];
       const result = await resizeImageToScreen(cover.base64, cover.contentType);
@@ -3657,7 +3665,7 @@ async function convertFb2ToEpub(file, progressCallback) {
   // ones that already fit" treatment here so a real FB2→EPUB conversion
   // doesn't produce a larger, unoptimized book.
   let bodyImagesResized = 0;
-  for (const [id, info] of Object.entries(imageMap)) {
+  if (optimizeImages) for (const [id, info] of Object.entries(imageMap)) {
     if (id === meta.coverId) continue;
     try {
       const loaded = await loadImageFromBlob(base64ToBlob(info.base64, info.contentType));
@@ -3716,6 +3724,59 @@ async function convertFb2ToEpub(file, progressCallback) {
 
   const chapters = []; // { id, filename, title, xhtmlString }
   const chapterSections = collectFb2ChapterSections(mainBody);
+
+  // Native FB2 on the device renders metadata/annotation and direct body-level
+  // epigraphs before the first real <section>. Build the same front-matter
+  // fragment in browser-prepared packages instead of silently dropping it or
+  // flattening <emphasis> to plain text. Private inkMOD classes let the reader
+  // suppress the chapter footer/page counter on these pages exactly as for the
+  // native FB2 path.
+  {
+    const frontDoc = createXhtmlDoc(meta.title);
+    const frontBody = frontDoc.querySelector('body');
+    const wrapper = frontDoc.createElementNS(ns, 'div');
+    wrapper.setAttribute('class', 'annotation inkmod-fb2-frontmatter');
+    if (meta.authors.length) {
+      const h = frontDoc.createElementNS(ns, 'h2');
+      h.setAttribute('class', 'fb2-book-author');
+      h.textContent = meta.authors.join('; ');
+      wrapper.appendChild(h);
+    }
+    if (meta.title) {
+      const h = frontDoc.createElementNS(ns, 'h2');
+      h.setAttribute('class', 'fb2-book-title');
+      h.textContent = meta.title;
+      wrapper.appendChild(h);
+    }
+    if (meta.annotationEl) {
+      for (const child of meta.annotationEl.children) renderFb2SingleBlock(child, frontDoc, wrapper, ctx);
+    }
+    if (meta.date) {
+      const d = frontDoc.createElementNS(ns, 'p');
+      d.setAttribute('class', 'fb2-book-date');
+      d.textContent = meta.date;
+      wrapper.appendChild(d);
+    }
+    frontBody.appendChild(wrapper);
+
+    // Direct children before the first <section> (notably epigraph/poem) are
+    // legal FB2 and are rendered by the device's preamble pass. Mirror them.
+    for (const child of mainBody.children) {
+      const tag = child.localName || child.tagName;
+      if (tag === 'section') break;
+      if (tag === 'title') continue;
+      const pre = frontDoc.createElementNS(ns, 'div');
+      pre.setAttribute('class', 'inkmod-fb2-frontmatter');
+      renderFb2SingleBlock(child, frontDoc, pre, ctx);
+      frontBody.appendChild(pre);
+    }
+    const br = frontDoc.createElementNS(ns, 'div');
+    br.setAttribute('class', 'inkmod-fb2-frontmatter-page-break');
+    frontBody.appendChild(br);
+    if (frontBody.textContent.trim() || frontBody.querySelector('img')) {
+      chapters.push({ id: 'frontmatter', filename: 'frontmatter.xhtml', title: meta.title, xhtmlString: serializeXhtmlDoc(frontDoc), navHidden: true });
+    }
+  }
 
   // Flat FB2 (no <section> nesting at all, or exactly one lone top-level
   // section with none nested inside it) — before dumping everything into a
@@ -3853,7 +3914,8 @@ async function convertFb2ToEpub(file, progressCallback) {
 </package>`;
   out.file('OEBPS/content.opf', opf, { compression: 'DEFLATE', createFolders: false });
 
-  const navPoints = chapters.map((ch, i) =>
+  const tocChapters = chapters.filter(ch => !ch.navHidden);
+  const navPoints = tocChapters.map((ch, i) =>
 `    <navPoint id="navpoint-${i + 1}" playOrder="${i + 1}">
       <navLabel><text>${escapeHtml(ch.title)}</text></navLabel>
       <content src="text/${ch.filename}"/>
@@ -3868,7 +3930,7 @@ ${navPoints}
   </navMap>
 </ncx>`, { compression: 'DEFLATE', createFolders: false });
 
-  const navLis = chapters.map(ch => `      <li><a href="text/${ch.filename}">${escapeHtml(ch.title)}</a></li>`).join('\n');
+  const navLis = tocChapters.map(ch => `      <li><a href="text/${ch.filename}">${escapeHtml(ch.title)}</a></li>`).join('\n');
   out.file('OEBPS/nav.xhtml',
 `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
@@ -5224,7 +5286,7 @@ function uploadFile() {
           if (convertFb2ToRealEpub || prepareNativeFb2) {
             converted = await convertFb2ToEpub(file, (percent) => {
               progressFill.style.width = (percent * 0.5) + '%'; // Conversion takes first 50%
-            });
+            }, convertEnabled);
           } else if (isFb2) {
             converted = await convertFb2File(file, (percent) => {
               progressFill.style.width = (percent * 0.5) + '%'; // Preparation takes first 50%

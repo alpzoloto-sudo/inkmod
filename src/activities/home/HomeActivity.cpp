@@ -1410,6 +1410,9 @@ void HomeActivity::loop() {
     return;
   }
 
+  const bool isLyraExtended =
+      static_cast<InkMODSettings::UI_THEME>(SETTINGS.uiTheme) == InkMODSettings::UI_THEME::LYRA_3_COVERS;
+
   if (isCarousel) {
     const int bookCount = visibleBookCount;
     const int menuItemCount =
@@ -1446,6 +1449,51 @@ void HomeActivity::loop() {
         selectorIndex = bookCount;
       } else {
         selectorIndex = lastCarouselBookIndex;
+      }
+      requestUpdate();
+    }
+  } else if (isLyraExtended) {
+    // Lyra Extended has two intentionally different navigation axes.
+    //
+    // Front Left/Right buttons traverse one continuous ring:
+    // books 1..3 -> home menu rows -> book 1.
+    //
+    // Side Up/Down buttons treat the three-cover row as a single vertical
+    // entry: from ANY selected cover Down enters the first menu row, Up enters
+    // the last menu row, and crossing the menu boundary always returns to
+    // Book 1.  This exactly matches the physical layout on X4.
+    const int totalCount = getMenuItemCount();
+    const int bookCount = visibleBookCount;
+    const int firstMenuIndex = bookCount;
+    const int lastMenuIndex = totalCount - 1;
+
+    if (mappedInput.wasPressed(MappedInputManager::Button::Right)) {
+      selectorIndex = ButtonNavigator::nextIndex(selectorIndex, totalCount);
+      requestUpdate();
+    }
+    if (mappedInput.wasPressed(MappedInputManager::Button::Left)) {
+      selectorIndex = ButtonNavigator::previousIndex(selectorIndex, totalCount);
+      requestUpdate();
+    }
+
+    if (mappedInput.wasPressed(MappedInputManager::Button::Down)) {
+      if (bookCount > 0 && selectorIndex < bookCount) {
+        selectorIndex = firstMenuIndex;
+      } else if (selectorIndex >= firstMenuIndex && selectorIndex < lastMenuIndex) {
+        ++selectorIndex;
+      } else {
+        selectorIndex = 0;
+      }
+      requestUpdate();
+    }
+
+    if (mappedInput.wasPressed(MappedInputManager::Button::Up)) {
+      if (bookCount > 0 && selectorIndex < bookCount) {
+        selectorIndex = lastMenuIndex;
+      } else if (selectorIndex > firstMenuIndex) {
+        --selectorIndex;
+      } else {
+        selectorIndex = 0;
       }
       requestUpdate();
     }

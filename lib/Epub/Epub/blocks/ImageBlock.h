@@ -28,7 +28,10 @@ class ImageBlock final : public Block {
   std::string imagePath;
   int16_t width;
   int16_t height;
-  // A failed decoder must not be retried for every e-ink grayscale pass.
-  // Retrying a PNG that cannot fit in the C3 heap quickly fragments memory.
+  // Permanently disable only hard failures (missing/corrupt files). Low-heap
+  // PNG failures are deferred and retried once the allocator has recovered.
   bool unavailableThisSection = false;
+  bool deferredByLowHeap = false;
+  uint32_t retryWhenFreeAtLeast = 0;
+  uint32_t retryWhenMaxAllocAtLeast = 0;
 };

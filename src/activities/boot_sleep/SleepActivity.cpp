@@ -7,6 +7,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <PNGdec.h>
+#include <Epub/converters/PngToFramebufferConverter.h>
 
 #include <algorithm>
 #include <cmath>
@@ -352,6 +353,7 @@ bool openPreferredSleepDirectory(FsFile& dir, std::string& sleepDir) {
 }
 
 bool selectPinnedSleepImage(SleepImageMode mode, const std::string& favorite, SleepImageSelection& selection) {
+  (void)mode;
   if (favorite.empty()) {
     return false;
   }
@@ -368,14 +370,9 @@ bool selectPinnedSleepImage(SleepImageMode mode, const std::string& favorite, Sl
   }
 
   if (isPngSleepImagePath(favorite)) {
-    if (mode == SleepImageMode::Overlay) {
-      selection.path = favorite;
-      selection.isPng = true;
-      return true;
-    }
-
-    LOG_INF("SLP", "Pinned PNG sleep image requires Page Overlay mode, falling back: %s", favorite.c_str());
-    return false;
+    selection.path = favorite;
+    selection.isPng = true;
+    return true;
   }
 
   LOG_ERR("SLP", "Pinned sleep image has unsupported extension: %s", favorite.c_str());
@@ -383,13 +380,14 @@ bool selectPinnedSleepImage(SleepImageMode mode, const std::string& favorite, Sl
 }
 
 bool selectRandomSleepImage(SleepImageMode mode, SleepImageSelection& selection) {
+  (void)mode;
   FsFile dir;
   std::string sleepDir;
   if (!openPreferredSleepDirectory(dir, sleepDir)) {
     return false;
   }
 
-  const bool allowPng = mode == SleepImageMode::Overlay;
+  const bool allowPng = true;
   std::vector<std::string> files;
   files.reserve(16);
   char name[500];
@@ -531,18 +529,49 @@ void SleepActivity::renderCustomSleepScreen() const {
   SleepImageSelection selection;
   if (selectPinnedSleepImage(SleepImageMode::Custom, effectivePinnedSleepImagePath(), selection) ||
       selectRandomSleepImage(SleepImageMode::Custom, selection)) {
-    FsFile file;
-    if (Storage.openFileForRead("SLP", selection.path, file)) {
-      LOG_INF("SLP", "Loading custom sleep image: %s", selection.path.c_str());
-      delay(100);
-      Bitmap bitmap(file, true);
-      if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-        renderBitmapSleepScreen(bitmap);
-        return;
+    if (selection.isPng) {
+      ImageDimensions dims;
+      if (PngToFramebufferConverter::getDimensionsStatic(selection.path, dims)) {
+        const int pageWidth = renderer.getScreenWidth();
+        const int pageHeight = renderer.getScreenHeight();
+        float scale = 1.0f;
+        if (dims.width > pageWidth || dims.height > pageHeight) {
+          scale = std::min(static_cast<float>(pageWidth) / static_cast<float>(dims.width),
+                           static_cast<float>(pageHeight) / static_cast<float>(dims.height));
+        }
+        const int drawWidth = std::max(1, static_cast<int>(dims.width * scale));
+        const int drawHeight = std::max(1, static_cast<int>(dims.height * scale));
+        RenderConfig config;
+        config.x = (pageWidth - drawWidth) / 2;
+        config.y = (pageHeight - drawHeight) / 2;
+        config.maxWidth = drawWidth;
+        config.maxHeight = drawHeight;
+        config.useGrayscale = true;
+        config.useDithering = true;
+        config.performanceMode = false;
+        config.useExactDimensions = true;
+        renderer.clearScreen();
+        PngToFramebufferConverter converter;
+        if (converter.decodeToFramebuffer(selection.path, renderer, config)) {
+          renderer.displayBuffer(HalDisplay::HALF_REFRESH, TURN_OFF_SCREEN_AFTER_SLEEP_REFRESH);
+          return;
+        }
       }
-      LOG_ERR("SLP", "Failed to parse custom sleep BMP: %s", selection.path.c_str());
+      LOG_ERR("SLP", "Failed to render custom sleep PNG: %s", selection.path.c_str());
     } else {
-      LOG_ERR("SLP", "Failed to open custom sleep image: %s", selection.path.c_str());
+      FsFile file;
+      if (Storage.openFileForRead("SLP", selection.path, file)) {
+        LOG_INF("SLP", "Loading custom sleep image: %s", selection.path.c_str());
+        delay(100);
+        Bitmap bitmap(file, true);
+        if (bitmap.parseHeaders() == BmpReaderError::Ok) {
+          renderBitmapSleepScreen(bitmap);
+          return;
+        }
+        LOG_ERR("SLP", "Failed to parse custom sleep BMP: %s", selection.path.c_str());
+      } else {
+        LOG_ERR("SLP", "Failed to open custom sleep image: %s", selection.path.c_str());
+      }
     }
   }
 

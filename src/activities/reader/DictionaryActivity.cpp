@@ -111,11 +111,19 @@ void removeLastUtf8Codepoint(char* text, size_t& length) {
 }  // namespace
 
 void DictionaryActivity::onEnter() {
+  const uint32_t t0 = millis();
   Activity::onEnter();
   inputArmed_ = false;
   quietInputFrames_ = 0;
+
+  const uint32_t tScan = millis();
   dictionaries_.scan();
-  if (!page_ || !selectFirstWord()) {
+  const uint32_t scanMs = millis() - tScan;
+
+  const uint32_t tSelect = millis();
+  const bool hasWord = page_ && selectFirstWord();
+  const uint32_t selectMs = millis() - tSelect;
+  if (!hasWord) {
     mode_ = Mode::NoWords;
   } else if (dictionaries_.count() == 0) {
     mode_ = Mode::NoDictionaries;
@@ -425,11 +433,15 @@ bool DictionaryActivity::loadDictionaryArticle(const uint8_t dictionaryIndex) {
 
   article_[0] = '\0';
   matchedWord_[0] = '\0';
+  const uint32_t tLookup = millis();
   bool found = dictionaries_.lookup(dictionaryIndex, selectedLookupWord_, matchedWord_, sizeof(matchedWord_), article_,
                                     sizeof(article_));
+  uint32_t lookupMs = millis() - tLookup;
   if (!found && alternateLookupWord_[0] != '\0') {
+    const uint32_t tAlt = millis();
     found = dictionaries_.lookup(dictionaryIndex, alternateLookupWord_, matchedWord_, sizeof(matchedWord_), article_,
                                  sizeof(article_));
+    lookupMs += millis() - tAlt;
   }
   if (!found) {
     snprintf(matchedWord_, sizeof(matchedWord_), "%s", selectedLookupWord_);
@@ -437,7 +449,20 @@ bool DictionaryActivity::loadDictionaryArticle(const uint8_t dictionaryIndex) {
   }
   activeDictionary_ = dictionaryIndex;
   articleLength_ = static_cast<uint16_t>(std::min<size_t>(strlen(article_), MAX_ARTICLE_BYTES));
+
+  // Dictionary articles often contain glyphs that were not present on the
+  // current book page (IPA, accents, uncommon Cyrillic/Latin).  Prepare only
+  // their compact advance metrics once before pagination.  This does NOT load
+  // glyph bitmaps and the persistent advance table survives normal page-cache
+  // trimming, so getTextWidth() below never falls back to repeated expensive
+  // SD metric reads while wrapping the same article.
+  const uint32_t tMetrics = millis();
+  renderer.ensureSdCardFontReady(articleFontId(), article_, 0x01);
+  const uint32_t metricsMs = millis() - tMetrics;
+
+  const uint32_t tPaginate = millis();
   paginateArticle();
+  const uint32_t paginateMs = millis() - tPaginate;
   return found;
 }
 
@@ -544,25 +569,53 @@ void DictionaryActivity::loop() {
   }
 
   if (mode_ == Mode::SelectWord) {
-    if (mappedInput.wasReleased(MappedInputManager::Button::Left)) moveHorizontal(-1);
-    if (mappedInput.wasReleased(MappedInputManager::Button::Right)) moveHorizontal(1);
-    if (mappedInput.wasReleased(MappedInputManager::Button::Up)) moveVertical(-1);
-    if (mappedInput.wasReleased(MappedInputManager::Button::Down)) moveVertical(1);
+    const int steps = mappedInput.getHeldTime() >= FAST_NAV_HOLD_MS ? FAST_NAV_STEPS : 1;
+    if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+      for (int i = 0; i < steps; ++i) moveHorizontal(-1);
+      return;
+    }
+    if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+      for (int i = 0; i < steps; ++i) moveHorizontal(1);
+      return;
+    }
+    if (mappedInput.wasReleased(MappedInputManager::Button::Up)) {
+      for (int i = 0; i < steps; ++i) moveVertical(-1);
+      return;
+    }
+    if (mappedInput.wasReleased(MappedInputManager::Button::Down)) {
+      for (int i = 0; i < steps; ++i) moveVertical(1);
+      return;
+    }
     return;
   }
 
   if (mode_ == Mode::Article) {
-    if (mappedInput.wasReleased(MappedInputManager::Button::Left) && currentArticlePage_ > 0) {
-      --currentArticlePage_;
-      requestUpdate();
+    const int steps = mappedInput.getHeldTime() >= FAST_NAV_HOLD_MS ? FAST_NAV_STEPS : 1;
+    if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+      const int target = std::max(0, static_cast<int>(currentArticlePage_) - steps);
+      if (target != currentArticlePage_) {
+        currentArticlePage_ = static_cast<uint8_t>(target);
+        requestUpdate();
+      }
+      return;
     }
-    if (mappedInput.wasReleased(MappedInputManager::Button::Right) &&
-        currentArticlePage_ + 1 < articlePageCount_) {
-      ++currentArticlePage_;
-      requestUpdate();
+    if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+      const int target = std::min(static_cast<int>(articlePageCount_) - 1,
+                                  static_cast<int>(currentArticlePage_) + steps);
+      if (target != currentArticlePage_) {
+        currentArticlePage_ = static_cast<uint8_t>(target);
+        requestUpdate();
+      }
+      return;
     }
-    if (mappedInput.wasReleased(MappedInputManager::Button::Up)) changeDictionary(-1);
-    if (mappedInput.wasReleased(MappedInputManager::Button::Down)) changeDictionary(1);
+    if (mappedInput.wasReleased(MappedInputManager::Button::Up)) {
+      for (int i = 0; i < steps; ++i) changeDictionary(-1);
+      return;
+    }
+    if (mappedInput.wasReleased(MappedInputManager::Button::Down)) {
+      for (int i = 0; i < steps; ++i) changeDictionary(1);
+      return;
+    }
   }
 }
 
@@ -601,7 +654,11 @@ size_t DictionaryActivity::buildArticleLine(size_t offset, const int maxWidth, b
     return offset + 1;
   }
 
+  const int fontId = articleFontId();
+  const int spaceWidth = renderer.getTextWidth(fontId, " ");
   size_t lineLength = 0;
+  int lineWidth = 0;
+
   while (offset < articleLength_) {
     if (article_[offset] == '\n') {
       ++offset;
@@ -615,27 +672,39 @@ size_t DictionaryActivity::buildArticleLine(size_t offset, const int maxWidth, b
     const size_t wordLength = offset - wordStart;
     if (wordLength == 0) continue;
 
-    const size_t separator = lineLength > 0 ? 1 : 0;
-    const size_t copyLength = std::min(wordLength, sizeof(lineBuffer_) - lineLength - separator - 1);
-    const size_t previousLength = lineLength;
-    if (separator) lineBuffer_[lineLength++] = ' ';
-    memcpy(lineBuffer_ + lineLength, article_ + wordStart, copyLength);
-    lineLength += copyLength;
-    lineBuffer_[lineLength] = '\0';
+    // Measure each word once.  The old code re-measured the entire growing
+    // line after every appended word, turning a short dictionary article into
+    // hundreds/thousands of duplicate UTF-8 + font-metric scans on the C3.
+    char wordBuffer[LINE_BUFFER_BYTES];
+    const size_t wordCopyLength = std::min(wordLength, sizeof(wordBuffer) - 1);
+    memcpy(wordBuffer, article_ + wordStart, wordCopyLength);
+    wordBuffer[wordCopyLength] = '\0';
+    const int wordWidth = renderer.getTextWidth(fontId, wordBuffer);
+    const int separatorWidth = lineLength > 0 ? spaceWidth : 0;
 
-    if (renderer.getTextWidth(articleFontId(), lineBuffer_) <= maxWidth) {
-      hasLine = true;
-      continue;
-    }
-
-    if (previousLength > 0) {
-      lineLength = previousLength;
-      lineBuffer_[lineLength] = '\0';
+    if (lineLength > 0 && lineWidth + separatorWidth + wordWidth > maxWidth) {
       hasLine = true;
       return wordStart;
     }
 
-    while (lineLength > 0 && renderer.getTextWidth(articleFontId(), lineBuffer_) > maxWidth) {
+    const size_t separator = lineLength > 0 ? 1 : 0;
+    const size_t copyLength = std::min(wordLength, sizeof(lineBuffer_) - lineLength - separator - 1);
+    if (separator && lineLength + 1 < sizeof(lineBuffer_)) lineBuffer_[lineLength++] = ' ';
+    memcpy(lineBuffer_ + lineLength, article_ + wordStart, copyLength);
+    lineLength += copyLength;
+    lineBuffer_[lineLength] = '\0';
+
+    if (wordWidth <= maxWidth || lineWidth > 0) {
+      lineWidth += separatorWidth + wordWidth;
+      hasLine = true;
+      continue;
+    }
+
+    // Preserve the existing behaviour for a single over-wide token: fit the
+    // visible prefix into the line buffer, then advance over the source token.
+    // This path is rare (URLs/very long dictionary tokens) and may use the
+    // slower full-string measurement without affecting normal article speed.
+    while (lineLength > 0 && renderer.getTextWidth(fontId, lineBuffer_) > maxWidth) {
       removeLastUtf8Codepoint(lineBuffer_, lineLength);
     }
     hasLine = true;
@@ -825,13 +894,18 @@ void DictionaryActivity::drawCurrentMode() {
 }
 
 void DictionaryActivity::render(RenderLock&&) {
+  const uint32_t t0 = millis();
   // Reader pages rendered with an SD-card font need the same two-pass glyph
   // prewarm as the normal reader. Without it, entering word selection after
   // the menu redraws every uncached glyph as the replacement diamond.
   if (page_ && (mode_ == Mode::SelectWord || mode_ == Mode::Article)) {
     if (auto* fontCache = renderer.getFontCacheManager()) {
+      const uint32_t tScope = millis();
       auto prewarmScope = fontCache->createPrewarmScope();
+      const uint32_t scopeMs = millis() - tScope;
+      const uint32_t tScan = millis();
       page_->renderText(renderer, fontId_, marginLeft_, marginTop_, ReaderUtils::readerForegroundBlack());
+      uint32_t scanMs = millis() - tScan;
 
       // The article body uses the same SD-card font as the book. Scan only
       // the visible article page so uncommon dictionary glyphs (notably IPA)
@@ -856,13 +930,23 @@ void DictionaryActivity::render(RenderLock&&) {
         }
       }
 
+      const uint32_t tPrewarm = millis();
       prewarmScope.endScanAndPrewarm();
+      const uint32_t prewarmMs = millis() - tPrewarm;
+      const uint32_t tDraw = millis();
       drawCurrentMode();
+      const uint32_t drawMs = millis() - tDraw;
+      const uint32_t tDisplay = millis();
       renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+      const uint32_t displayMs = millis() - tDisplay;
       return;
     }
   }
 
+  const uint32_t tDraw = millis();
   drawCurrentMode();
+  const uint32_t drawMs = millis() - tDraw;
+  const uint32_t tDisplay = millis();
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  const uint32_t displayMs = millis() - tDisplay;
 }

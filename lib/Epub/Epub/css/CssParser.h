@@ -41,11 +41,11 @@ struct CssAncestorEntry {
 
 class CssParser {
  public:
-  // v14: inkMOD Classic Book changes final paragraph/quote/poem geometry.
+  // v15: inkMOD Classic Book fixes FB2 front-matter and poem/stanza geometry.
   // Bumping the CSS cache also invalidates existing section/page caches through
-  // the normal CSS-rebuild path so 1.1.5 cannot keep stale pre-profile pages.
+  // the normal CSS-rebuild path so stale pre-fix pages are not reused.
   static constexpr uint32_t CSS_CACHE_MAGIC = 0x435843FF;
-  static constexpr uint8_t CSS_CACHE_VERSION = 14;
+  static constexpr uint8_t CSS_CACHE_VERSION = 15;
 
   static constexpr size_t MAX_DESCENDANT_RULES = 100;
 

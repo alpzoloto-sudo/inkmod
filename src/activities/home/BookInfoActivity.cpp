@@ -34,7 +34,15 @@ std::string formatOf(const std::string& p) {
   if (FsHelpers::hasXtcExtension(p)) return "XTC / XTCH";
   if (FsHelpers::hasTxtExtension(p)) return "TXT";
   if (FsHelpers::hasMarkdownExtension(p)) return "Markdown";
+  if (FsHelpers::hasPngExtension(p)) return "PNG";
+  if (FsHelpers::hasBmpExtension(p)) return "BMP";
   return "-";
+}
+
+bool isBookLike(const std::string& p) {
+  return FsHelpers::hasEpubExtension(p) || FsHelpers::checkFileExtension(p, ".fb2") ||
+         FsHelpers::checkFileExtension(p, ".zip") || FsHelpers::hasXtcExtension(p) ||
+         FsHelpers::hasTxtExtension(p) || FsHelpers::hasMarkdownExtension(p);
 }
 }
 
@@ -48,7 +56,11 @@ void BookInfoActivity::render(RenderLock&&) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int pageW = renderer.getScreenWidth();
   const int pageH = renderer.getScreenHeight();
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageW, metrics.headerHeight}, tr(STR_BOOK_INFO));
+  if (isBookLike(path_)) {
+    GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageW, metrics.headerHeight}, tr(STR_BOOK_INFO));
+  } else {
+    GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageW, metrics.headerHeight}, tr(STR_FILE_INFO));
+  }
 
   uint64_t fileSize = 0;
   auto file = Storage.open(path_.c_str());
@@ -61,9 +73,11 @@ void BookInfoActivity::render(RenderLock&&) {
   if (FsHelpers::hasEpubExtension(path_)) {
     rows.push_back({tr(STR_BOOK_INFO_CACHE), Epub::hasCache(path_, "/.inkmod") ? tr(STR_YES) : tr(STR_NO)});
   }
-  const bool heavy = (FsHelpers::checkFileExtension(path_, ".fb2") && fileSize >= 20ULL*1024ULL*1024ULL) ||
-                     (FsHelpers::hasEpubExtension(path_) && fileSize >= 20ULL*1024ULL*1024ULL);
-  rows.push_back({tr(STR_BOOK_INFO_PROFILE), heavy ? tr(STR_BOOK_INFO_HEAVY) : tr(STR_BOOK_INFO_NORMAL)});
+  if (isBookLike(path_)) {
+    const bool heavy = (FsHelpers::checkFileExtension(path_, ".fb2") && fileSize >= 20ULL * 1024ULL * 1024ULL) ||
+                       (FsHelpers::hasEpubExtension(path_) && fileSize >= 20ULL * 1024ULL * 1024ULL);
+    rows.push_back({tr(STR_BOOK_INFO_PROFILE), heavy ? tr(STR_BOOK_INFO_HEAVY) : tr(STR_BOOK_INFO_NORMAL)});
+  }
 
   const int left = metrics.contentSidePadding;
   const int right = pageW - metrics.contentSidePadding;

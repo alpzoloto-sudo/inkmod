@@ -8,7 +8,7 @@
 
 #include <algorithm>
 
-#include "InkMODSettings.h"
+#include "InkMODState.h"
 #include "Epub/converters/PngToFramebufferConverter.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -117,7 +117,8 @@ bool BmpViewerActivity::renderPngImage() {
   bool hasNext = (siblingImages.size() > 1 && currentImageIndex != -1 &&
                   currentImageIndex < static_cast<int>(siblingImages.size()) - 1);
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", (hasPrevious ? "<" : ""), (hasNext ? ">" : ""));
+  const auto labels =
+      mappedInput.mapLabels(tr(STR_BACK), tr(STR_SET_SLEEP_COVER), (hasPrevious ? "<" : ""), (hasNext ? ">" : ""));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
   return true;
@@ -211,32 +212,14 @@ void BmpViewerActivity::onExit() {
 void BmpViewerActivity::doSetSleepCover() {
   GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
 
-  bool success = false;
-  HalFile inFile, outFile;
-  if (Storage.openFileForRead("BMP", filePath, inFile)) {
-    if (Storage.openFileForWrite("BMP", "/sleep.bmp", outFile)) {
-      char buffer[2048];
-      int bytesRead;
-      success = true;
-      while ((bytesRead = inFile.read(buffer, sizeof(buffer))) > 0) {
-        if (outFile.write(buffer, bytesRead) != bytesRead) {
-          success = false;
-          break;
-        }
-      }
-      outFile.close();
-    }
-    inFile.close();
-  }
+  // Keep one source of truth for both BMP and PNG: remember the selected
+  // original file instead of copying BMPs to legacy /sleep.bmp.  Do not
+  // modify SETTINGS.sleepScreen here; choosing an image and choosing the
+  // lock-screen mode are independent settings.
+  APP_STATE.favoriteSleepImagePath = filePath;
+  const bool success = APP_STATE.saveToFile();
 
-  if (success) {
-    SETTINGS.sleepScreen = InkMODSettings::SLEEP_SCREEN_MODE::CUSTOM;
-    SETTINGS.saveToFile();
-    GUI.drawPopup(renderer, tr(STR_DONE));
-  } else {
-    GUI.drawPopup(renderer, tr(STR_FAILED_LOWER));
-  }
-
+  GUI.drawPopup(renderer, success ? tr(STR_DONE) : tr(STR_FAILED_LOWER));
   delay(1000);
   onEnter();
 }
@@ -251,7 +234,7 @@ void BmpViewerActivity::loop() {
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (FsHelpers::hasBmpExtension(filePath)) {
+    if (isViewableImageFile(filePath)) {
       doSetSleepCover();
     }
     return;

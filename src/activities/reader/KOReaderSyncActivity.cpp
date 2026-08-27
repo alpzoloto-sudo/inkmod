@@ -203,6 +203,9 @@ void KOReaderSyncActivity::performSync() {
     return;
   }
 
+  LOG_INF("KOSync", "Remote progress: %.2f%% xpointer=%s device=%s",
+          remoteProgress.percentage * 100.0f, remoteProgress.progress.c_str(), remoteProgress.device.c_str());
+
   // Epub was released before sync to free RAM for the TLS handshake — reload it now.
   hasRemoteProgress = true;
   ensureEpubLoaded();
@@ -323,13 +326,20 @@ void KOReaderSyncActivity::performUpload() {
       fb2Pos.paragraphIndex = *currentParagraphIndex;
       fb2Pos.hasParagraphIndex = true;
     }
-    progress.progress = ProgressMapper::generateFb2CompatibleXPath(fb2Pos);
-    LOG_DBG("KOSync", "FB2 upload XPointer: %s", progress.progress.c_str());
+    int originalSectionOrdinal = currentSpineIndex + 1;
+    if (!Fb2::getOriginalSectionOrdinal(epub->getCachePath(), currentSpineIndex, originalSectionOrdinal)) {
+      LOG_DBG("KOSync", "FB2 source-section mapping unavailable for spine %d; using ordinal %d",
+              currentSpineIndex, originalSectionOrdinal);
+    }
+    progress.progress = ProgressMapper::generateFb2CompatibleXPath(fb2Pos, originalSectionOrdinal);
+    LOG_DBG("KOSync", "FB2 upload XPointer: %s (spine=%d sourceSection=%d p=%d)", progress.progress.c_str(),
+            currentSpineIndex, originalSectionOrdinal, fb2Pos.hasParagraphIndex ? fb2Pos.paragraphIndex : 1);
   } else {
     progress.progress = localProgress.xpath;
   }
   progress.percentage = localProgress.percentage;
   progress.device = SETTINGS.getEffectiveDeviceName();
+  LOG_INF("KOSync", "Upload progress: %.2f%% xpointer=%s", progress.percentage * 100.0f, progress.progress.c_str());
 
   const auto result = KOReaderSyncClient::updateProgress(progress);
 

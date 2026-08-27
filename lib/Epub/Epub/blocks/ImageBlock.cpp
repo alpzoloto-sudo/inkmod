@@ -2,9 +2,13 @@
 
 #include <Fb2.h>
 #include <FontCacheManager.h>
+#include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
+#include <MemoryBudget.h>
 #include <Serialization.h>
+
+#include <algorithm>
 
 #include "Epub/converters/DirectPixelWriter.h"
 #include "Epub/converters/ImageDecoderFactory.h"
@@ -43,21 +47,74 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
     return false;
   }
 
-  // Verify dimensions are close (allow 1 pixel tolerance for rounding differences)
-  int widthDiff = abs(cachedWidth - expectedWidth);
-  int heightDiff = abs(cachedHeight - expectedHeight);
-  if (widthDiff > 1 || heightDiff > 1) {
-    LOG_ERR("IMG", "Cache dimension mismatch: %dx%d vs %dx%d", cachedWidth, cachedHeight, expectedWidth,
-            expectedHeight);
+  // A FB2 PNG may be pre-cached before CSS/layout starts, at its maximum
+  // screen-fitting size. If a structural container later makes the final
+  // ImageBlock a little smaller, scale the already-decoded 2-bit cache instead
+  // of throwing it away and invoking PNGdec again on a fragmented heap.
+  const int widthDiff = abs(cachedWidth - expectedWidth);
+  const int heightDiff = abs(cachedHeight - expectedHeight);
+  const bool scaleCachedImage = widthDiff > 1 || heightDiff > 1;
+  if (expectedWidth <= 0 || expectedHeight <= 0 || cachedWidth == 0 || cachedHeight == 0) {
     cacheFile.close();
     return false;
   }
 
-  // Use cached dimensions for rendering (they're the actual decoded size)
+  LOG_DBG("IMG", scaleCachedImage ? "Loading/scaling cache: %s (%dx%d -> %dx%d)"
+                                  : "Loading from cache: %s (%dx%d)",
+          cachePath.c_str(), cachedWidth, cachedHeight, expectedWidth, expectedHeight);
+
+  if (scaleCachedImage) {
+    const int screenWidth = renderer.getScreenWidth();
+    const int screenHeight = renderer.getScreenHeight();
+    int clipXStart = std::max(0, -x);
+    int clipYStart = std::max(0, -y);
+    int clipXEnd = std::min(expectedWidth, screenWidth - x);
+    int clipYEnd = std::min(expectedHeight, screenHeight - y);
+    if (clipXStart >= clipXEnd || clipYStart >= clipYEnd) {
+      cacheFile.close();
+      return true;
+    }
+
+    const int srcBytesPerRow = (cachedWidth + 3) / 4;
+    uint8_t* srcRow = static_cast<uint8_t*>(malloc(srcBytesPerRow));
+    if (!srcRow) {
+      LOG_ERR("IMG", "Failed to allocate scaled-cache row buffer");
+      cacheFile.close();
+      return false;
+    }
+
+    DirectPixelWriter pw;
+    pw.init(renderer);
+    int loadedSrcY = -1;
+    for (int dstY = clipYStart; dstY < clipYEnd; ++dstY) {
+      const int srcY = static_cast<int>((static_cast<int64_t>(dstY) * cachedHeight) / expectedHeight);
+      if (srcY != loadedSrcY) {
+        const uint32_t offset = 4U + static_cast<uint32_t>(srcY) * static_cast<uint32_t>(srcBytesPerRow);
+        if (!cacheFile.seek(offset) || cacheFile.read(srcRow, srcBytesPerRow) != srcBytesPerRow) {
+          LOG_ERR("IMG", "Scaled cache read error at source row %d", srcY);
+          free(srcRow);
+          cacheFile.close();
+          return false;
+        }
+        loadedSrcY = srcY;
+      }
+
+      pw.beginRow(y + dstY);
+      for (int dstX = clipXStart; dstX < clipXEnd; ++dstX) {
+        const int srcX = static_cast<int>((static_cast<int64_t>(dstX) * cachedWidth) / expectedWidth);
+        const int byteIdx = srcX >> 2;
+        const int bitShift = 6 - (srcX & 3) * 2;
+        pw.writePixel(x + dstX, (srcRow[byteIdx] >> bitShift) & 0x03);
+      }
+    }
+    free(srcRow);
+    cacheFile.close();
+    return true;
+  }
+
+  // Use cached dimensions for the fast 1:1 rendering path.
   expectedWidth = cachedWidth;
   expectedHeight = cachedHeight;
-
-  LOG_DBG("IMG", "Loading from cache: %s (%dx%d)", cachePath.c_str(), cachedWidth, cachedHeight);
 
   const int screenWidth = renderer.getScreenWidth();
   const int screenHeight = renderer.getScreenHeight();
@@ -153,6 +210,17 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   FontCacheManager* fcm = renderer.getFontCacheManager();
   if (fcm && fcm->isScanning()) return;
   if (unavailableThisSection) return;
+  if (deferredByLowHeap) {
+    const auto heap = MemoryBudget::snapshot();
+    if (heap.freeHeap < retryWhenFreeAtLeast || heap.maxAllocHeap < retryWhenMaxAllocAtLeast) {
+      return;
+    }
+    LOG_DBG("IMG", "Retrying deferred image decode after heap recovery: %s (free=%u maxAlloc=%u)",
+            imagePath.c_str(), heap.freeHeap, heap.maxAllocHeap);
+    deferredByLowHeap = false;
+    retryWhenFreeAtLeast = 0;
+    retryWhenMaxAllocAtLeast = 0;
+  }
 
   LOG_DBG("IMG", "Rendering image at %d,%d: %s (%dx%d)", x, y, imagePath.c_str(), width, height);
 
@@ -241,11 +309,29 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
 
   bool success = decoder->decodeToFramebuffer(imagePath, renderer, config);
   if (!success) {
+    const auto heap = MemoryBudget::snapshot();
+    const bool likelyLowHeapPng =
+        FsHelpers::hasPngExtension(imagePath) && !Storage.exists(cachePath.c_str()) &&
+        (heap.freeHeap < 56U * 1024U || heap.maxAllocHeap < 40U * 1024U);
+    if (likelyLowHeapPng) {
+      deferredByLowHeap = true;
+      retryWhenFreeAtLeast = heap.freeHeap + 8U * 1024U;
+      retryWhenMaxAllocAtLeast = heap.maxAllocHeap + 4U * 1024U;
+      LOG_ERR("IMG",
+              "Deferred PNG decode until heap improves: %s (free=%u maxAlloc=%u retry>=%u/%u)",
+              imagePath.c_str(), heap.freeHeap, heap.maxAllocHeap, retryWhenFreeAtLeast,
+              retryWhenMaxAllocAtLeast);
+      return;
+    }
+
     LOG_ERR("IMG", "Failed to decode image: %s", imagePath.c_str());
     unavailableThisSection = true;
     return;
   }
 
+  deferredByLowHeap = false;
+  retryWhenFreeAtLeast = 0;
+  retryWhenMaxAllocAtLeast = 0;
   LOG_DBG("IMG", "Decode successful");
 }
 

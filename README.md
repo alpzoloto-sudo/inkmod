@@ -41,7 +41,7 @@ The project focuses on extending the capabilities of the Xteink X4/X3 while keep
 - EPUB support with browser-side optimization through **EPUBKIT**.
 - TXT, XTC and XTCH support.
 - ZIP archives can be identified dynamically by their contents instead of relying only on the filename extension.
-- Optimized handling of large books for the limited RAM available on Xteink X4.
+- Streaming, memory-conscious handling of large FB2/FB2.ZIP and EPUB chapters on Xteink X3/X4 without intentionally stripping book formatting or images.
 
 ### 🔤 Reading & Typography
 
@@ -49,11 +49,18 @@ The project focuses on extending the capabilities of the Xteink X4/X3 while keep
 - Custom reader fonts.
 - Unicode fallback for missing characters when possible.
 - Improved handling of large chapters and image-heavy books.
+- Expanded FB2 semantic styling: annotations, epigraphs, headings, subtitles, quotations, poems, stanzas and text authors.
+- FB2 `<emphasis>` follows the book markup, including mixed italic/regular text inside styled blocks.
+- Wrapped verse lines keep a distinct continuation indent instead of being flattened into ordinary prose.
+- Logical FB2 chapters can span multiple internal spine fragments while retaining a stable chapter page total.
 - `Paragraph spacing: None` keeps ordinary prose compact while preserving heading and structural spacing when embedded book styles are enabled.
 - Long-press page controls can jump by logical chapter boundaries or by 10 pages.
 - Text clippings for EPUB and FB2.
 - Save and manage selected text excerpts directly on the device.
+- Create Clipping can be assigned to configurable physical-button actions / long presses.
+- Faster held-button navigation in clipping selection and other supported navigation screens.
 - Customizable book menu ordering and visibility.
+- General menu/list navigation supports held-button repeat after roughly 0.5 s, while specialized screens keep their own accelerated behavior.
 
 ### 📖 Dictionaries
 
@@ -61,6 +68,7 @@ The project focuses on extending the capabilities of the Xteink X4/X3 while keep
 - Multiple installed dictionaries.
 - StarDict dictionary support.
 - Long dictionary articles with page navigation.
+- Reworked dictionary article pagination: measured test cases dropped from roughly 21–25 seconds to about 2 ms for pagination after font metrics are prepared.
 - Improved lookup of words containing punctuation and line-break hyphenation.
 - StarDict synonym table support.
 - Browser-side dictionary preparation and upload.
@@ -113,7 +121,8 @@ The interface also includes:
 - Session statistics.
 - Reading progress.
 - Completed-book tracking.
-- Book information available directly from the File Browser.
+- Book/file information available directly from the File Browser.
+- PNG and BMP are handled consistently as images, including format reporting and sleep-screen selection.
 
 ### 🕐 Clock & Time
 
@@ -152,6 +161,59 @@ Developer and production builds are kept separate so release firmware remains cl
 ---
 
 # Changelog
+
+# inkMOD 1.1.6
+
+inkMOD 1.1.6 focuses on faithful FB2 rendering, low-memory reader stability, faster dictionaries, clipping/navigation improvements and File Browser polish.
+
+## Highlights
+
+- Expanded FB2 semantic rendering for annotations, epigraphs, headings, subtitles, quotations, poems, stanzas and text authors.
+- Added faithful `<emphasis>` handling so italic/regular text follows the markup stored in the FB2 instead of being forced by the reader.
+- Improved verse layout, including stanza spacing and a continuation indent for wrapped poetic lines.
+- Improved FB2 image handling while preserving the book's structure and embedded formatting.
+- Reworked large-book processing around streaming and phased memory use so FB2/FB2.ZIP and EPUB can keep formatting and images without requiring the complete chapter in RAM.
+- Fixed rare streaming word splits such as `п ривет`, keeping unfinished words intact across parser/memory-drain boundaries.
+- Stabilized logical chapter pagination across internally split FB2 spine fragments. Exact totals can be cached under `.inkmod` on the SD card, avoiding jumps such as `40/40 → 41/45`.
+- Dramatically accelerated prepared-dictionary article pagination. In measured tests the pagination stage dropped from roughly **21–25 seconds to ~2 ms**, with lookup itself around 100–150 ms.
+- Fixed clipping-selection input so the first real selection press is no longer swallowed.
+- Added accelerated held-button navigation for dictionary/clipping workflows.
+- Added **Create Clipping** as an assignable physical-button / long-press action.
+- Added held-button repeat to ordinary menus and lists: after about 0.5 seconds, selection continues moving at roughly 0.5-second intervals. Specialized screens retain their own navigation behavior.
+- Improved File Browser handling of PNG/BMP images and EPUB/FB2 file icons.
+- PNG and BMP now report their actual image format in file information instead of `-`.
+- PNG can use the same image/sleep-screen action path as BMP.
+- New sleep-screen selection no longer needs to create a duplicate `/sleep.bmp`; the legacy file remains supported for compatibility.
+- Choosing a custom image no longer forcibly changes the configured **Lock Screen** mode.
+- Renamed **Hide file extensions** to **Show file extensions** and aligned the switch semantics with **Show hidden files**.
+
+## FB2 styling
+
+To use the book-aware FB2 presentation:
+
+**Settings → Reader → Embedded Style → ON**
+
+**Settings → Reader → Page Layout → Paragraph Alignment → Book's Style**
+
+With these options enabled, inkMOD attempts to preserve the semantic formatting encoded by the FB2 document instead of applying one forced appearance to quotations, poems, epigraphs and emphasized text.
+
+## Low-memory reader work
+
+Xteink X3/X4 hardware has a very small RAM budget and no PSRAM. Large sections are therefore processed incrementally. Parser, image and layout memory is reclaimed in phases, while unfinished text tokens survive streaming boundaries so memory pressure does not alter spaces or words.
+
+Large logical FB2 chapters may still be split internally for safety, but that implementation detail is hidden from normal navigation and page totals.
+
+## Dictionary performance
+
+Profiling showed that StarDict lookup itself was already fast; the expensive part was repeatedly measuring growing article lines during pagination. The article layout path now prepares font metrics once and avoids repeatedly measuring the entire accumulated line.
+
+A measured article that previously spent about 21–25 seconds in pagination completed that stage in about 2 ms after the change.
+
+## Controls and clippings
+
+Clipping creation can now be assigned directly to supported physical-button actions and long presses. Ordinary menu/list navigation also gains predictable held-button repeat, while chapter selection, dictionary navigation and clipping selection retain their specialized accelerated controls.
+
+For the illustrated 1.1.6 development notes, see [`RELEASE_NOTES_1.1.6.md`](RELEASE_NOTES_1.1.6.md).
 
 # inkMOD 1.1.5
 

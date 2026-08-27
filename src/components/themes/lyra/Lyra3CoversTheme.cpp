@@ -48,16 +48,28 @@ void Lyra3CoversTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
           if (Storage.openFileForRead("HOME", coverBmpPath, file)) {
             Bitmap bitmap(file);
             if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-              float coverHeight = static_cast<float>(bitmap.getHeight());
-              float coverWidth = static_cast<float>(bitmap.getWidth());
-              float ratio = coverWidth / coverHeight;
+              const float coverHeight = static_cast<float>(bitmap.getHeight());
+              const float coverWidth = static_cast<float>(bitmap.getWidth());
+              const float ratio = coverWidth / coverHeight;
               const float tileRatio = static_cast<float>(tileWidth - 2 * hPaddingInSelection) /
                                       static_cast<float>(Lyra3CoversMetrics::values.homeCoverHeight);
-              float cropX = 1.0f - (tileRatio / ratio);
+
+              // Fill the cover slot without biasing tall covers toward the top.
+              // drawBitmap() crops symmetrically around the centre, so wide
+              // covers are centred horizontally and tall covers are centred
+              // vertically.  Previously Lyra Extended only calculated cropX;
+              // a tall/narrow cover therefore had no vertical centring path.
+              float cropX = 0.0f;
+              float cropY = 0.0f;
+              if (ratio > tileRatio) {
+                cropX = 1.0f - (tileRatio / ratio);
+              } else if (ratio < tileRatio) {
+                cropY = 1.0f - (ratio / tileRatio);
+              }
 
               renderer.drawBitmap(bitmap, tileX + hPaddingInSelection, tileY + hPaddingInSelection,
                                   tileWidth - 2 * hPaddingInSelection, Lyra3CoversMetrics::values.homeCoverHeight,
-                                  cropX);
+                                  cropX, cropY);
             } else {
               hasCover = false;
             }

@@ -27,6 +27,8 @@ inline bool isPowerButtonActionAvailableOutsideReader(const InkMODSettings::SHOR
     case InkMODSettings::SHORT_PWRBTN::TOGGLE_DARK_MODE:
     case InkMODSettings::SHORT_PWRBTN::FOOTNOTES:
     case InkMODSettings::SHORT_PWRBTN::FILE_BROWSER:
+    case InkMODSettings::SHORT_PWRBTN::DICTIONARY_LOOKUP:
+    case InkMODSettings::SHORT_PWRBTN::CREATE_CLIPPING:
     case InkMODSettings::SHORT_PWRBTN::SHORT_PWRBTN_COUNT:
     default:
       return false;

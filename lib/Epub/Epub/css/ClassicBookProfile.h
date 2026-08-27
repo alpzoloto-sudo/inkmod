@@ -88,6 +88,11 @@ inline void setLayout(CssStyle& style, CssTextAlign align, float indent,
   style.defined.paddingRight = 1;
 }
 
+inline void setBold(CssStyle& style) {
+  style.fontWeight = CssFontWeight::Bold;
+  style.defined.fontWeight = 1;
+}
+
 inline void setBoldNormal(CssStyle& style) {
   style.fontWeight = CssFontWeight::Bold;
   style.defined.fontWeight = 1;
@@ -115,36 +120,53 @@ inline void apply(const char* tagName, const std::string& classAttr,
   const bool subHeading = tag == "h3" || tag == "h4" || tag == "h5" || tag == "h6" || has("subtitle") ||
                           has("title-line") || has("subheading");
   const bool poemContainer = has("poem") || has("poetry");
-  const bool stanzaContainer = has("stanza") || has("stanza-break");
+  const bool stanzaBreak = has("stanza-break");
+  const bool stanzaContainer = has("stanza") || stanzaBreak;
   const bool quoteContainer = tag == "blockquote" || has("cite") || has("quote") || has("epigraph");
+  const bool fb2BookAuthor = has("fb2-book-author");
+  const bool fb2BookTitle = has("fb2-book-title");
+  const bool fb2BookDate = has("fb2-book-date");
 
   const bool inPoem = poemContainer || stanzaContainer || inClass("poem") || inClass("poetry") ||
                       inClass("stanza") || inClass("stanza-break");
   const bool inQuote = quoteContainer || ancestorHasTag(ancestors, "blockquote") || inClass("cite") ||
                        inClass("quote") || inClass("epigraph");
 
+  // Generated FB2 front matter needs deliberately non-stacking margins:
+  // author -> title must have exactly the same 0.6em gap as title -> annotation.
+  // Treat these before generic h2 handling because both are emitted as <h2>.
+  if (fb2BookAuthor) {
+    setLayout(style, CssTextAlign::Center, 0.0f, 0.6f, 0.0f, 0.0f, 0.0f);
+    setBold(style);
+  } else if (fb2BookTitle) {
+    setLayout(style, CssTextAlign::Center, 0.0f, 0.6f, 0.6f, 0.0f, 0.0f);
+    setBold(style);
   // Container geometry is inherited by the existing block-style stack.
-  if (topHeading) {
+  } else if (topHeading) {
     // Book/part/chapter-level titles (FB2 <title>, EPUB h1/h2/.title) keep a
     // visible gap around them - unlike subHeading below, these usually are
     // NOT already wrapped in a blank line by the source markup.
     setLayout(style, CssTextAlign::Center, 0.0f, 0.6f, 0.6f, 0.0f, 0.0f);
-    setBoldNormal(style);
+    setBold(style);
   } else if (subHeading) {
     // No external top/bottom margin: FB2/EPUB source markup usually already
     // wraps these in a blank line, so an added margin here doubles the gap.
     setLayout(style, CssTextAlign::Center, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
-    setBoldNormal(style);
+    setBold(style);
   } else if (quoteContainer) {
     setLayout(style, CssTextAlign::Justify, 0.0f, 0.6f, 0.6f, 1.2f, 1.2f);
     // font-style intentionally left alone here: don't force italic over
     // whatever the source markup/publisher stylesheet already set.
   } else if (poemContainer) {
-    setLayout(style, CssTextAlign::Left, 0.0f, 0.6f, 0.6f, 1.2f, 1.2f);
+    // Inside an epigraph the attribution follows the poem.  Do not add a poem
+    // bottom margin there: text-author supplies the requested 0.5em gap.
+    const float bottom = inClass("epigraph") ? 0.0f : 0.6f;
+    setLayout(style, CssTextAlign::Left, 0.0f, 0.6f, bottom, 1.2f, 1.2f);
   } else if (stanzaContainer) {
-    // The following text-author supplies its own small separation. Keeping a
-    // stanza bottom margin here stacks both gaps and makes poems look detached.
-    setLayout(style, CssTextAlign::Left, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+    // StreamSink marks every stanza after the first with stanza-break.  Putting
+    // 0.5em on the *next* stanza gives an exact inter-stanza gap without also
+    // stacking that gap in front of a following text-author.
+    setLayout(style, CssTextAlign::Left, 0.0f, stanzaBreak ? 0.5f : 0.0f, 0.0f, 0.0f, 0.0f);
   }
 
   // Ordinary prose: no inter-paragraph holes, 1.2em red line, justified.
@@ -153,9 +175,18 @@ inline void apply(const char* tagName, const std::string& classAttr,
 
   if (subHeading) return;
 
+  if (fb2BookDate) {
+    // Publication year/date below the annotation: right aligned, compact
+    // 0.5em separation, no inherited first-line indent.
+    setLayout(style, CssTextAlign::Right, 0.0f, 0.5f, 0.0f, 0.0f, 0.0f);
+    return;
+  }
+
   if (has("text-author") || has("author") || has("cite-author")) {
-    setLayout(style, CssTextAlign::Right, 0.0f, 0.2f, 0.0f, 0.0f, 0.0f);
-    setItalic(style);
+    // Attribution alignment is structural; font style is not.  FB2 does not
+    // require text-author to be italic, so preserve whatever the source
+    // actually requested instead of forcing italics here.
+    setLayout(style, CssTextAlign::Right, 0.0f, 0.5f, 0.0f, 0.0f, 0.0f);
     return;
   }
   if (has("date")) {

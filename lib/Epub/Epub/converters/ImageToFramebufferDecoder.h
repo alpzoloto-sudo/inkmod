@@ -38,9 +38,14 @@ class ImageToFramebufferDecoder {
   // JPEGDEC streams scaled MCU blocks, so moderately wider JPEG sources are
   // safe as long as the total-pixel and heap guards still pass.
   static constexpr int MAX_JPEG_SOURCE_WIDTH = 4096;
+  static constexpr int MAX_JPEG_SOURCE_HEIGHT = 4096;
+  static constexpr int64_t MAX_JPEG_SOURCE_PIXELS = 16LL * 1024LL * 1024LL;
   static constexpr int MAX_SOURCE_HEIGHT = 3072;
   static constexpr int64_t MAX_SOURCE_PIXELS = 2048LL * 3072LL;
 
-  bool validateImageDimensions(int width, int height, const std::string& format, int maxSourceWidth = MAX_SOURCE_WIDTH);
+  bool validateImageDimensions(int width, int height, const std::string& format,
+                               int maxSourceWidth = MAX_SOURCE_WIDTH,
+                               int maxSourceHeight = MAX_SOURCE_HEIGHT,
+                               int64_t maxSourcePixels = MAX_SOURCE_PIXELS);
   void warnUnsupportedFeature(const std::string& feature, const std::string& imagePath);
 };

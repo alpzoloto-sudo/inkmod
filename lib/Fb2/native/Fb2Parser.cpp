@@ -182,7 +182,9 @@ bool findCoverForFirstSection(IByteReader& reader, uint32_t expectedInnerStartOf
                 inBody = true;
             } else if (name == "section" && inBody) {
                 const uint32_t firstInnerStart = xml.streamPos();
-                return firstInnerStart == expectedInnerStartOffset && !coverId.empty();
+                (void)firstInnerStart;
+                (void)expectedInnerStartOffset;
+                return !coverId.empty();
             }
         }
 
@@ -246,6 +248,10 @@ bool Fb2Parser::scan(IByteReader& reader, Fb2ScanResult& out, size_t xmlBufferSi
             else if (inAuthorTag && name == "nickname") activeTarget = &curAuthor.nickname;
             else if (name == "book-title" && inTitleInfo && !inAuthorTag) activeTarget = &out.metadata.title;
             else if (name == "lang" && inTitleInfo && !inAuthorTag) activeTarget = &out.metadata.language;
+            else if (name == "date" && inTitleInfo && !inAuthorTag) {
+                if (const char* value = xml.attr("value")) out.metadata.date = value;
+                else activeTarget = &out.metadata.date;
+            }
             else if (name == "annotation" && inTitleInfo) { inAnnotation = true; annotationBuf.clear(); annotationNeedsSep = false; }
             else if (name == "p" && inAnnotation) { if (annotationNeedsSep) annotationBuf += "\n\n"; annotationNeedsSep = true; }
             else if (name == "stylesheet" && inDescription) { inStylesheet = true; out.metadata.embeddedStylesheetCss.clear(); }
@@ -301,7 +307,7 @@ bool Fb2Parser::scan(IByteReader& reader, Fb2ScanResult& out, size_t xmlBufferSi
                 if (!display.empty()) { if (!out.metadata.author.empty()) out.metadata.author += "; "; out.metadata.author += display; }
                 inAuthorTag = false;
             } else if (inAuthorTag && (name == "first-name" || name == "middle-name" || name == "last-name" || name == "nickname")) activeTarget = nullptr;
-            else if (name == "book-title" || name == "lang") activeTarget = nullptr;
+            else if (name == "book-title" || name == "lang" || name == "date") activeTarget = nullptr;
             else if (name == "annotation") { out.metadata.annotationText = annotationBuf; inAnnotation = false; }
             else if (name == "stylesheet") inStylesheet = false;
             else if (name == "coverpage") inCoverpage = false;
@@ -333,6 +339,242 @@ bool Fb2Parser::renderCoverForFirstSection(IByteReader& reader,
     return true;
 }
 
+bool Fb2Parser::renderAnnotation(IByteReader& reader, Fb2ContentSink& sink,
+                                 const reader::ReaderCancellationToken* cancellationToken) {
+    Fb2XmlReader xml(reader, 2048);
+    xml.seekTo(0);
+    bool inTitleInfo = false;
+    bool inAnnotation = false;
+    bool paragraphOpen = false;
+    int boldDepth = 0, italicDepth = 0, underlineDepth = 0, strikeDepth = 0, supDepth = 0, subDepth = 0;
+    auto currentStyle = [&]() {
+        Fb2InlineStyle st = Fb2InlineStyle::Regular;
+        if (boldDepth) st = st | Fb2InlineStyle::Bold;
+        if (italicDepth) st = st | Fb2InlineStyle::Italic;
+        if (underlineDepth) st = st | Fb2InlineStyle::Underline;
+        if (strikeDepth) st = st | Fb2InlineStyle::Strikethrough;
+        if (supDepth) st = st | Fb2InlineStyle::Superscript;
+        if (subDepth) st = st | Fb2InlineStyle::Subscript;
+        return st;
+    };
+
+    for (;;) {
+        if (cancellationToken && cancellationToken->isCancellationRequested()) return false;
+        const Fb2Token tok = xml.next();
+        if (tok == Fb2Token::Eof) return true;
+        if (tok == Fb2Token::Error) return false;
+        const std::string& name = xml.name();
+
+        if (tok == Fb2Token::StartTag || tok == Fb2Token::SelfClosing) {
+            if (name == "title-info") { inTitleInfo = true; continue; }
+            if (!inTitleInfo) continue;
+            if (name == "annotation") { inAnnotation = true; continue; }
+            if (!inAnnotation) continue;
+            if (name == "p") { sink.onParagraphBegin(); paragraphOpen = true; }
+            else if (name == "empty-line") sink.onEmptyLine();
+            else if (name == "strong" || name == "b") ++boldDepth;
+            else if (name == "emphasis" || name == "i") ++italicDepth;
+            else if (name == "underline" || name == "u") ++underlineDepth;
+            else if (name == "strikethrough") ++strikeDepth;
+            else if (name == "sup") ++supDepth;
+            else if (name == "sub") ++subDepth;
+            continue;
+        }
+        if (tok == Fb2Token::Text && inAnnotation) {
+            sink.onText(xml.text(), currentStyle());
+            continue;
+        }
+        if (tok == Fb2Token::EndTag) {
+            if (name == "title-info") return true;
+            if (!inAnnotation) continue;
+            if (name == "annotation") { if (paragraphOpen) sink.onParagraphEnd(); return true; }
+            if (name == "p") { sink.onParagraphEnd(); paragraphOpen = false; }
+            else if (name == "strong" || name == "b") --boldDepth;
+            else if (name == "emphasis" || name == "i") --italicDepth;
+            else if (name == "underline" || name == "u") --underlineDepth;
+            else if (name == "strikethrough") --strikeDepth;
+            else if (name == "sup") --supDepth;
+            else if (name == "sub") --subDepth;
+        }
+    }
+}
+
+bool Fb2Parser::renderBodyPreambleForFirstSection(
+    IByteReader& reader,
+    Fb2ContentSink& sink,
+    const reader::ReaderCancellationToken* cancellationToken) {
+    // Body-level epigraphs are legal FB2 and are common before the first
+    // section. scan() deliberately indexes only <section> nodes, so recover
+    // that tiny preamble here. This pass terminates at the first section and
+    // therefore does not turn chapter rendering into a whole-book rescan.
+    Fb2XmlReader xml(reader, 4096);
+    xml.seekTo(0);
+
+    bool inBody = false;
+    bool inEpigraph = false;
+    bool inTextAuthor = false;
+    int boldDepth = 0, italicDepth = 0, underlineDepth = 0, strikeDepth = 0, supDepth = 0, subDepth = 0;
+    int smallCapsDepth = 0;
+    std::vector<bool> styleTagIsSmallCaps;
+
+    auto currentStyle = [&]() {
+        Fb2InlineStyle style = Fb2InlineStyle::Regular;
+        if (boldDepth > 0) style = style | Fb2InlineStyle::Bold;
+        if (italicDepth > 0) style = style | Fb2InlineStyle::Italic;
+        if (underlineDepth > 0) style = style | Fb2InlineStyle::Underline;
+        if (strikeDepth > 0) style = style | Fb2InlineStyle::Strikethrough;
+        if (supDepth > 0) style = style | Fb2InlineStyle::Superscript;
+        if (subDepth > 0) style = style | Fb2InlineStyle::Subscript;
+        if (smallCapsDepth > 0) style = style | Fb2InlineStyle::SmallCaps;
+        return style;
+    };
+
+    for (;;) {
+        if (cancellationToken && cancellationToken->isCancellationRequested()) return false;
+        const Fb2Token tok = xml.next();
+        if (tok == Fb2Token::Eof) return true;
+        if (tok == Fb2Token::Error) return false;
+        const std::string& name = xml.name();
+
+        if (!inBody) {
+            if ((tok == Fb2Token::StartTag || tok == Fb2Token::SelfClosing) && name == "body") {
+                // The first body is the primary reading flow for the first
+                // section. Notes/comments bodies appear later in normal FB2s.
+                inBody = true;
+            }
+            continue;
+        }
+
+        if ((tok == Fb2Token::StartTag || tok == Fb2Token::SelfClosing) && name == "section") {
+            return true;
+        }
+        if (tok == Fb2Token::EndTag && name == "body") return true;
+
+        if (tok == Fb2Token::StartTag || tok == Fb2Token::SelfClosing) {
+            if (name == "epigraph") {
+                inEpigraph = true;
+                sink.onEpigraphBegin();
+                continue;
+            }
+            if (!inEpigraph) continue;
+
+            if (name == "p") sink.onParagraphBegin();
+            else if (name == "empty-line") sink.onEmptyLine();
+            else if (name == "poem") sink.onPoemBegin();
+            else if (name == "stanza") sink.onStanzaBegin();
+            else if (name == "v") sink.onVerseBegin();
+            else if (name == "text-author") { inTextAuthor = true; sink.onTextAuthorBegin(); }
+            else if (name == "strong" || name == "b") ++boldDepth;
+            else if (name == "emphasis" || name == "i") ++italicDepth;
+            else if (name == "underline" || name == "u") ++underlineDepth;
+            else if (name == "strikethrough") ++strikeDepth;
+            else if (name == "sup") ++supDepth;
+            else if (name == "sub") ++subDepth;
+            else if (name == "style") {
+                const bool isSC = isSmallCapsStyleName(xml.attr("name") ? xml.attr("name") : "");
+                styleTagIsSmallCaps.push_back(isSC);
+                if (isSC) ++smallCapsDepth;
+            }
+            else if (name == "a") {
+                if (const char* href = firstOf(xml, {"l:href", "xlink:href", "href"})) sink.onLinkBegin(stripHash(href));
+                else sink.onLinkBegin(std::string());
+            }
+            continue;
+        }
+
+        if (tok == Fb2Token::Text && inEpigraph) {
+            sink.onText(xml.text(), currentStyle());
+            continue;
+        }
+
+        if (tok == Fb2Token::EndTag && inEpigraph) {
+            if (name == "p") sink.onParagraphEnd();
+            else if (name == "poem") sink.onPoemEnd();
+            else if (name == "stanza") sink.onStanzaEnd();
+            else if (name == "v") sink.onVerseEnd();
+            else if (name == "text-author") { sink.onTextAuthorEnd(); inTextAuthor = false; }
+            else if (name == "strong" || name == "b") --boldDepth;
+            else if (name == "emphasis" || name == "i") --italicDepth;
+            else if (name == "underline" || name == "u") --underlineDepth;
+            else if (name == "strikethrough") --strikeDepth;
+            else if (name == "sup") --supDepth;
+            else if (name == "sub") --subDepth;
+            else if (name == "style") {
+                if (!styleTagIsSmallCaps.empty()) {
+                    const bool was = styleTagIsSmallCaps.back();
+                    styleTagIsSmallCaps.pop_back();
+                    if (was) --smallCapsDepth;
+                }
+            }
+            else if (name == "a") sink.onLinkEnd();
+            else if (name == "epigraph") {
+                sink.onEpigraphEnd();
+                inEpigraph = false;
+            }
+        }
+    }
+}
+
+bool Fb2Parser::renderSectionTitle(IByteReader& reader,
+                                  const Fb2SectionIndexEntry& section,
+                                  Fb2ContentSink& sink,
+                                  uint8_t level,
+                                  const reader::ReaderCancellationToken* cancellationToken) {
+    Fb2XmlReader xml(reader, 2048);
+    xml.seekTo(section.innerStartOffset);
+    bool inTitle = false;
+    bool emitted = false;
+    bool titleParagraphSeen = false;
+    int boldDepth = 0, italicDepth = 0, underlineDepth = 0, strikeDepth = 0, supDepth = 0, subDepth = 0;
+    auto style = [&]() {
+        Fb2InlineStyle st = Fb2InlineStyle::Regular;
+        if (boldDepth) st = st | Fb2InlineStyle::Bold;
+        if (italicDepth) st = st | Fb2InlineStyle::Italic;
+        if (underlineDepth) st = st | Fb2InlineStyle::Underline;
+        if (strikeDepth) st = st | Fb2InlineStyle::Strikethrough;
+        if (supDepth) st = st | Fb2InlineStyle::Superscript;
+        if (subDepth) st = st | Fb2InlineStyle::Subscript;
+        return st;
+    };
+    for (;;) {
+        if (cancellationToken && cancellationToken->isCancellationRequested()) return false;
+        const Fb2Token tok = xml.next();
+        if (tok == Fb2Token::Eof || tok == Fb2Token::Error) return false;
+        const std::string& name = xml.name();
+        if (!inTitle) {
+            if ((tok == Fb2Token::StartTag || tok == Fb2Token::SelfClosing) && name == "title") {
+                inTitle = true; sink.onTitleBegin(level);
+            } else if ((tok == Fb2Token::StartTag || tok == Fb2Token::SelfClosing) &&
+                       (name == "section" || name == "p" || name == "epigraph" || name == "poem" || name == "cite")) {
+                return false;
+            }
+            continue;
+        }
+        if (tok == Fb2Token::StartTag || tok == Fb2Token::SelfClosing) {
+            if (name == "p") {
+                if (titleParagraphSeen) sink.onTitleLineBreak();
+                titleParagraphSeen = true;
+            } else if (name == "strong" || name == "b") ++boldDepth;
+            else if (name == "emphasis" || name == "i") ++italicDepth;
+            else if (name == "underline" || name == "u") ++underlineDepth;
+            else if (name == "strikethrough") ++strikeDepth;
+            else if (name == "sup") ++supDepth;
+            else if (name == "sub") ++subDepth;
+            continue;
+        }
+        if (tok == Fb2Token::Text) { sink.onText(xml.text(), style()); emitted = true; continue; }
+        if (tok == Fb2Token::EndTag) {
+            if (name == "title") { sink.onTitleEnd(level); return emitted; }
+            if (name == "strong" || name == "b") --boldDepth;
+            else if (name == "emphasis" || name == "i") --italicDepth;
+            else if (name == "underline" || name == "u") --underlineDepth;
+            else if (name == "strikethrough") --strikeDepth;
+            else if (name == "sup") --supDepth;
+            else if (name == "sub") --subDepth;
+        }
+    }
+}
+
 bool Fb2Parser::renderSection(IByteReader& reader,
                                const Fb2SectionIndexEntry& section,
                                Fb2ContentSink& sink,
@@ -355,9 +597,8 @@ bool Fb2Parser::renderSection(IByteReader& reader,
         return s;
     };
 
-    bool inSubtitle = false; std::string subtitleBuf;
-    bool inVerse = false; std::string verseBuf;
-    bool inTextAuthor = false; std::string textAuthorBuf;
+    bool inSubtitle = false;
+    bool inTextAuthor = false;
     bool inTableCell = false; std::string cellBuf; Fb2TableCellAttrs cellAttrs;
     bool inTitleTag = false;
     bool skipping = false;
@@ -390,11 +631,11 @@ bool Fb2Parser::renderSection(IByteReader& reader,
             else if (name == "empty-line") sink.onEmptyLine();
             else if (name == "poem") sink.onPoemBegin();
             else if (name == "stanza") sink.onStanzaBegin();
-            else if (name == "v") { inVerse = true; verseBuf.clear(); }
+            else if (name == "v") sink.onVerseBegin();
             else if (name == "cite") sink.onCiteBegin();
             else if (name == "epigraph") sink.onEpigraphBegin();
-            else if (name == "text-author") { inTextAuthor = true; textAuthorBuf.clear(); }
-            else if (name == "subtitle") { inSubtitle = true; subtitleBuf.clear(); }
+            else if (name == "text-author") { inTextAuthor = true; sink.onTextAuthorBegin(); }
+            else if (name == "subtitle") { inSubtitle = true; sink.onSubtitleBegin(); }
             else if (name == "strong" || name == "b") boldDepth++;
             else if (name == "emphasis" || name == "i") italicDepth++;
             else if (name == "underline" || name == "u") underlineDepth++;
@@ -429,9 +670,7 @@ bool Fb2Parser::renderSection(IByteReader& reader,
 
         if (tok == Fb2Token::Text) {
             if (inTitleTag) { }
-            else if (inSubtitle) subtitleBuf += xml.text();
-            else if (inVerse) verseBuf += xml.text();
-            else if (inTextAuthor) textAuthorBuf += xml.text();
+            else if (inSubtitle || inTextAuthor) sink.onText(xml.text(), currentStyle());
             else if (inTableCell) cellBuf += xml.text();
             else sink.onText(xml.text(), currentStyle());
         }
@@ -442,11 +681,11 @@ bool Fb2Parser::renderSection(IByteReader& reader,
             if (name == "p") sink.onParagraphEnd();
             else if (name == "poem") sink.onPoemEnd();
             else if (name == "stanza") sink.onStanzaEnd();
-            else if (name == "v") { sink.onVerseLine(verseBuf); inVerse = false; }
+            else if (name == "v") sink.onVerseEnd();
             else if (name == "cite") sink.onCiteEnd();
             else if (name == "epigraph") sink.onEpigraphEnd();
-            else if (name == "text-author") { sink.onTextAuthor(textAuthorBuf); inTextAuthor = false; }
-            else if (name == "subtitle") { sink.onSubtitle(subtitleBuf); inSubtitle = false; }
+            else if (name == "text-author") { sink.onTextAuthorEnd(); inTextAuthor = false; }
+            else if (name == "subtitle") { sink.onSubtitleEnd(); inSubtitle = false; }
             else if (name == "strong" || name == "b") boldDepth--;
             else if (name == "emphasis" || name == "i") italicDepth--;
             else if (name == "underline" || name == "u") underlineDepth--;

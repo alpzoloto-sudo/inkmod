@@ -23,8 +23,12 @@ struct HeapRequirement {
 // decoder headroom immediately before allocation.  The old 96/56 KB gate
 // rejected valid chapters at ~94 KB free even though the real decoder guard
 // would safely allow them, causing the reader to abort and eject the user.
-constexpr uint32_t EPUB_INLINE_IMAGE_MIN_FREE = 92U * 1024U;
-constexpr uint32_t EPUB_INLINE_IMAGE_MIN_MAX_ALLOC = 44U * 1024U;
+// PNGdec embeds its workspace inside PNG. With our 8192-byte scanline buffer
+// sizeof(PNG) is ~51 KiB, so keep a little allocator margin and enough total
+// free heap for the gray row/cache writer. This is still low enough for the
+// observed FB2 spine-2 state (~80 KiB free / 53 KiB maxAlloc).
+constexpr uint32_t EPUB_INLINE_IMAGE_MIN_FREE = 68U * 1024U;
+constexpr uint32_t EPUB_INLINE_IMAGE_MIN_MAX_ALLOC = 50U * 1024U;
 // JPEGDEC needs about 20 KB plus its dedicated 24 KB safety margin. Requiring the
 // PNG-sized 96 KB budget here needlessly suppresses otherwise safe JPEGs.
 // Match the decoder's real guard (20 KiB JPEGDEC + 24 KiB headroom).  The

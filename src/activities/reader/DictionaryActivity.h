@@ -37,6 +37,8 @@ class DictionaryActivity final : public Activity {
   static constexpr size_t LINE_BUFFER_BYTES = 384;
   static constexpr uint8_t MAX_ARTICLE_PAGES = 64;
   static constexpr uint8_t MAX_SELECTION_FRAGMENTS = 4;
+  static constexpr unsigned long FAST_NAV_HOLD_MS = 550;
+  static constexpr int FAST_NAV_STEPS = 5;
 
   struct WordLocation {
     int elementIndex = -1;

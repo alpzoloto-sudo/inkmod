@@ -105,6 +105,9 @@ void ClearCacheActivity::clearCache() {
     file.getName(name, sizeof(name));
     const bool preserve = std::strcmp(name, "wifi.json") == 0 ||
                           std::strcmp(name, "inkmod-settings.json") == 0 ||
+                          std::strcmp(name, "koreader.json") == 0 ||
+                          std::strcmp(name, "koreader.bin") == 0 ||
+                          std::strcmp(name, "koreader.bin.bak") == 0 ||
                           std::strcmp(name, "opds.json") == 0;
     const bool isDirectory = file.isDirectory();
     if (preserve) {

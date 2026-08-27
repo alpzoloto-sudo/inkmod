@@ -132,11 +132,11 @@ void OpdsBookBrowserActivity::loop() {
         requestUpdate();
       });
       buttonNavigator.onNextContinuous([this] {
-        selectorIndex = ButtonNavigator::nextPageIndex(selectorIndex, entryCount, PAGE_ITEMS);
+        selectorIndex = ButtonNavigator::nextIndex(selectorIndex, entryCount);
         requestUpdate();
       });
       buttonNavigator.onPreviousContinuous([this] {
-        selectorIndex = ButtonNavigator::previousPageIndex(selectorIndex, entryCount, PAGE_ITEMS);
+        selectorIndex = ButtonNavigator::previousIndex(selectorIndex, entryCount);
         requestUpdate();
       });
     }

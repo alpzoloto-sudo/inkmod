@@ -133,6 +133,9 @@ class Page {
   // Synthetic FB2 cover/annotation pages should not inherit the first body
   // chapter title in the status bar. Serialized with the page cache.
   bool suppressChapterTitle = false;
+  // True for synthetic FB2 cover/metadata/body-preamble pages. The reader uses
+  // this to restart the visible page counter at the first real <section>.
+  bool isFrontMatter = false;
   static constexpr uint16_t MAX_FOOTNOTES_PER_PAGE = 16;
   static constexpr uint8_t INITIAL_FOOTNOTE_RESERVE = 2;
   static constexpr uint8_t MAX_PUBLISHER_PAGE_MARKERS_PER_PAGE = 8;

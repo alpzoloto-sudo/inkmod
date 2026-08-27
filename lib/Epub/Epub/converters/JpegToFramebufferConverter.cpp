@@ -50,8 +50,9 @@ struct JpegContext {
 // File I/O callbacks use pFile->fHandle to access the FsFile*,
 // avoiding the need for global file state.
 void* jpegOpen(const char* filename, int32_t* size) {
-  FsFile* f = new FsFile();
-  if (!Storage.openFileForRead("JPG", std::string(filename), *f)) {
+  FsFile* f = new (std::nothrow) FsFile();
+  if (!f) return nullptr;
+  if (!Storage.openFileForRead("JPG", filename, *f)) {
     delete f;
     return nullptr;
   }
@@ -428,7 +429,8 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
     return false;
   }
 
-  if (!validateImageDimensions(srcWidth, srcHeight, "JPEG", MAX_JPEG_SOURCE_WIDTH)) {
+  if (!validateImageDimensions(srcWidth, srcHeight, "JPEG", MAX_JPEG_SOURCE_WIDTH, MAX_JPEG_SOURCE_HEIGHT,
+                               MAX_JPEG_SOURCE_PIXELS)) {
     jpeg->close();
     delete jpeg;
     return false;

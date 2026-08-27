@@ -35,8 +35,14 @@ class ClippingSelectionActivity final : public Activity {
   size_t cursor_ = 0;
   size_t anchorWord_ = 0;
   bool selecting_ = false;
+  // Ignore only the physical/menu event that launched this modal. Once one
+  // completely quiet input frame has passed, the very first real Confirm is
+  // accepted instead of being consumed by a pending suppressNext* flag.
+  bool inputArmed_ = false;
+  uint8_t quietInputFrames_ = 0;
 
   static constexpr unsigned long PAGE_JUMP_HOLD_MS = 550;
+  static constexpr int FAST_VERTICAL_STEPS = 5;
 
   bool loadPage(int pageNumber, bool selectLastWord = false);
   void moveHorizontal(int delta);

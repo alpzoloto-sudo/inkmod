@@ -50,6 +50,24 @@ public:
                                     const Fb2SectionIndexEntry& section,
                                     Fb2ContentSink& sink);
 
+    // Emits direct body-level epigraphs that appear before the first <section>.
+    // A number of FB2 books use this legal shape for a book/part epigraph; the
+    // section index intentionally starts at <section>, so without this small
+    // preamble pass such epigraphs would otherwise be invisible. The scan stops
+    // at the first section and never walks the whole book.
+    // Render <description><title-info><annotation> with inline FB2 styles preserved.
+    // Used for the synthetic front-matter page so <emphasis> works exactly as in body text.
+    bool renderAnnotation(IByteReader& reader, Fb2ContentSink& sink,
+                          const reader::ReaderCancellationToken* cancellationToken = nullptr);
+
+    bool renderBodyPreambleForFirstSection(IByteReader& reader,
+                                           Fb2ContentSink& sink,
+                                           const reader::ReaderCancellationToken* cancellationToken = nullptr);
+
+    // Re-renders only the direct <title> of this section, preserving inline emphasis.
+    bool renderSectionTitle(IByteReader& reader, const Fb2SectionIndexEntry& section, Fb2ContentSink& sink,
+                            uint8_t level, const reader::ReaderCancellationToken* cancellationToken = nullptr);
+
     // sectionIndex must be an index into the vector scan() filled in.
     // Body content only: coverpage is handled by renderCoverForFirstSection().
     bool renderSection(IByteReader& reader,

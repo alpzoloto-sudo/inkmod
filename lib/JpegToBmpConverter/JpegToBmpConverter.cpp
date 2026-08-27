@@ -546,18 +546,52 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(FsFile& jpegFile, Print& bm
 
   LOG_DBG("JPG", "JPEG dimensions: %dx%d%s", srcWidth, srcHeight, progressive ? " (progressive)" : "");
 
-  constexpr int MAX_IMAGE_WIDTH = 2048;
-  constexpr int MAX_IMAGE_HEIGHT = 3072;
+  // JPEGDEC works MCU-by-MCU and the cover scaler streams output, so the
+  // source image does not need to fit in RAM.  Keep a generous but finite
+  // guard for malformed/absurd JPEGs.  Large portrait covers such as
+  // 2400x3200 are common in FB2 and are safely downscaled to the X4 target.
+  constexpr int MAX_IMAGE_WIDTH = 4096;
+  constexpr int MAX_IMAGE_HEIGHT = 4096;
+  constexpr int64_t MAX_IMAGE_PIXELS = 16LL * 1024LL * 1024LL;
+  const int64_t srcPixels = static_cast<int64_t>(srcWidth) * static_cast<int64_t>(srcHeight);
 
-  if (srcWidth <= 0 || srcHeight <= 0 || srcWidth > MAX_IMAGE_WIDTH || srcHeight > MAX_IMAGE_HEIGHT) {
-    LOG_DBG("JPG", "Image too large or invalid (%dx%d), max supported: %dx%d", srcWidth, srcHeight, MAX_IMAGE_WIDTH,
-            MAX_IMAGE_HEIGHT);
+  if (srcWidth <= 0 || srcHeight <= 0 || srcWidth > MAX_IMAGE_WIDTH || srcHeight > MAX_IMAGE_HEIGHT ||
+      srcPixels > MAX_IMAGE_PIXELS) {
+    LOG_DBG("JPG", "Image too large or invalid (%dx%d, pixels=%lld), max supported: %dx%d / %lld pixels",
+            srcWidth, srcHeight, static_cast<long long>(srcPixels), MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT,
+            static_cast<long long>(MAX_IMAGE_PIXELS));
     return false;
   }
 
-  const int effectiveSrcW = progressive ? (srcWidth + 7) / 8 : srcWidth;
-  const int effectiveSrcH = progressive ? (srcHeight + 7) / 8 : srcHeight;
-  const int decodeFlags = progressive ? JPEG_SCALE_EIGHTH : 0;
+  // Use JPEGDEC's built-in coarse downscaling for large baseline covers too.
+  // This keeps the MCU row buffer small and avoids decoding millions of source
+  // pixels only to throw most of them away for the 800x480 panel/thumbnail.
+  int decodeDenom = 1;
+  int decodeFlags = 0;
+  if (progressive) {
+    decodeDenom = 8;
+    decodeFlags = JPEG_SCALE_EIGHTH;
+  } else {
+    const float scaleX = static_cast<float>(targetWidth) / std::max(1, srcWidth);
+    const float scaleY = static_cast<float>(targetHeight) / std::max(1, srcHeight);
+    float requestedScale = crop ? std::max(scaleX, scaleY) : std::min(scaleX, scaleY);
+    if (requestedScale > 1.0f) requestedScale = 1.0f;
+    if (requestedScale <= 0.125f) {
+      decodeDenom = 8;
+      decodeFlags = JPEG_SCALE_EIGHTH;
+    } else if (requestedScale <= 0.25f) {
+      decodeDenom = 4;
+      decodeFlags = JPEG_SCALE_QUARTER;
+    } else if (requestedScale <= 0.5f) {
+      decodeDenom = 2;
+      decodeFlags = JPEG_SCALE_HALF;
+    }
+  }
+
+  const int effectiveSrcW = (srcWidth + decodeDenom - 1) / decodeDenom;
+  const int effectiveSrcH = (srcHeight + decodeDenom - 1) / decodeDenom;
+  LOG_DBG("JPG", "JPEG coarse decode 1/%d: %dx%d -> %dx%d", decodeDenom, srcWidth, srcHeight, effectiveSrcW,
+          effectiveSrcH);
 
   // Calculate output dimensions. Crop mode behaves like CSS object-fit: cover:
   // scale to fill the requested box, then sample a centered source crop before dithering.

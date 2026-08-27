@@ -45,6 +45,12 @@ class EpubReaderActivity final : public Activity {
   mutable int logicalStatusCacheLocalPageCount = -1;
   mutable int logicalStatusPagesBefore = 0;
   mutable int logicalStatusKnownPageCount = 0;
+  // FB2 logical chapters are pre-paginated before they are shown. Keep the
+  // resulting denominator in RAM so the status bar cannot temporarily shrink
+  // when one sibling cache was created under a different memory-mode suffix.
+  int fb2ExactLogicalStart = -1;
+  int fb2ExactLogicalEnd = -1;
+  int fb2ExactLogicalTotalPages = 0;
   // Exact lightweight carry for a sequential transition between internal
   // fragments of one logical chapter. Cache-header recovery remains useful
   // after reopening a book, but must not be the only source of the offset:

@@ -703,16 +703,20 @@ bool streamSpine(const std::shared_ptr<Epub>& epub, int spineIndex, ParagraphStr
 }  // namespace
 
 
-std::string ProgressMapper::generateFb2CompatibleXPath(const InkMODPosition& pos) {
-  // crengine represents reflow documents under /body/DocFragment/body. For a
-  // native FB2 there is a single document fragment, and FB2 sections are kept
-  // as section nodes. Keep the path deliberately shallow: section + paragraph
-  // is much more portable across KOReader/CREngine versions than our internal
-  // converted XHTML ancestry. The percentage remains authoritative for InkMOD.
-  const int sectionIndex = std::max(1, pos.spineIndex + 1);
+std::string ProgressMapper::generateFb2CompatibleXPath(const InkMODPosition& pos,
+                                                         int originalSectionOrdinal) {
+  // KOReader/CREngine FB2 XPointer paths include the source <section> node,
+  // e.g. /body/DocFragment[12]/body/section/p[23]/text().5.  Omitting
+  // /section makes GotoXPointer miss the real FB2 DOM even though the server
+  // accepts and stores the progress string.
+  //
+  // Large FB2 sections may be split into several synthetic inkMOD spines.
+  // originalSectionOrdinal collapses those slices back to the source-section
+  // ordinal before constructing the CRE-compatible path.
+  const int fragmentIndex = std::max(1, originalSectionOrdinal);
   const int paragraphIndex = pos.hasParagraphIndex ? std::max(1, static_cast<int>(pos.paragraphIndex)) : 1;
   char buf[96];
-  snprintf(buf, sizeof(buf), "/body/DocFragment/body/section[%d]/p[%d]/text().0", sectionIndex, paragraphIndex);
+  snprintf(buf, sizeof(buf), "/body/DocFragment[%d]/body/section/p[%d]/text().0", fragmentIndex, paragraphIndex);
   return std::string(buf);
 }
 

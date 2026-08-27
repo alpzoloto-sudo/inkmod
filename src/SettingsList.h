@@ -411,21 +411,23 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                           {StrId::STR_NO, StrId::STR_YES}, "sideButtonOrientationAware", StrId::STR_CAT_CONTROLS));
     add(SettingInfo::Enum(StrId::STR_SIDE_BTN_LONG_PRESS, &InkMODSettings::sideButtonLongPress,
                           {StrId::STR_IGNORE, StrId::STR_CHAPTER_SKIP_OPT, StrId::STR_PAGES_10,
-                           StrId::STR_CHANGE_FONT_SIZE, StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION},
+                           StrId::STR_CHANGE_FONT_SIZE, StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION,
+                           StrId::STR_CREATE_CLIPPING},
                           "sideButtonLongPress", StrId::STR_CAT_CONTROLS)
             .withEnumRawValues({InkMODSettings::SIDE_LONG_OFF, InkMODSettings::SIDE_LONG_CHAPTER_SKIP,
                                 InkMODSettings::SIDE_LONG_PAGE_SKIP_10, InkMODSettings::SIDE_LONG_FONT_SIZE,
-                                InkMODSettings::SIDE_LONG_ORIENTATION_CHANGE}));
+                                InkMODSettings::SIDE_LONG_ORIENTATION_CHANGE, InkMODSettings::SIDE_LONG_CREATE_CLIPPING}));
     add(SettingInfo::Enum(StrId::STR_ORIENTATION_AWARE, &InkMODSettings::frontButtonOrientationAware,
                           {StrId::STR_NO, StrId::STR_NAV_BUTTONS, StrId::STR_ALL_BUTTONS},
                           "frontButtonOrientationAware", StrId::STR_CAT_CONTROLS));
     add(SettingInfo::Enum(StrId::STR_LONG_PRESS_BEHAVIOR, &InkMODSettings::longPressButtonBehavior,
                           {StrId::STR_LONG_PRESS_BEHAVIOR_OFF, StrId::STR_LONG_PRESS_BEHAVIOR_SKIP,
                            StrId::STR_PAGES_10, StrId::STR_CHANGE_FONT_SIZE,
-                           StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION},
+                           StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION, StrId::STR_CREATE_CLIPPING},
                           "longPressButtonBehavior", StrId::STR_CAT_CONTROLS)
             .withEnumRawValues({InkMODSettings::OFF, InkMODSettings::CHAPTER_SKIP, InkMODSettings::PAGE_SKIP_10,
-                                InkMODSettings::FONT_SIZE_CHANGE, InkMODSettings::ORIENTATION_CHANGE}));
+                                InkMODSettings::FONT_SIZE_CHANGE, InkMODSettings::ORIENTATION_CHANGE,
+                                InkMODSettings::LONG_PRESS_CREATE_CLIPPING}));
     add(SettingInfo::Enum(StrId::STR_SHORT_PWR_BTN, &InkMODSettings::shortPwrBtn,
                           {StrId::STR_IGNORE,
                            StrId::STR_SLEEP,
@@ -447,7 +449,8 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                            StrId::STR_READER_DARK_MODE,
                            StrId::STR_FOOTNOTES,
                            StrId::STR_BROWSE_FILES,
-                           StrId::STR_DICTIONARY},
+                           StrId::STR_DICTIONARY,
+                           StrId::STR_CREATE_CLIPPING},
                           "shortPwrBtn", StrId::STR_CAT_CONTROLS)
             .withEnumRawValues({InkMODSettings::IGNORE,
                                 InkMODSettings::SLEEP,
@@ -469,7 +472,8 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                                 InkMODSettings::TOGGLE_DARK_MODE,
                                 InkMODSettings::FOOTNOTES,
                                 InkMODSettings::FILE_BROWSER,
-                                InkMODSettings::DICTIONARY_LOOKUP}));
+                                InkMODSettings::DICTIONARY_LOOKUP,
+                                InkMODSettings::CREATE_CLIPPING}));
     add(SettingInfo::Enum(StrId::STR_LONG_PRESS_ACTION, &InkMODSettings::longPwrBtn,
                           {StrId::STR_IGNORE,
                            StrId::STR_SLEEP,
@@ -491,7 +495,8 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                            StrId::STR_READER_DARK_MODE,
                            StrId::STR_FOOTNOTES,
                            StrId::STR_BROWSE_FILES,
-                           StrId::STR_DICTIONARY},
+                           StrId::STR_DICTIONARY,
+                           StrId::STR_CREATE_CLIPPING},
                           "longPwrBtn", StrId::STR_CAT_CONTROLS)
             .withEnumRawValues({InkMODSettings::IGNORE,
                                 InkMODSettings::SLEEP,
@@ -513,7 +518,8 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                                 InkMODSettings::TOGGLE_DARK_MODE,
                                 InkMODSettings::FOOTNOTES,
                                 InkMODSettings::FILE_BROWSER,
-                                InkMODSettings::DICTIONARY_LOOKUP}));
+                                InkMODSettings::DICTIONARY_LOOKUP,
+                                InkMODSettings::CREATE_CLIPPING}));
     add(SettingInfo::Enum(
             StrId::STR_LONG_PRESS_MENU_ACTION, &InkMODSettings::longPressMenuAction,
             {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_TOGGLE_BOOKMARK, StrId::STR_READING_STATS,
@@ -521,7 +527,7 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
              StrId::STR_TOGGLE_BIONIC_READING, StrId::STR_CYCLE_PAGE_TURN,
              StrId::STR_FILE_TRANSFER, StrId::STR_CALIBRE_WIRELESS, StrId::STR_JOIN_NETWORK, StrId::STR_CREATE_HOTSPOT,
              StrId::STR_SCREENSHOT_BUTTON, StrId::STR_READER_DARK_MODE, StrId::STR_FOOTNOTES, StrId::STR_BROWSE_FILES,
-             StrId::STR_SYNC_PROGRESS, StrId::STR_DICTIONARY},
+             StrId::STR_SYNC_PROGRESS, StrId::STR_DICTIONARY, StrId::STR_CREATE_CLIPPING},
             "longPressMenuAction", StrId::STR_CAT_CONTROLS)
             .withEnumRawValues(
                 {InkMODSettings::LONG_MENU_OFF, InkMODSettings::LONG_MENU_SLEEP,
@@ -534,7 +540,7 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                  InkMODSettings::LONG_MENU_CREATE_HOTSPOT, InkMODSettings::LONG_MENU_SCREENSHOT,
                  InkMODSettings::LONG_MENU_TOGGLE_DARK_MODE, InkMODSettings::LONG_MENU_FOOTNOTES,
                  InkMODSettings::LONG_MENU_FILE_BROWSER, InkMODSettings::LONG_MENU_SYNC_PROGRESS,
-                 InkMODSettings::LONG_MENU_DICTIONARY_LOOKUP}));
+                 InkMODSettings::LONG_MENU_DICTIONARY_LOOKUP, InkMODSettings::LONG_MENU_CREATE_CLIPPING}));
     add(SettingInfo::Enum(
             StrId::STR_LONG_PRESS_BACK_ACTION, &InkMODSettings::longPressBackAction,
             {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_TOGGLE_BOOKMARK, StrId::STR_READING_STATS,
@@ -542,7 +548,7 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
              StrId::STR_TOGGLE_BIONIC_READING, StrId::STR_CYCLE_PAGE_TURN,
              StrId::STR_FILE_TRANSFER, StrId::STR_CALIBRE_WIRELESS, StrId::STR_JOIN_NETWORK, StrId::STR_CREATE_HOTSPOT,
              StrId::STR_SCREENSHOT_BUTTON, StrId::STR_READER_DARK_MODE, StrId::STR_FOOTNOTES, StrId::STR_BROWSE_FILES,
-             StrId::STR_SYNC_PROGRESS, StrId::STR_DICTIONARY},
+             StrId::STR_SYNC_PROGRESS, StrId::STR_DICTIONARY, StrId::STR_CREATE_CLIPPING},
             "longPressBackAction", StrId::STR_CAT_CONTROLS)
             .withEnumRawValues(
                 {InkMODSettings::LONG_MENU_OFF, InkMODSettings::LONG_MENU_SLEEP,
@@ -555,7 +561,7 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                  InkMODSettings::LONG_MENU_CREATE_HOTSPOT, InkMODSettings::LONG_MENU_SCREENSHOT,
                  InkMODSettings::LONG_MENU_TOGGLE_DARK_MODE, InkMODSettings::LONG_MENU_FOOTNOTES,
                  InkMODSettings::LONG_MENU_FILE_BROWSER, InkMODSettings::LONG_MENU_SYNC_PROGRESS,
-                 InkMODSettings::LONG_MENU_DICTIONARY_LOOKUP}));
+                 InkMODSettings::LONG_MENU_DICTIONARY_LOOKUP, InkMODSettings::LONG_MENU_CREATE_CLIPPING}));
     add(SettingInfo::Toggle(StrId::STR_PWR_BTN_FOOTNOTE_BACK, &InkMODSettings::pwrBtnFootnoteBack,
                             "pwrBtnFootnoteBack", StrId::STR_CAT_CONTROLS));
 
@@ -569,7 +575,7 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     add(SettingInfo::Toggle(StrId::STR_SHOW_HIDDEN_FILES, &InkMODSettings::showHiddenFiles, "showHiddenFiles",
                             StrId::STR_CAT_SYSTEM));
     add(SettingInfo::Toggle(StrId::STR_HIDE_FILE_EXTENSION, &InkMODSettings::hideFileExtension, "hideFileExtension",
-                            StrId::STR_CAT_SYSTEM));
+                            StrId::STR_CAT_SYSTEM, /*invertedToggleDisplay=*/true));
     add(SettingInfo::Enum(StrId::STR_FILE_BROWSER_DISPLAY, &InkMODSettings::fileBrowserDisplay,
                           {StrId::STR_FILE_BROWSER_DISPLAY_1_LINE, StrId::STR_FILE_BROWSER_DISPLAY_2_LINES},
                           "fileBrowserDisplay", StrId::STR_CAT_SYSTEM));

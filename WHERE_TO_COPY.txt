@@ -1,0 +1,8 @@
+Copy into the repository root:
+
+RELEASE_NOTES_1.1.6.md
+README_INSERT_1.1.6.md   (optional snippet; paste its contents into README.md)
+docs/images/v1.1.6/      (copy this whole folder)
+
+For a GitHub Release page, paste the contents of RELEASE_NOTES_1.1.6.md into the release description.
+Note: relative image links work in repository Markdown. On a GitHub Release body, GitHub may require repository raw/blob URLs or images uploaded directly to the release editor.

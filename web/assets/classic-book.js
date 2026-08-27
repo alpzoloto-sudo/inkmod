@@ -22,7 +22,6 @@ subtitle, .subtitle, .title-line, .subheading {
   display: block !important;
   text-align: center !important;
   font-weight: bold !important;
-  font-style: normal !important;
   margin-top: 1em !important;
   margin-bottom: 0.5em !important;
   text-indent: 0 !important;
@@ -35,7 +34,6 @@ blockquote, cite, .cite, .quote, .epigraph {
   margin-bottom: 0.6em !important;
   margin-left: 1.2em !important;
   margin-right: 1.2em !important;
-  font-style: italic !important;
   text-indent: 0 !important;
 }
 blockquote p, cite p, .cite p, .quote p, .epigraph p {
@@ -78,12 +76,10 @@ stanza:last-child, .stanza:last-child { margin-bottom: 0 !important; }
 .text-author {
   text-align: right !important;
   text-indent: 0 !important;
-  font-style: italic !important;
 }
 .date {
   text-align: center !important;
   text-indent: 0 !important;
-  font-style: italic !important;
 }
 .empty-line {
   margin-top: 0.6em !important;

@@ -235,11 +235,6 @@ void ReaderOptionsActivity::toggleCurrentSetting() {
                            [this](const ActivityResult&) {
                              SETTINGS.saveToFile();
                              sdFontSystem.refreshIfDirty();
-                             // FontSelection uses the one SD-font slot for previews.
-                             // Force the saved reader family into that slot immediately,
-                             // not only after the whole reader-options menu is closed.
-                             sdFontSystem.releaseLoadedFont(renderer);
-                             sdFontSystem.ensureLoaded(renderer);
                              rebuildSettingsList();
                              requestUpdate();
                            });
@@ -315,12 +310,12 @@ void ReaderOptionsActivity::openLineHeightPicker() {
 }
 
 void ReaderOptionsActivity::loop() {
-  buttonNavigator.onNextRelease([this] {
+  buttonNavigator.onNext([this] {
     moveSelection(true);
     requestUpdate();
   });
 
-  buttonNavigator.onPreviousRelease([this] {
+  buttonNavigator.onPrevious([this] {
     moveSelection(false);
     requestUpdate();
   });

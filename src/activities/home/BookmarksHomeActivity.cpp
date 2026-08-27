@@ -62,7 +62,6 @@ void BookmarksHomeActivity::loop() {
     return;
   }
 
-  const int pageItems = UITheme::getInstance().getNumberOfItemsPerPage(renderer, true, false, true, true);
   const int listSize = static_cast<int>(books.size());
 
   buttonNavigator.onNextRelease([this, listSize] {
@@ -75,13 +74,13 @@ void BookmarksHomeActivity::loop() {
     requestUpdate();
   });
 
-  buttonNavigator.onNextContinuous([this, listSize, pageItems] {
-    selectedIndex = ButtonNavigator::nextPageIndex(selectedIndex, listSize, pageItems);
+  buttonNavigator.onNextContinuous([this, listSize] {
+    selectedIndex = ButtonNavigator::nextIndex(selectedIndex, listSize);
     requestUpdate();
   });
 
-  buttonNavigator.onPreviousContinuous([this, listSize, pageItems] {
-    selectedIndex = ButtonNavigator::previousPageIndex(selectedIndex, listSize, pageItems);
+  buttonNavigator.onPreviousContinuous([this, listSize] {
+    selectedIndex = ButtonNavigator::previousIndex(selectedIndex, listSize);
     requestUpdate();
   });
 }

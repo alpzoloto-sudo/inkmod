@@ -110,6 +110,12 @@ class Fb2 {
   static bool getLogicalChapterBounds(const std::string& packageCachePath, int chapterIndex, int& startIndex,
                                       int& endIndex);
 
+  // Map a virtual chapter back to the ordinal of its original FB2 <section>.
+  // Virtual slices share the same innerStartOffset in the persisted index;
+  // counting distinct offsets gives a stable source-section ordinal suitable
+  // for CREngine/KOReader FB2 XPointer generation. Returns a 1-based ordinal.
+  static bool getOriginalSectionOrdinal(const std::string& packageCachePath, int chapterIndex, int& ordinal);
+
   // Given the path to a converted package (e.g. ".../package.epub"),
   // returns the real original .fb2/.zip location recorded in
   // ORIGINAL_PATH_MARKER_FILE alongside it, or packagePath unchanged if
@@ -142,6 +148,7 @@ class Fb2 {
   std::string packagePath;
   std::string title;
   std::string author;
+  std::string date;
   std::string language = "und";
   std::string coverImageId;
   uint64_t sourceSize = 0;

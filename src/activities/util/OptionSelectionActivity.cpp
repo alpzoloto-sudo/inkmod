@@ -53,7 +53,6 @@ void OptionSelectionActivity::loop() {
   }
 
   const int listSize = static_cast<int>(options_.size());
-  const int pageItems = UITheme::getNumberOfItemsPerPage(renderer, true, false, true, !subtitles_.empty());
 
   buttonNavigator_.onNextRelease([this, listSize] {
     selectedIndex_ = ButtonNavigator::nextIndex(selectedIndex_, listSize);
@@ -65,13 +64,13 @@ void OptionSelectionActivity::loop() {
     requestUpdate();
   });
 
-  buttonNavigator_.onNextContinuous([this, listSize, pageItems] {
-    selectedIndex_ = ButtonNavigator::nextPageIndex(selectedIndex_, listSize, pageItems);
+  buttonNavigator_.onNextContinuous([this, listSize] {
+    selectedIndex_ = ButtonNavigator::nextIndex(selectedIndex_, listSize);
     requestUpdate();
   });
 
-  buttonNavigator_.onPreviousContinuous([this, listSize, pageItems] {
-    selectedIndex_ = ButtonNavigator::previousPageIndex(selectedIndex_, listSize, pageItems);
+  buttonNavigator_.onPreviousContinuous([this, listSize] {
+    selectedIndex_ = ButtonNavigator::previousIndex(selectedIndex_, listSize);
     requestUpdate();
   });
 }

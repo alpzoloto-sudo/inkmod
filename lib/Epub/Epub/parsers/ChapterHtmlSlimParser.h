@@ -147,6 +147,7 @@ class ChapterHtmlSlimParser {
 
   // Anchor-to-page mapping: tracks which page each HTML id attribute lands on
   int completedPageCount = 0;
+  bool suppressChapterTitleForFrontMatter = false;
   std::vector<std::pair<std::string, uint16_t>> anchorData;
   std::string pendingAnchorId;          // deferred until after previous text block is flushed
   std::vector<std::string> tocAnchors;  // the list of anchors that are TOC chapter boundaries
@@ -160,6 +161,12 @@ class ChapterHtmlSlimParser {
   int currentFootnoteLinkTextLen = 0;
   std::vector<std::pair<int, FootnoteEntry>> pendingFootnotes;  // <wordIndex, entry>
   int wordsExtractedInBlock = 0;
+  // Tracks the real paragraph's top spacing independently of how many text
+  // lines a RAM drain managed to emit. Using wordsExtractedInBlock for this is
+  // incorrect: a streaming drain can intentionally retain the only incomplete
+  // line, emit zero lines, and then a later drain would apply margin/padding
+  // again. Repeated top spacing is what can create large blank tails/pages.
+  bool paragraphTopSpacingApplied = false;
 
   struct PendingPublisherPageMarker {
     int wordIndex = 0;

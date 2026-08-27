@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <FontCacheManager.h>
+#include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <Logging.h>
@@ -10,7 +11,11 @@
 #include <ReaderWork.h>
 #include <Serialization.h>
 
+#include <algorithm>
+#include <vector>
+
 #include "Epub/css/CssParser.h"
+#include "Epub/converters/ImageDecoderFactory.h"
 #include "Page.h"
 #include "hyphenation/Hyphenator.h"
 #include "parsers/ChapterHtmlSlimParser.h"
@@ -21,10 +26,10 @@ constexpr uint32_t SECTION_CACHE_MAGIC = 0x535843FF;  // bytes: 0xFF, "CXS"
 // spacing only on normal <p> elements while preserving publisher spacing on
 // headings and structural containers. Old section pages cannot be reused
 // safely because their vertical positions/page counts differ.
-constexpr uint8_t SECTION_FILE_VERSION = 58;
+constexpr uint8_t SECTION_FILE_VERSION = 59;
 constexpr uint32_t HEADER_SIZE = sizeof(SECTION_CACHE_MAGIC) + sizeof(uint8_t) + sizeof(int) + sizeof(float) +
                                  sizeof(bool) + sizeof(bool) + sizeof(uint8_t) + sizeof(uint16_t) + sizeof(uint16_t) +
-                                 sizeof(uint16_t) + sizeof(bool) + sizeof(bool) + sizeof(uint8_t) + sizeof(bool) +
+                                 sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) + sizeof(uint8_t) + sizeof(bool) +
                                  sizeof(bool) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) +
                                  sizeof(uint32_t);
 
@@ -36,6 +41,177 @@ struct PageLutEntry {
 };
 static_assert(sizeof(PageLutEntry) == 12, "Unexpected page spool record padding");
 constexpr uint32_t PAGE_SPOOL_NEXT_OFFSET = sizeof(uint32_t) + sizeof(uint16_t) + sizeof(uint16_t);
+
+
+// FB2 virtual chapters contain at most a small number of illustrations.  Decode
+// their PNGs to the on-SD 2-bit pixel cache before CSS/layout starts, while the
+// heap is still contiguous. PNGdec itself already streams scanlines, but its
+// fixed zlib + two-line workspace is ~48 KiB; waiting until an <img> is reached
+// can leave plenty of total free heap but no sufficiently large contiguous
+// block. Pre-caching here keeps image decoding out of the RAM-heavy paginator
+// without changing page boundaries or text layout.
+bool collectHtmlImageSources(const std::string& htmlPath, std::vector<std::string>& sources) {
+  HalFile source;
+  if (!Storage.openFileForRead("SCT", htmlPath, source) || source.isDirectory()) return false;
+
+  // Never materialize an FB2 virtual chapter into one std::string here. Large
+  // chapters can easily be 50-200 KiB, while a long reading session often has
+  // only ~45-55 KiB as the largest contiguous block. The old whole-file
+  // allocation therefore rebooted the C3 before pagination even started.
+  // Scan the HTML in a bounded rolling window instead; only an unfinished <img>
+  // tag is carried across SD reads.
+  constexpr size_t READ_CHUNK = 4096;
+  constexpr size_t MAX_TAG_CARRY = 8192;
+  char chunk[READ_CHUNK];
+  std::string window;
+  window.reserve(READ_CHUNK + 256);
+
+  auto processWindow = [&](bool eof) {
+    size_t searchPos = 0;
+    while (sources.size() < 8) {
+      const size_t img = window.find("<img", searchPos);
+      if (img == std::string::npos) {
+        // No partial tag: keep only the few bytes needed to detect a '<img'
+        // token split across two SD chunks.
+        if (!eof && window.size() > 3) {
+          window.erase(0, window.size() - 3);
+        } else if (eof) {
+          window.clear();
+        }
+        return;
+      }
+
+      const size_t tagEnd = window.find('>', img + 4);
+      if (tagEnd == std::string::npos) {
+        // Keep only the unfinished tag. Pathological multi-KiB tags are not
+        // useful to the reader and must not grow the heap without bound.
+        if (img > 0) window.erase(0, img);
+        if (window.size() > MAX_TAG_CARRY) {
+          LOG_ERR("SCT", "Skipping oversized <img> tag while scanning %s", htmlPath.c_str());
+          window.clear();
+        }
+        return;
+      }
+
+      const size_t src = window.find("src", img + 4);
+      if (src != std::string::npos && src < tagEnd) {
+        size_t eq = window.find('=', src + 3);
+        if (eq != std::string::npos && eq < tagEnd) {
+          ++eq;
+          while (eq < tagEnd &&
+                 (window[eq] == ' ' || window[eq] == '\t' || window[eq] == '\r' || window[eq] == '\n')) {
+            ++eq;
+          }
+          if (eq < tagEnd && (window[eq] == '"' || window[eq] == '\'')) {
+            const char quote = window[eq++];
+            const size_t close = window.find(quote, eq);
+            if (close != std::string::npos && close <= tagEnd && close > eq) {
+              sources.emplace_back(window.substr(eq, close - eq));
+            }
+          }
+        }
+      }
+
+      // Discard everything through the completed tag before reading more data.
+      window.erase(0, tagEnd + 1);
+      searchPos = 0;
+    }
+  };
+
+  while (sources.size() < 8) {
+    const int got = source.read(reinterpret_cast<uint8_t*>(chunk), sizeof(chunk));
+    if (got <= 0) break;
+    window.append(chunk, static_cast<size_t>(got));
+    processWindow(false);
+  }
+  processWindow(true);
+  source.close();
+  return true;
+}
+
+void precacheFb2PngImages(Epub* epub, const std::string& htmlPath, const std::string& localPath,
+                          const std::string& imageBasePath, GfxRenderer& renderer, const int fontId,
+                          const uint16_t viewportWidth, const uint16_t viewportHeight,
+                          const reader::ReaderCancellationToken* cancellationToken) {
+  if (!epub || !epub->isFb2Package()) return;
+
+  std::vector<std::string> sources;
+  sources.reserve(2);
+  if (!collectHtmlImageSources(htmlPath, sources) || sources.empty()) return;
+
+  const size_t slash = localPath.find_last_of('/');
+  const std::string contentBase = slash != std::string::npos ? localPath.substr(0, slash + 1) : "";
+  unsigned imageCounter = 0;
+
+  for (const auto& src : sources) {
+    if (cancellationToken && cancellationToken->isCancellationRequested()) return;
+
+    const std::string resolvedPath = FsHelpers::normalisePath(FsHelpers::decodeUriEscapes(contentBase + src));
+    const size_t dot = resolvedPath.rfind('.');
+    const std::string ext = dot == std::string::npos ? std::string() : resolvedPath.substr(dot);
+    const std::string cachedImagePath = imageBasePath + std::to_string(imageCounter++) + ext;
+    if (!FsHelpers::hasPngExtension(cachedImagePath)) continue;
+
+    const size_t cacheDot = cachedImagePath.rfind('.');
+    const std::string pixelCachePath = cacheDot == std::string::npos
+                                           ? cachedImagePath + ".pxc"
+                                           : cachedImagePath.substr(0, cacheDot) + ".pxc";
+    if (Storage.exists(pixelCachePath.c_str())) continue;
+
+    if (!Storage.exists(cachedImagePath.c_str())) {
+      FsFile imageOut;
+      if (!Storage.openFileForWrite("SCT", cachedImagePath, imageOut)) continue;
+      const bool extracted = epub->readItemContentsToStream(resolvedPath, imageOut, 4096, cancellationToken);
+      imageOut.flush();
+      imageOut.close();
+      if (!extracted) {
+        Storage.remove(cachedImagePath.c_str());
+        continue;
+      }
+    }
+
+    // Glyph bitmaps are reconstructible and are the largest avoidable source
+    // of fragmentation before image decode. The low-memory streaming PNG path
+    // only needs the mandatory 32KB DEFLATE history plus row buffers, so allow
+    // pre-caching at substantially lower contiguous-heap levels than PNGdec.
+    renderer.trimSdCardFontForLowMemory(fontId);
+    const auto before = MemoryBudget::snapshot();
+    if (before.freeHeap < 48U * 1024U || before.maxAllocHeap < 36U * 1024U) {
+      LOG_DBG("SCT", "Deferring FB2 PNG precache: free=%u maxAlloc=%u path=%s",
+              before.freeHeap, before.maxAllocHeap, cachedImagePath.c_str());
+      continue;
+    }
+
+    ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(cachedImagePath);
+    if (!decoder) continue;
+    ImageDimensions dims{};
+    if (!decoder->getDimensions(cachedImagePath, dims) || dims.width <= 0 || dims.height <= 0) continue;
+
+    float scaleX = static_cast<float>(viewportWidth) / static_cast<float>(dims.width);
+    float scaleY = static_cast<float>(viewportHeight) / static_cast<float>(dims.height);
+    float scale = std::min(1.0f, std::min(scaleX, scaleY));
+    const int outWidth = std::max(1, static_cast<int>(dims.width * scale));
+    const int outHeight = std::max(1, static_cast<int>(dims.height * scale));
+
+    RenderConfig config;
+    config.x = 0;
+    config.y = 0;
+    config.maxWidth = outWidth;
+    config.maxHeight = outHeight;
+    config.useGrayscale = true;
+    config.useDithering = true;
+    config.useExactDimensions = true;
+    config.cachePath = pixelCachePath;
+
+    LOG_INF("SCT", "Pre-caching FB2 PNG before layout: %s (%dx%d -> %dx%d, free=%u maxAlloc=%u)",
+            cachedImagePath.c_str(), dims.width, dims.height, outWidth, outHeight,
+            before.freeHeap, before.maxAllocHeap);
+    if (!decoder->decodeToFramebuffer(cachedImagePath, renderer, config)) {
+      Storage.remove(pixelCachePath.c_str());
+      LOG_ERR("SCT", "FB2 PNG pre-cache failed: %s", cachedImagePath.c_str());
+    }
+  }
+}
 }  // namespace
 
 uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
@@ -56,6 +232,9 @@ uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
   LOG_DBG("SCT", "Page %d processed (pos=%lu, free=%u, maxAlloc=%u)", pageCount, static_cast<unsigned long>(position),
           ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
+  if (pageCount == leadingFrontMatterPages && page->isFrontMatter) {
+    leadingFrontMatterPages++;
+  }
   pageCount++;
   return position;
 }
@@ -73,7 +252,7 @@ bool Section::writeSectionFileHeader(const int fontId, const float lineCompressi
   static_assert(HEADER_SIZE == sizeof(SECTION_CACHE_MAGIC) + sizeof(SECTION_FILE_VERSION) + sizeof(fontId) +
                                    sizeof(lineCompression) + sizeof(extraParagraphSpacing) +
                                    sizeof(forceParagraphIndents) + sizeof(paragraphAlignment) + sizeof(viewportWidth) +
-                                   sizeof(viewportHeight) + sizeof(pageCount) + sizeof(hyphenationEnabled) +
+                                   sizeof(viewportHeight) + sizeof(pageCount) + sizeof(leadingFrontMatterPages) + sizeof(hyphenationEnabled) +
                                    sizeof(embeddedStyle) + sizeof(imageRendering) + sizeof(bionicReadingEnabled) +
                                    sizeof(guideReadingEnabled) + sizeof(uint32_t) + sizeof(uint32_t) +
                                    sizeof(uint32_t) + sizeof(uint32_t),
@@ -89,6 +268,7 @@ bool Section::writeSectionFileHeader(const int fontId, const float lineCompressi
          serialization::tryWritePod(file, guideReadingEnabled) &&
          serialization::tryWritePod(file,
                                     pageCount) &&  // Placeholder for page count (will be initially 0, patched later)
+         serialization::tryWritePod(file, leadingFrontMatterPages) &&
          serialization::tryWritePod(file, static_cast<uint32_t>(0)) &&  // Placeholder for LUT offset (patched later)
          serialization::tryWritePod(file,
                                     static_cast<uint32_t>(0)) &&  // Placeholder for anchor map offset (patched later)
@@ -96,6 +276,12 @@ bool Section::writeSectionFileHeader(const int fontId, const float lineCompressi
              file,
              static_cast<uint32_t>(0)) &&  // Placeholder for paragraph LUT offset (patched later)
          serialization::tryWritePod(file, static_cast<uint32_t>(0));  // Placeholder for li LUT offset (patched later)
+}
+
+bool Section::hasSectionFile() const {
+  if (Storage.exists(filePath.c_str())) return true;
+  const std::string backupPath = filePath + ".bak";
+  return Storage.exists(backupPath.c_str());
 }
 
 bool Section::loadSectionFile(const int fontId, const float lineCompression, const uint8_t extraParagraphSpacing,
@@ -106,13 +292,26 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
   const std::string backupPath = filePath + ".bak";
   const std::string tmpPath = filePath + ".tmp";
   const std::string lutTmpPath = filePath + ".lut.tmp";
-  if (!Storage.exists(filePath.c_str()) && Storage.exists(backupPath.c_str())) {
+
+  // Cache absence is expected on first open. Do not pass it to
+  // openFileForRead(), which logs a scary "Failed to open" and performs an
+  // unnecessary failed SD open. Existing/corrupt caches still go through the
+  // full validation and error path below.
+  const bool cacheExists = Storage.exists(filePath.c_str());
+  const bool backupExists = Storage.exists(backupPath.c_str());
+  if (!cacheExists && !backupExists) {
+    if (Storage.exists(tmpPath.c_str())) Storage.remove(tmpPath.c_str());
+    if (Storage.exists(lutTmpPath.c_str())) Storage.remove(lutTmpPath.c_str());
+    return false;
+  }
+
+  if (!cacheExists && backupExists) {
     if (!Storage.rename(backupPath.c_str(), filePath.c_str())) {
       LOG_ERR("SCT", "Failed to restore interrupted cache promotion");
       return false;
     }
     LOG_INF("SCT", "Restored previous cache after interrupted promotion");
-  } else if (Storage.exists(filePath.c_str()) && Storage.exists(backupPath.c_str())) {
+  } else if (cacheExists && backupExists) {
     Storage.remove(backupPath.c_str());
   }
   if (Storage.exists(tmpPath.c_str())) Storage.remove(tmpPath.c_str());
@@ -194,9 +393,9 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
     }
   }
 
-  if (!serialization::tryReadPod(file, pageCount)) {
+  if (!serialization::tryReadPod(file, pageCount) || !serialization::tryReadPod(file, leadingFrontMatterPages)) {
     file.close();
-    LOG_ERR("SCT", "Deserialization failed: missing page count");
+    LOG_ERR("SCT", "Deserialization failed: missing page/front-matter count");
     clearCache();
     return false;
   }
@@ -255,6 +454,7 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   const auto tmpSectionPath = filePath + ".tmp";
   const auto tmpLutPath = filePath + ".lut.tmp";
   pageCount = 0;
+  leadingFrontMatterPages = 0;
   if (layoutAbortedForLowMemory) *layoutAbortedForLowMemory = false;
   if (cancelled) *cancelled = false;
   LOG_DBG("SCT", "Create section start: spine=%d viewport=%ux%u image=%u bionic=%u guide=%u free=%u maxAlloc=%u",
@@ -369,6 +569,13 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
 
   LOG_DBG("SCT", "Prepared HTML source %s (%d bytes, free=%u, maxAlloc=%u)", sourceHtmlPath.c_str(), fileSize,
           ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+
+  // FB2 PNG illustrations are decoded before CSS/layout consumes and fragments
+  // the heap. This only creates the same .pxc cache the normal image path
+  // would create later; pagination and image sizing remain unchanged.
+  const std::string earlyImageBasePath = epub->getCachePath() + "/img_" + std::to_string(spineIndex) + "_";
+  precacheFb2PngImages(epub.get(), sourceHtmlPath, localPath, earlyImageBasePath, renderer, fontId, viewportWidth,
+                       viewportHeight, cancellationToken);
 
   if (Storage.exists(tmpSectionPath.c_str())) {
     Storage.remove(tmpSectionPath.c_str());
@@ -597,8 +804,9 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   if (recordOffset != 0) return failFinalization();
 
   // Patch header with final pageCount, lutOffset, anchorMapOffset, paragraphLutOffset, and liLutOffset.
-  if (!file.seek(HEADER_SIZE - sizeof(uint32_t) * 4 - sizeof(pageCount)) ||
-      !serialization::tryWritePod(file, pageCount) || !serialization::tryWritePod(file, lutOffset) ||
+  if (!file.seek(HEADER_SIZE - sizeof(uint32_t) * 4 - sizeof(leadingFrontMatterPages) - sizeof(pageCount)) ||
+      !serialization::tryWritePod(file, pageCount) ||
+      !serialization::tryWritePod(file, leadingFrontMatterPages) || !serialization::tryWritePod(file, lutOffset) ||
       !serialization::tryWritePod(file, anchorMapOffset) || !serialization::tryWritePod(file, paragraphLutOffset) ||
       !serialization::tryWritePod(file, liLutFileOffset) || !file.sync()) {
     LOG_ERR("SCT", "Failed to finalize section cache");

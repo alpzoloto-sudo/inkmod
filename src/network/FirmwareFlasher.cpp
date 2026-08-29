@@ -25,6 +25,7 @@ constexpr size_t CHUNK = 4096;
 constexpr size_t SHA_TRAILER = 32;
 constexpr uint8_t CHECKSUM_SEED = 0xEF;
 constexpr size_t HEADER_SIZE = 24;
+constexpr size_t CHIP_ID_OFFSET = 0x0C;  // esp_image_header_t::chip_id low byte (C3=0x05, S3=0x09)
 constexpr size_t SEG_HEADER_SIZE = 8;
 }  // namespace
 
@@ -40,6 +41,8 @@ const char* resultName(Result r) {
       return "TOO_LARGE";
     case Result::BAD_MAGIC:
       return "BAD_MAGIC";
+    case Result::INCOMPATIBLE_CHIP:
+      return "INCOMPATIBLE_CHIP";
     case Result::BAD_SEGMENTS:
       return "BAD_SEGMENTS";
     case Result::BAD_CHECKSUM:
@@ -65,6 +68,41 @@ const char* resultName(Result r) {
 }
 
 namespace {
+Result validateChipCompatibility(const uint8_t* candidateHeader) {
+  if (!candidateHeader || candidateHeader[0] != ESP_IMAGE_MAGIC) return Result::BAD_MAGIC;
+
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  if (!running) {
+    LOG_ERR("FLASH", "chip guard: running partition unavailable");
+    return Result::NO_PARTITION;
+  }
+
+  // We only need bytes 0..12.  Byte 12 (offset 0x0C) is the low byte of
+  // esp_image_header_t::chip_id: ESP32-C3 = 0x05, ESP32-S3 = 0x09.
+  // Compare against the running image rather than hard-coding C3 so the same
+  // guard automatically works on future X4 Pro/S3 builds.
+  uint8_t runningPrefix[CHIP_ID_OFFSET + 1] = {};
+  if (esp_partition_read(running, 0, runningPrefix, sizeof(runningPrefix)) != ESP_OK) {
+    LOG_ERR("FLASH", "chip guard: failed to read running image header");
+    return Result::READ_FAIL;
+  }
+  if (runningPrefix[0] != ESP_IMAGE_MAGIC) {
+    LOG_ERR("FLASH", "chip guard: running image has bad magic 0x%02X", runningPrefix[0]);
+    return Result::BAD_MAGIC;
+  }
+
+  const uint8_t runningChip = runningPrefix[CHIP_ID_OFFSET];
+  const uint8_t candidateChip = candidateHeader[CHIP_ID_OFFSET];
+  LOG_INF("FLASH", "chip guard: running=0x%02X candidate=0x%02X", runningChip, candidateChip);
+
+  if (runningChip != candidateChip) {
+    LOG_ERR("FLASH", "chip guard: incompatible firmware (running=0x%02X candidate=0x%02X)", runningChip,
+            candidateChip);
+    return Result::INCOMPATIBLE_CHIP;
+  }
+  return Result::OK;
+}
+
 // Stream `length` bytes from `file` starting at the current read offset, feeding them through
 // both the XOR-checksum and SHA256 accumulators. Used by validateImageFile so the whole image
 // is verified end-to-end without holding it in RAM (ESP32-C3 only has ~380 KB).
@@ -117,6 +155,15 @@ Result validateImageFile(const char* sdPath, size_t partitionSize) {
     file.close();
     return Result::BAD_MAGIC;
   }
+
+  // Hardware-family guard before any expensive validation and, critically,
+  // before a single erase/write reaches the destination OTA partition.
+  const Result chipResult = validateChipCompatibility(header);
+  if (chipResult != Result::OK) {
+    file.close();
+    return chipResult;
+  }
+
   const uint8_t segCount = header[1];
   const bool hashAppended = header[23] != 0;
 
@@ -233,6 +280,9 @@ Result validateImagePartition(const esp_partition_t* partition, size_t* imageSiz
   uint8_t header[HEADER_SIZE];
   if (esp_partition_read(partition, 0, header, sizeof(header)) != ESP_OK) return Result::READ_FAIL;
   if (header[0] != ESP_IMAGE_MAGIC) return Result::BAD_MAGIC;
+
+  const Result chipResult = validateChipCompatibility(header);
+  if (chipResult != Result::OK) return chipResult;
 
   const uint8_t segCount = header[1];
   const bool hashAppended = header[23] != 0;

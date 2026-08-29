@@ -329,42 +329,79 @@ void silentRestartToReader() {
   ESP.restart();
 }
 
-static constexpr char EMERGENCY_FIRMWARE_PATH[] = "/inkmod-recovery.bin";
-static constexpr char EMERGENCY_FIRMWARE_APPLIED_PATH[] = "/inkmod-recovery.applied.bin";
-static constexpr char EMERGENCY_FIRMWARE_FAILED_PATH[] = "/inkmod-recovery.failed.bin";
+struct EmergencyFirmwareFile {
+  const char* path;
+  const char* appliedPath;
+  const char* incompatiblePath;
+  const char* failedPath;
+};
+
+// Both names are supported as headless, power-on recovery triggers. Keep the
+// inkMOD-specific name first so an explicitly prepared recovery image wins if
+// both files happen to be present on the same SD card.
+static constexpr EmergencyFirmwareFile EMERGENCY_FIRMWARE_FILES[] = {
+    {"/inkmod-recovery.bin", "/inkmod-recovery.applied.bin", "/inkmod-recovery.incompatible.bin",
+     "/inkmod-recovery.failed.bin"},
+    {"/update.bin", "/update.applied.bin", "/update.incompatible.bin", "/update.failed.bin"},
+};
+
+static bool renameEmergencyFirmware(const char* source, const char* destination) {
+  Storage.remove(destination);
+  if (Storage.rename(source, destination)) return true;
+  LOG_ERR("FW", "Could not rename recovery trigger %s -> %s", source, destination);
+  return false;
+}
 
 static void tryEmergencyFirmwareUpdate() {
 #ifndef SIMULATOR
-  if (!Storage.exists(EMERGENCY_FIRMWARE_PATH)) {
-    return;
-  }
+  for (const auto& fw : EMERGENCY_FIRMWARE_FILES) {
+    if (!Storage.exists(fw.path)) continue;
 
-  LOG_INF("FW", "Emergency SD firmware detected: %s", EMERGENCY_FIRMWARE_PATH);
-  const auto result = firmware_flash::flashFromSdPath(EMERGENCY_FIRMWARE_PATH, nullptr, nullptr);
-  if (result != firmware_flash::Result::OK) {
-    LOG_ERR("FW", "Emergency SD firmware failed: %s", firmware_flash::resultName(result));
-    Storage.remove(EMERGENCY_FIRMWARE_FAILED_PATH);
-    if (!Storage.rename(EMERGENCY_FIRMWARE_PATH, EMERGENCY_FIRMWARE_FAILED_PATH)) {
-      Storage.remove(EMERGENCY_FIRMWARE_PATH);
+    LOG_INF("FW", "Emergency SD firmware detected: %s", fw.path);
+    const auto result = firmware_flash::flashFromSdPath(fw.path, nullptr, nullptr);
+    if (result != firmware_flash::Result::OK) {
+      LOG_ERR("FW", "Emergency SD firmware failed: %s (%s)", fw.path, firmware_flash::resultName(result));
+
+      // A C3/S3 mismatch is not a broken image: mark it explicitly so the user
+      // can see the reason directly on the SD card and so boot does not retry it
+      // forever. Most importantly, FirmwareFlasher returns this result before
+      // any erase/write operation touches the OTA partition.
+      if (result == firmware_flash::Result::INCOMPATIBLE_CHIP) {
+        if (renameEmergencyFirmware(fw.path, fw.incompatiblePath)) {
+          LOG_ERR("FW", "Incompatible recovery firmware renamed to %s", fw.incompatiblePath);
+        }
+        return;
+      }
+
+      // Preserve the existing behavior for corrupt/truncated/I/O-failed files.
+      // If rename itself fails, remove the trigger as the old implementation did
+      // to prevent an endless failing recovery loop.
+      if (!renameEmergencyFirmware(fw.path, fw.failedPath)) {
+        Storage.remove(fw.path);
+      }
+      return;
     }
+
+    bool disarmed = renameEmergencyFirmware(fw.path, fw.appliedPath);
+    if (!disarmed) {
+      disarmed = Storage.remove(fw.path);
+    }
+    if (!disarmed) {
+      LOG_ERR("FW", "Emergency firmware applied but trigger could not be disarmed; refusing auto-restart");
+      return;
+    }
+
+    LOG_INF("FW", "Emergency SD firmware applied from %s; restarting", fw.path);
+    delay(500);
+    ESP.restart();
     return;
   }
-
-  Storage.remove(EMERGENCY_FIRMWARE_APPLIED_PATH);
-  bool disarmed = Storage.rename(EMERGENCY_FIRMWARE_PATH, EMERGENCY_FIRMWARE_APPLIED_PATH);
-  if (!disarmed) {
-    disarmed = Storage.remove(EMERGENCY_FIRMWARE_PATH);
-  }
-  if (!disarmed) {
-    LOG_ERR("FW", "Emergency firmware applied but trigger could not be disarmed; refusing auto-restart");
-    return;
-  }
-
-  LOG_INF("FW", "Emergency SD firmware applied; restarting");
-  delay(500);
-  ESP.restart();
 #endif
 }
+
+static constexpr char EMERGENCY_FIRMWARE_PATH[] = "/inkmod-recovery.bin";
+static constexpr char EMERGENCY_FIRMWARE_APPLIED_PATH[] = "/inkmod-recovery.applied.bin";
+static constexpr char EMERGENCY_FIRMWARE_FAILED_PATH[] = "/inkmod-recovery.failed.bin";
 
 void waitForPowerRelease() {
   gpio.update();

@@ -234,3 +234,7 @@ bool clearBookCachePreservingUserState(const std::string& path) {
 bool clearBookCacheDirectoryPreservingStats(const std::string& cachePath) {
   return clearCacheDirectoryPreservingFiles(cachePath, BOOK_STATS_FILES, std::size(BOOK_STATS_FILES));
 }
+
+bool clearBookCacheDirectoryPreservingUserState(const std::string& cachePath) {
+  return clearCacheDirectoryPreservingFiles(cachePath, EPUB_USER_STATE_FILES, std::size(EPUB_USER_STATE_FILES));
+}

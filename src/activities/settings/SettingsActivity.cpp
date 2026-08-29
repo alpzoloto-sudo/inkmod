@@ -551,7 +551,7 @@ void SettingsActivity::loop() {
 
   // Physical front button 3 (raw LEFT) / 4 (raw RIGHT): switch the
   // top-level Settings category after 0.5 s from anywhere, including a submenu.
-  // One hold = one step; no wrap and no repeat while the button stays down.
+  // One hold = one step; cyclic wrap at the ends and no repeat while the button stays down.
   constexpr unsigned long CATEGORY_HOLD_MS = 500;
   if (categoryHoldButton >= 0) {
     if (mappedInput.isFrontButtonPressed(static_cast<uint8_t>(categoryHoldButton))) return;
@@ -571,12 +571,12 @@ void SettingsActivity::loop() {
   }
   if (heldCategoryButton >= 0) {
     categoryHoldButton = heldCategoryButton;
-    const int targetCategory = std::max(0, std::min(categoryCount - 1, selectedCategoryIndex + categoryDelta));
-    if (targetCategory != selectedCategoryIndex) {
-      enterCategory(targetCategory);
-      selectedSettingIndex = 0;
-      requestUpdate();
-    }
+    // Cyclic navigation: Display <- System and System -> Display.
+    // Keep it one category per hold; categoryHoldButton suppresses repeats until release.
+    const int targetCategory = (selectedCategoryIndex + categoryDelta + categoryCount) % categoryCount;
+    enterCategory(targetCategory);
+    selectedSettingIndex = 0;
+    requestUpdate();
     return;
   }
 

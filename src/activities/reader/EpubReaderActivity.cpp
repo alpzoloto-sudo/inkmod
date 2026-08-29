@@ -2178,20 +2178,40 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
             bool cacheDeleted = false;
             {
               RenderLock lock(*this);
-              if (epub && section) {
-                uint16_t backupSpine = currentSpineIndex;
-                uint16_t backupPage = section->currentPage;
-                uint16_t backupPageCount = section->pageCount;
+              // IMPORTANT: opening ConfirmationActivity is itself a background push.
+              // releaseHeavyResourcesForBackgroundActivity() normally frees `section`
+              // before the user can press Yes.  Therefore cache deletion must NOT depend
+              // on section still being alive here.  That old `if (epub && section)` guard
+              // made the confirmation appear to work and then simply go Home without
+              // deleting anything for both EPUB and FB2.
+              if (epub) {
+                const uint16_t backupSpine = static_cast<uint16_t>(currentSpineIndex);
+                const uint16_t backupPage = static_cast<uint16_t>(section ? section->currentPage : nextPageNumber);
+                const uint16_t backupPageCount = static_cast<uint16_t>(
+                    section ? section->pageCount : (cachedChapterTotalPageCount > 0 ? cachedChapterTotalPageCount : 1));
+
                 if (!saveProgress(backupSpine, backupPage, backupPageCount)) {
                   LOG_ERR("ERS", "Failed to save progress before cache clear");
                 }
                 stats.save(epub->getCachePath());
+
+                // Capture the exact active cache root while the Epub facade is still alive.
+                // For FB2 this is the outer /.inkmod/fb2_<hash> directory, not package.epub.
+                const std::string exactCachePath = epub->getCachePath();
+                LOG_INF("ERS", "Clearing current book cache: %s (section=%s)", exactCachePath.c_str(),
+                        section ? "loaded" : "released");
+
+                // Release every reader-owned file handle before recursive SD deletion.
                 section.reset();
-                cacheDeleted = clearBookCachePreservingUserState(epub->getPath());
-                epub->setupCacheDir();
+                epub.reset();
+
+                cacheDeleted = clearBookCacheDirectoryPreservingUserState(exactCachePath);
+                LOG_INF("ERS", "Current book cache clear result: %s", cacheDeleted ? "ok" : "failed");
                 if (cacheDeleted) {
                   drawToast(renderer, tr(STR_BOOK_CACHE_DELETED));
                 }
+              } else {
+                LOG_ERR("ERS", "Cannot clear current book cache: epub facade is null");
               }
             }
             if (cacheDeleted) {
@@ -3104,11 +3124,9 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn, const char* source) {
     if (section->currentPage < section->pageCount - 1) {
       section->currentPage++;
     } else {
-      if (shouldQueueCompletionPromptOnChapterExit()) {
-        completionPromptQueued = true;
-        requestUpdate();
-        return;
-      }
+      // Do not interrupt reading with the legacy 99% "Mark as Finished?" prompt.
+      // A book is completed automatically only after the real End-of-Book
+      // condition is reached; manual Mark as Finished remains available.
 
       // We don't want to delete the section mid-render, so grab the semaphore
       {

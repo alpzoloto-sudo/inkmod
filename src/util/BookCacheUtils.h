@@ -14,5 +14,12 @@ bool clearBookCachePreservingUserState(const std::string& path);
 // Clears a known book cache directory while preserving per-book stats.
 bool clearBookCacheDirectoryPreservingStats(const std::string& cachePath);
 
+// Clears a known EPUB/FB2 reader cache directory while preserving the
+// user-owned state that must survive a cache rebuild. This is intended for
+// an already-open reader: callers can capture epub->getCachePath(), release
+// all reader handles, and then delete that exact directory without trying to
+// reconstruct the cache path from the source book path.
+bool clearBookCacheDirectoryPreservingUserState(const std::string& cachePath);
+
 // Returns true if the directory name matches a book cache entry.
 bool isBookCacheDirectoryName(const char* name);

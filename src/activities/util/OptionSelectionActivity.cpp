@@ -3,6 +3,7 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 
+#include <algorithm>
 #include <utility>
 
 #include "MappedInputManager.h"
@@ -119,7 +120,9 @@ void OptionSelectionActivity::render(RenderLock&&) {
                  nullptr, readerMode_);
 
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
+  const int longPressHintHeight = enableLongPressSelect_ ? 22 : 0;
+  const int contentHeight =
+      pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing - longPressHintHeight;
 
   GUI.drawList(
       renderer, Rect{contentX, contentTop, contentWidth, contentHeight}, static_cast<int>(options_.size()),
@@ -132,6 +135,14 @@ void OptionSelectionActivity::render(RenderLock&&) {
         return showCurrentMarker_ && index == currentIndex_ ? tr(STR_SELECTED) : "";
       },
       true);
+
+  if (enableLongPressSelect_) {
+    const char* hint = tr(STR_BACKUP_DELETE_HOLD_HINT);
+    const int hintWidth = renderer.getTextWidth(SMALL_FONT_ID, hint);
+    const int hintX = contentX + std::max(0, (contentWidth - hintWidth) / 2);
+    const int hintY = pageHeight - metrics.buttonHintsHeight - longPressHintHeight;
+    renderer.drawText(SMALL_FONT_ID, hintX, hintY, hint);
+  }
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, readerMode_);

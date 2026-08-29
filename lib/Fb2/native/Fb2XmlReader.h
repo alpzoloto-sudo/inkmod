@@ -254,6 +254,17 @@ private:
             appendDecoded(text_, c);
             textSize_ = text_.size();
         }
+
+        // A text token may be chunked at bufCap_, but the boundary must never
+        // split a UTF-8 codepoint. FB2 sources commonly use U+00A0 as their
+        // ordinary inter-word separator (bytes C2 A0). The old byte-counted
+        // chunking could return a token ending in C2 and the next token
+        // starting in A0. Downstream FB2 whitespace normalization then saw
+        // neither token as NBSP and the renderer visually glued the two words.
+        // Complete only an already-started UTF-8 sequence; at most three extra
+        // bytes are appended, so the bounded-memory behaviour is unchanged.
+        completeTrailingUtf8Sequence();
+        textSize_ = text_.size();
         return textSize_ == 0 ? next() : Fb2Token::Text;
     }
 
@@ -292,6 +303,40 @@ private:
         }
         textSize_ = text_.size();
         return text_.empty() ? next() : Fb2Token::Text;
+    }
+
+    void completeTrailingUtf8Sequence() {
+        if (text_.empty()) return;
+
+        const size_t n = text_.size();
+        size_t lead = n - 1;
+        // Walk back over continuation bytes already present in this token.
+        size_t walked = 0;
+        while (lead > 0 && walked < 3) {
+            const uint8_t b = static_cast<uint8_t>(text_[lead]);
+            if ((b & 0xC0u) != 0x80u) break;
+            --lead;
+            ++walked;
+        }
+
+        const uint8_t first = static_cast<uint8_t>(text_[lead]);
+        size_t expected = 1;
+        if ((first & 0xE0u) == 0xC0u) expected = 2;
+        else if ((first & 0xF0u) == 0xE0u) expected = 3;
+        else if ((first & 0xF8u) == 0xF0u) expected = 4;
+        else return;  // ASCII, continuation without a lead, or invalid lead.
+
+        const size_t have = n - lead;
+        if (have >= expected) return;
+
+        for (size_t i = have; i < expected; ++i) {
+            const int next = peekByte();
+            if (next < 0) return;
+            const uint8_t b = static_cast<uint8_t>(next);
+            if ((b & 0xC0u) != 0x80u) return;  // malformed UTF-8: don't eat markup/text.
+            getByte();
+            text_.push_back(static_cast<char>(b));
+        }
     }
 
     void readNameInto(std::string& dst) {

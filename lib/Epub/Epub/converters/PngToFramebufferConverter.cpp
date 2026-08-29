@@ -13,6 +13,7 @@
 #include <cstring>
 #include <new>
 
+#include "BitmapHelpers.h"
 #include "DirectPixelWriter.h"
 #include "DitherUtils.h"
 #include "PixelCache.h"
@@ -40,6 +41,15 @@ struct PngContext {
   bool caching{false};
 
   uint8_t* grayLineBuffer{nullptr};
+
+  // Error-diffusion (Atkinson) dithering carries accumulated error across
+  // scanlines, giving smooth photographic gradients instead of the coarse,
+  // regular crosshatch pattern of ordered (Bayer) dithering. Sized to the
+  // final output width and owned for the lifetime of one decode; nullptr
+  // falls back to the old ordered dithering (e.g. under memory pressure).
+  AtkinsonDitherer* ditherer{nullptr};
+
+  ~PngContext() { delete ditherer; }
 };
 
 void* pngOpenWithHandle(const char* filename, int32_t* size) {
@@ -216,7 +226,9 @@ int pngDrawCallback(PNGDRAW* pDraw) {
     if (outX >= 0 && outX < screenWidth) {
       const uint8_t gray = ctx->grayLineBuffer[srcX];
       uint8_t ditheredGray;
-      if (useDithering) {
+      if (ctx->ditherer) {
+        ditheredGray = ctx->ditherer->processPixel(gray, dstX);
+      } else if (useDithering) {
         ditheredGray = applyBayerDither4Level(gray, outX, outY);
       } else {
         ditheredGray = gray / 85;
@@ -233,6 +245,8 @@ int pngDrawCallback(PNGDRAW* pDraw) {
     }
     if (srcX >= srcWidth) srcX = srcWidth - 1;
   }
+
+  if (ctx->ditherer) ctx->ditherer->nextRow();
 
   return 1;
 }
@@ -287,6 +301,13 @@ bool decodeToFramebufferWithPngDec(const std::string& imagePath, GfxRenderer& re
     ctx.dstHeight = std::max(1, static_cast<int>(ctx.srcHeight * ctx.scale));
   }
   ctx.lastDstY = -1;
+
+  // Error-diffusion dithering needs one row of error state per output column.
+  // Allocation failure is not fatal: the draw callback falls back to ordered
+  // (Bayer) dithering whenever ctx.ditherer is null.
+  if (config.useDithering) {
+    ctx.ditherer = new (std::nothrow) AtkinsonDitherer(ctx.dstWidth);
+  }
 
   const int pixelType = png->getPixelType();
   const int requiredInternal = requiredPngInternalBufferBytes(ctx.srcWidth, pixelType);
@@ -651,7 +672,8 @@ void convertStreamingScanlineToGray(const StreamingPngContext& ctx, uint8_t* gra
 }
 
 bool emitRenderedRow(GfxRenderer& renderer, const RenderConfig& config, const int outWidth, const int outHeight,
-                     const uint8_t* grayRow, const int outY, PixelCache* cache, bool* cachingActive) {
+                     const uint8_t* grayRow, const int outY, PixelCache* cache, bool* cachingActive,
+                     AtkinsonDitherer* ditherer) {
   const int screenWidth = renderer.getScreenWidth();
   if (outY < 0 || outY >= outHeight) return true;
 
@@ -675,7 +697,9 @@ bool emitRenderedRow(GfxRenderer& renderer, const RenderConfig& config, const in
   for (int outX = 0; outX < outWidth; ++outX) {
     const int screenX = config.x + outX;
     uint8_t level;
-    if (config.useDithering) {
+    if (ditherer) {
+      level = ditherer->processPixel(grayRow[outX], outX);
+    } else if (config.useDithering) {
       level = applyBayerDither4Level(grayRow[outX], screenX, screenY);
     } else {
       level = grayRow[outX] / 85;
@@ -689,6 +713,8 @@ bool emitRenderedRow(GfxRenderer& renderer, const RenderConfig& config, const in
       cw.writePixel(screenX, level);
     }
   }
+
+  if (ditherer) ditherer->nextRow();
 
   return true;
 }
@@ -914,6 +940,12 @@ bool decodeToFramebufferStreaming(const std::string& imagePath, GfxRenderer& ren
     return false;
   }
 
+  // Error-diffusion dithering needs one row of error state per output column.
+  // Allocation failure is not fatal: emitRenderedRow falls back to ordered
+  // (Bayer) dithering whenever ditherer is null.
+  AtkinsonDitherer* ditherer =
+      config.useDithering ? new (std::nothrow) AtkinsonDitherer(geometry.outWidth) : nullptr;
+
   bool success = true;
   int currentOutY = 0;
   uint32_t nextOutYBoundary_fp = geometry.scaleY_fp;
@@ -930,7 +962,7 @@ bool decodeToFramebufferStreaming(const std::string& imagePath, GfxRenderer& ren
     if (!geometry.needsScaling) {
       memcpy(scaledRow, grayRow, geometry.outWidth);
       if (!emitRenderedRow(renderer, config, geometry.outWidth, geometry.outHeight, scaledRow, currentOutY, &cache,
-                           &cachingActive)) {
+                           &cachingActive, ditherer)) {
         success = false;
         break;
       }
@@ -964,7 +996,7 @@ bool decodeToFramebufferStreaming(const std::string& imagePath, GfxRenderer& ren
         }
 
         if (!emitRenderedRow(renderer, config, geometry.outWidth, geometry.outHeight, scaledRow, currentOutY, &cache,
-                             &cachingActive)) {
+                             &cachingActive, ditherer)) {
           success = false;
           break;
         }
@@ -991,7 +1023,7 @@ bool decodeToFramebufferStreaming(const std::string& imagePath, GfxRenderer& ren
         scaledRow[outX] = (rowCount && rowCount[outX] > 0) ? static_cast<uint8_t>(rowAccum[outX] / rowCount[outX]) : 255;
       }
       if (!emitRenderedRow(renderer, config, geometry.outWidth, geometry.outHeight, scaledRow, currentOutY, &cache,
-                           &cachingActive)) {
+                           &cachingActive, ditherer)) {
         success = false;
         break;
       }
@@ -1008,6 +1040,7 @@ bool decodeToFramebufferStreaming(const std::string& imagePath, GfxRenderer& ren
   free(scaledRow);
   free(rowAccum);
   free(rowCount);
+  delete ditherer;
   free(ctx.currentRow);
   free(ctx.previousRow);
   pngFile.close();

@@ -21,6 +21,90 @@
 
 namespace {
 
+struct Fb2PreservedStateFile {
+  const char* name;
+  const char* tempSuffix;
+};
+
+constexpr Fb2PreservedStateFile FB2_PRESERVED_STATE_FILES[] = {
+    {"progress.bin", ".preserve_progress.bin"},
+    {"progress.bin.bak", ".preserve_progress.bin.bak"},
+    {"stats.bin", ".preserve_stats.bin"},
+    {"reader_settings.bin", ".preserve_reader_settings.bin"},
+};
+
+// FB2 package rebuilding normally wipes cachePath.  Keep user-owned state
+// outside that directory while the generated package/cache is removed, then
+// put it back before rebuilding.  This is especially important after a full
+// cache clear followed by statistics/progress restore: the restored directory
+// contains progress.bin/stats.bin but no package metadata yet.
+bool clearFb2GeneratedCachePreservingUserState(const std::string& cachePath) {
+  std::array<bool, std::size(FB2_PRESERVED_STATE_FILES)> moved{};
+
+  // Recover any state left outside the cache by an interrupted previous
+  // rebuild before starting another one.
+  Storage.mkdir(cachePath.c_str(), true);
+  for (size_t i = 0; i < std::size(FB2_PRESERVED_STATE_FILES); ++i) {
+    const auto& item = FB2_PRESERVED_STATE_FILES[i];
+    const std::string finalPath = cachePath + "/" + item.name;
+    const std::string tempPath = cachePath + item.tempSuffix;
+    if (!Storage.exists(finalPath.c_str()) && Storage.exists(tempPath.c_str())) {
+      Storage.rename(tempPath.c_str(), finalPath.c_str());
+    }
+  }
+
+  for (size_t i = 0; i < std::size(FB2_PRESERVED_STATE_FILES); ++i) {
+    const auto& item = FB2_PRESERVED_STATE_FILES[i];
+    const std::string sourcePath = cachePath + "/" + item.name;
+    const std::string tempPath = cachePath + item.tempSuffix;
+    if (!Storage.exists(sourcePath.c_str())) continue;
+
+    if (Storage.exists(tempPath.c_str()) && !Storage.remove(tempPath.c_str())) {
+      LOG_ERR("FB2", "Could not remove stale preserved state: %s", tempPath.c_str());
+      goto rollback;
+    }
+    if (!Storage.rename(sourcePath.c_str(), tempPath.c_str())) {
+      LOG_ERR("FB2", "Could not preserve user state before cache rebuild: %s", sourcePath.c_str());
+      goto rollback;
+    }
+    moved[i] = true;
+  }
+
+  if (Storage.exists(cachePath.c_str()) && !Storage.removeDir(cachePath.c_str())) {
+    LOG_ERR("FB2", "Could not clear generated FB2 cache while preserving user state");
+    goto rollback;
+  }
+  if (!Storage.mkdir(cachePath.c_str(), true) && !Storage.exists(cachePath.c_str())) {
+    LOG_ERR("FB2", "Could not recreate FB2 cache directory");
+    goto rollback;
+  }
+
+  for (size_t i = 0; i < std::size(FB2_PRESERVED_STATE_FILES); ++i) {
+    if (!moved[i]) continue;
+    const auto& item = FB2_PRESERVED_STATE_FILES[i];
+    const std::string finalPath = cachePath + "/" + item.name;
+    const std::string tempPath = cachePath + item.tempSuffix;
+    if (!Storage.rename(tempPath.c_str(), finalPath.c_str())) {
+      LOG_ERR("FB2", "Could not restore user state after cache rebuild: %s", finalPath.c_str());
+      return false;
+    }
+  }
+  return true;
+
+rollback:
+  Storage.mkdir(cachePath.c_str(), true);
+  for (size_t i = 0; i < std::size(FB2_PRESERVED_STATE_FILES); ++i) {
+    if (!moved[i]) continue;
+    const auto& item = FB2_PRESERVED_STATE_FILES[i];
+    const std::string finalPath = cachePath + "/" + item.name;
+    const std::string tempPath = cachePath + item.tempSuffix;
+    if (!Storage.exists(finalPath.c_str()) && Storage.exists(tempPath.c_str())) {
+      Storage.rename(tempPath.c_str(), finalPath.c_str());
+    }
+  }
+  return false;
+}
+
 // Measures how much of scan() is actual storage I/O versus XML/token work.
 // It delegates directly to the existing reader and does not allocate or copy
 // any additional book data.
@@ -169,7 +253,7 @@ void fb2ZipScanTask(void* arg) {
 }
 
 
-constexpr uint8_t PACKAGE_VERSION = 19;  // normalize OCR-style NBSP letter spacing; invalidate older packages
+constexpr uint8_t PACKAGE_VERSION = 22;  // fix false-positive FB2 letter-spacing collapse; invalidate older packages
 // A single FB2 <section> with more inline images than this gets split into
 // several virtual chapters while its SD-card index is written, so a chapter
 // that's actually opened never needs to extract more than this many images
@@ -733,35 +817,91 @@ static size_t noBreakSpaceLenAt(const std::string& s, size_t pos) {
   return 0;
 }
 
+// The shared HTML layout keeps NBSP as a continuation token. That is useful
+// for EPUB typography, but some FB2 sources use U+00A0/U+202F as their normal
+// inter-word separator. On small custom fonts those continuation spaces can
+// end up with no visible advance, visually gluing otherwise separate words
+// (e.g. "Ну а что?" -> "Нуачто?"). Normalize only FB2-generated XHTML to an
+// ordinary ASCII space. This deliberately does not touch the common EPUB
+// parser or renderer, keeping existing EPUB and baseline layout behaviour
+// unchanged.
+static bool normalizeFb2NoBreakSpaces(const std::string& input, std::string& out) {
+  bool changed = false;
+  out.clear();
+  out.reserve(input.size());
+
+  for (size_t i = 0; i < input.size();) {
+    const size_t sepLen = noBreakSpaceLenAt(input, i);
+    if (sepLen) {
+      out.push_back(' ');
+      i += sepLen;
+      changed = true;
+      continue;
+    }
+    out.push_back(input[i++]);
+  }
+  return changed;
+}
+
+static bool isCyrillicLetterEndingAt(const std::string& s, size_t pos) {
+  // Return true when the UTF-8 codepoint immediately before pos is a Cyrillic
+  // letter. FB2's letter-spacing repair must never start in the middle of a
+  // normal word (e.g. "бы\u00A0я\u00A0не" used to be misdetected starting at
+  // the final 'ы' and was rewritten to "быяне").
+  if (pos < 2) return false;
+  const uint8_t b0 = static_cast<uint8_t>(s[pos - 2]);
+  const uint8_t b1 = static_cast<uint8_t>(s[pos - 1]);
+  if ((b0 != 0xD0 && b0 != 0xD1) || (b1 & 0xC0) != 0x80) return false;
+  const uint32_t cp = ((b0 & 0x1F) << 6) | (b1 & 0x3F);
+  return cp >= 0x0400 && cp <= 0x04FF;
+}
+
+static bool isCyrillicLetterStartingAt(const std::string& s, size_t pos) {
+  if (pos + 1 >= s.size()) return false;
+  const uint8_t b0 = static_cast<uint8_t>(s[pos]);
+  const uint8_t b1 = static_cast<uint8_t>(s[pos + 1]);
+  if ((b0 != 0xD0 && b0 != 0xD1) || (b1 & 0xC0) != 0x80) return false;
+  const uint32_t cp = ((b0 & 0x1F) << 6) | (b1 & 0x3F);
+  return cp >= 0x0400 && cp <= 0x04FF;
+}
+
 static bool normalizeFb2LetterSpacing(const std::string& input, std::string& out) {
+  // Repair only genuine letter-spaced runs such as "д\u00A0в\u00A0у\u00A0х".
+  // The old heuristic could begin at the LAST letter of an ordinary word and
+  // consume the first letter of the next word(s), so perfectly valid Russian
+  // prose such as "бы\u00A0я\u00A0не" became "быяне", and "ж\u00A0я\u00A0от"
+  // became "жяот". A candidate must now be bounded by real word boundaries on
+  // BOTH sides. This keeps the legacy repair without touching normal FB2 NBSPs.
   bool found = false;
   for (size_t i = 0; i < input.size() && !found;) {
     size_t cpLen = 0;
-    if (!decodeLowerCyrillicAt(input, i, cpLen)) {
+    if (!decodeLowerCyrillicAt(input, i, cpLen) || isCyrillicLetterEndingAt(input, i)) {
       ++i;
       continue;
     }
-    size_t p = i + cpLen;
-    const size_t sep1 = noBreakSpaceLenAt(input, p);
-    if (!sep1) {
-      i += cpLen;
-      continue;
+
+    size_t scan = i;
+    size_t letters = 0;
+    size_t runEnd = i;
+    while (scan < input.size()) {
+      size_t letterLen = 0;
+      if (!decodeLowerCyrillicAt(input, scan, letterLen)) break;
+      ++letters;
+      scan += letterLen;
+      runEnd = scan;
+      const size_t sepLen = noBreakSpaceLenAt(input, scan);
+      if (!sepLen) break;
+      size_t nextLen = 0;
+      if (!decodeLowerCyrillicAt(input, scan + sepLen, nextLen)) break;
+      scan += sepLen;
     }
-    p += sep1;
-    size_t cp2Len = 0;
-    if (!decodeLowerCyrillicAt(input, p, cp2Len)) {
-      i += cpLen;
-      continue;
+
+    // A true spaced-letter run must contain at least three separated letters
+    // and must not terminate in the middle of a normal Cyrillic word.
+    if (letters >= 3 && !isCyrillicLetterStartingAt(input, runEnd)) {
+      found = true;
+      break;
     }
-    p += cp2Len;
-    const size_t sep2 = noBreakSpaceLenAt(input, p);
-    if (!sep2) {
-      i += cpLen;
-      continue;
-    }
-    p += sep2;
-    size_t cp3Len = 0;
-    found = decodeLowerCyrillicAt(input, p, cp3Len);
     i += cpLen;
   }
   if (!found) return false;
@@ -770,7 +910,7 @@ static bool normalizeFb2LetterSpacing(const std::string& input, std::string& out
   out.reserve(input.size());
   for (size_t i = 0; i < input.size();) {
     size_t cpLen = 0;
-    if (!decodeLowerCyrillicAt(input, i, cpLen)) {
+    if (!decodeLowerCyrillicAt(input, i, cpLen) || isCyrillicLetterEndingAt(input, i)) {
       out.push_back(input[i++]);
       continue;
     }
@@ -791,7 +931,9 @@ static bool normalizeFb2LetterSpacing(const std::string& input, std::string& out
       scan += sepLen;
     }
 
-    if (letters >= 3) {
+    const bool genuineLetterSpacing =
+        letters >= 3 && !isCyrillicLetterStartingAt(input, runEnd);
+    if (genuineLetterSpacing) {
       size_t q = i;
       size_t copied = 0;
       while (q < runEnd && copied < letters) {
@@ -894,10 +1036,16 @@ class StreamSink : public Fb2ContentSink {
     if (has(Fb2InlineStyle::Subscript)) writeBytes(out_, "<sub>");
 
     std::string normalizedText;
+    const std::string* textForLayout = &text;
     if (normalizeFb2LetterSpacing(text, normalizedText)) {
-      writeXmlEscaped(out_, normalizedText);
+      textForLayout = &normalizedText;
+    }
+
+    std::string normalizedSpaces;
+    if (normalizeFb2NoBreakSpaces(*textForLayout, normalizedSpaces)) {
+      writeXmlEscaped(out_, normalizedSpaces);
     } else {
-      writeXmlEscaped(out_, text);
+      writeXmlEscaped(out_, *textForLayout);
     }
 
     if (has(Fb2InlineStyle::Subscript)) writeBytes(out_, "</sub>");
@@ -1787,7 +1935,10 @@ bool Fb2::load(const ProgressFn& onProgress) {
   // Rebuild the cache directory fresh before prepareSource() writes a
   // zip-extracted/transcoded source copy into it - that copy has to survive
   // this wipe, not get created before it and then deleted a moment later.
-  if (Storage.exists(cachePath.c_str())) Storage.removeDir(cachePath.c_str());
+  if (!clearFb2GeneratedCachePreservingUserState(cachePath)) {
+    LOG_ERR("FB2", "Aborting package rebuild because user reading state could not be preserved");
+    return false;
+  }
   setupCacheDir();
   const unsigned long prepareStarted = millis();
   if (!prepareSource(reportProgress)) return false;
@@ -1826,7 +1977,11 @@ bool Fb2::convertToPackage(const ProgressFn& onProgress) {
   Storage.mkdir((packagePath + "/OEBPS/images").c_str(), true);
 
   const auto fail = [this]() {
-    if (Storage.exists(cachePath.c_str())) Storage.removeDir(cachePath.c_str());
+    // Do not throw away progress/statistics if package generation fails after
+    // they have already been restored into cachePath.
+    if (!clearFb2GeneratedCachePreservingUserState(cachePath)) {
+      LOG_ERR("FB2", "Failed to preserve user state while cleaning a failed package build");
+    }
     return false;
   };
 

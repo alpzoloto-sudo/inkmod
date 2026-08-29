@@ -13,7 +13,7 @@ OptionSelectionActivity::OptionSelectionActivity(GfxRenderer& renderer, MappedIn
                                                  std::string activityName, StrId titleId,
                                                  std::vector<std::string> options, uint8_t selectedIndex,
                                                  bool readerMode, const bool showCurrentMarker,
-                                                 std::vector<std::string> subtitles)
+                                                 std::vector<std::string> subtitles, const bool enableLongPressSelect)
     : Activity(std::move(activityName), renderer, mappedInput),
       titleId_(titleId),
       options_(std::move(options)),
@@ -21,7 +21,8 @@ OptionSelectionActivity::OptionSelectionActivity(GfxRenderer& renderer, MappedIn
       currentIndex_(selectedIndex),
       selectedIndex_(selectedIndex),
       readerMode_(readerMode),
-      showCurrentMarker_(showCurrentMarker) {}
+      showCurrentMarker_(showCurrentMarker),
+      enableLongPressSelect_(enableLongPressSelect) {}
 
 void OptionSelectionActivity::onEnter() {
   Activity::onEnter();
@@ -47,8 +48,21 @@ void OptionSelectionActivity::loop() {
     return;
   }
 
+  constexpr unsigned long LONG_SELECT_MS = 700;
+  if (enableLongPressSelect_ && !longPressHandled_ && mappedInput.isPressed(MappedInputManager::Button::Confirm) &&
+      mappedInput.getHeldTime() >= LONG_SELECT_MS) {
+    longPressHandled_ = true;
+    mappedInput.suppressNextConfirmRelease();
+    select(true);
+    return;
+  }
+
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    select();
+    if (longPressHandled_) {
+      longPressHandled_ = false;
+      return;
+    }
+    select(false);
     return;
   }
 
@@ -82,8 +96,8 @@ void OptionSelectionActivity::cancel() {
   finish();
 }
 
-void OptionSelectionActivity::select() {
-  setResult(OptionSelectionResult{static_cast<uint8_t>(selectedIndex_)});
+void OptionSelectionActivity::select(const bool longPress) {
+  setResult(OptionSelectionResult{static_cast<uint8_t>(selectedIndex_), longPress});
   finish();
 }
 

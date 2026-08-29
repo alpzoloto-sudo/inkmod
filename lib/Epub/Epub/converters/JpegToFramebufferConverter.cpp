@@ -6,6 +6,8 @@
 #include <JPEGDEC.h>
 #include <Logging.h>
 #include <MemoryBudget.h>
+#include <JpegTypeDetector.h>
+#include <ProgressiveJpegDecoder.h>
 
 #include <cstdlib>
 #include <new>
@@ -396,6 +398,89 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
                                                      const RenderConfig& config) {
   LOG_DBG("JPG", "Decoding JPEG: %s", imagePath.c_str());
 
+  const JpegHeaderInfo jpegHeader = JpegTypeDetector::inspect(imagePath);
+  if (JpegTypeDetector::shouldUseFullProgressive(jpegHeader)) {
+    const int srcWidth = jpegHeader.width;
+    const int srcHeight = jpegHeader.height;
+    const int64_t srcPixels = static_cast<int64_t>(srcWidth) * srcHeight;
+    if (srcWidth <= 0 || srcHeight <= 0 || srcWidth > 4096 || srcHeight > 4096 ||
+        srcPixels > 16LL * 1024LL * 1024LL) {
+      LOG_ERR("PJPG", "Progressive JPEG dimensions rejected: %dx%d", srcWidth, srcHeight);
+      return false;
+    }
+
+    JpegContext ctx;
+    ctx.renderer = &renderer;
+    ctx.config = &config;
+    ctx.screenWidth = renderer.getScreenWidth();
+    ctx.screenHeight = renderer.getScreenHeight();
+
+    float targetScale;
+    int destWidth, destHeight;
+    if (config.useExactDimensions && config.maxWidth > 0 && config.maxHeight > 0) {
+      destWidth = config.maxWidth;
+      destHeight = config.maxHeight;
+      targetScale = static_cast<float>(destWidth) / srcWidth;
+    } else {
+      const float scaleX = (config.maxWidth > 0 && srcWidth > config.maxWidth)
+                               ? static_cast<float>(config.maxWidth) / srcWidth
+                               : 1.0f;
+      const float scaleY = (config.maxHeight > 0 && srcHeight > config.maxHeight)
+                               ? static_cast<float>(config.maxHeight) / srcHeight
+                               : 1.0f;
+      targetScale = (scaleX < scaleY) ? scaleX : scaleY;
+      if (targetScale > 1.0f) targetScale = 1.0f;
+      destWidth = static_cast<int>(srcWidth * targetScale);
+      destHeight = static_cast<int>(srcHeight * targetScale);
+    }
+    if (destWidth <= 0 || destHeight <= 0) {
+      LOG_ERR("PJPG", "Degenerate progressive output dimensions: %dx%d", destWidth, destHeight);
+      return false;
+    }
+
+    const int progressiveScaleDenom =
+        ProgressiveJpegDecoder::chooseScaleDenom(srcWidth, srcHeight, destWidth, destHeight);
+    ctx.scaledSrcWidth = (srcWidth + progressiveScaleDenom - 1) / progressiveScaleDenom;
+    ctx.scaledSrcHeight = (srcHeight + progressiveScaleDenom - 1) / progressiveScaleDenom;
+    ctx.dstWidth = destWidth;
+    ctx.dstHeight = destHeight;
+    ctx.fineScaleFPX = static_cast<int32_t>((static_cast<int64_t>(destWidth) * FP_ONE) / ctx.scaledSrcWidth);
+    ctx.fineScaleFPY = static_cast<int32_t>((static_cast<int64_t>(destHeight) * FP_ONE) / ctx.scaledSrcHeight);
+    ctx.invScaleFPX = static_cast<int32_t>((static_cast<int64_t>(ctx.scaledSrcWidth) * FP_ONE) / destWidth);
+    ctx.invScaleFPY = static_cast<int32_t>((static_cast<int64_t>(ctx.scaledSrcHeight) * FP_ONE) / destHeight);
+
+    ctx.caching = !config.cachePath.empty();
+    if (ctx.caching) {
+      const int maxBlockDstRows = static_cast<int>(((static_cast<int64_t>(16) * ctx.fineScaleFPY) >> FP_SHIFT) + 2);
+      if (!ctx.cache.begin(config.cachePath, destWidth, destHeight, config.x, config.y, maxBlockDstRows)) {
+        LOG_ERR("PJPG", "Failed to start progressive cache stream; rendering without cache");
+        ctx.caching = false;
+      }
+    }
+
+    LOG_INF("PJPG", "SOF2 full-quality route: %dx%d (%lld px <= %lld)", srcWidth, srcHeight,
+            static_cast<long long>(srcPixels),
+            static_cast<long long>(JpegTypeDetector::FULL_PROGRESSIVE_MAX_PIXELS));
+    ProgressiveJpegInfo info;
+    if (!ProgressiveJpegDecoder::decode(imagePath, jpegDrawCallback, &ctx, info, destWidth, destHeight)) {
+      if (ctx.caching) ctx.cache.abort();
+      return false;
+    }
+    if (ctx.caching) ctx.cache.finalize();
+    return true;
+  }
+  const bool legacyProgressive = jpegHeader.type == JpegType::Progressive;
+  if (jpegHeader.type != JpegType::Baseline && !legacyProgressive) {
+    LOG_ERR("JPG", "JPEG header rejected: %s", JpegTypeDetector::toString(jpegHeader.type));
+    return false;
+  }
+  if (legacyProgressive) {
+    const int64_t pixels = static_cast<int64_t>(jpegHeader.width) * jpegHeader.height;
+    LOG_INF("PJPG", "SOF2 large-image route: %dx%d (%lld px > %lld) -> legacy JPEGDEC 1/8",
+            jpegHeader.width, jpegHeader.height, static_cast<long long>(pixels),
+            static_cast<long long>(JpegTypeDetector::FULL_PROGRESSIVE_MAX_PIXELS));
+  }
+
   if (!MemoryBudget::hasHeapForImageDecoder("JPG", "JPEG", JPEG_DECODER_APPROX_SIZE, MemoryBudget::JPEG_DECODER_HEADROOM)) {
     return false;
   }
@@ -436,11 +521,6 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
     return false;
   }
 
-  bool isProgressive = jpeg->getJPEGType() == JPEG_MODE_PROGRESSIVE;
-  if (isProgressive) {
-    LOG_INF("JPG", "Progressive JPEG detected - decoding DC coefficients only (lower quality)");
-  }
-
   // Calculate overall target scale
   float targetScale;
   int destWidth, destHeight;
@@ -459,13 +539,11 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
     destHeight = (int)(srcHeight * targetScale);
   }
 
-  // Choose JPEGDEC built-in scaling for coarse downscaling.
-  // Progressive JPEGs: JPEGDEC forces JPEG_SCALE_EIGHTH internally (DC-only
-  // decode produces 1/8 resolution). We must match this to avoid the if/else
-  // priority chain in DecodeJPEG selecting a different scale.
+  // Baseline keeps its original adaptive coarse scale. Large progressive
+  // images use the original inkMOD/JPEGDEC safe path: DC-only at 1/8.
   int jpegScaleOption;
   int jpegScaleDenom;
-  if (isProgressive) {
+  if (legacyProgressive) {
     jpegScaleOption = JPEG_SCALE_EIGHTH;
     jpegScaleDenom = 8;
   } else {
@@ -499,7 +577,7 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
 
   LOG_DBG("JPG", "JPEG %dx%d -> %dx%d (scale %.2f, jpegScale 1/%d, fineScale %.2fx%.2f)%s", srcWidth, srcHeight,
           destWidth, destHeight, targetScale, jpegScaleDenom, (float)destWidth / ctx.scaledSrcWidth,
-          (float)destHeight / ctx.scaledSrcHeight, isProgressive ? " [progressive]" : "");
+          (float)destHeight / ctx.scaledSrcHeight, "");
 
   // Set pixel type to 8-bit grayscale (must be after open())
   jpeg->setPixelType(EIGHT_BIT_GRAYSCALE);

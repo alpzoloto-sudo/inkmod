@@ -62,10 +62,10 @@ bool prepareEpub(const Epub& epub) {
   bool success = true;
   if (shouldPrepareFullCover()) {
     const bool cropped = SETTINGS.sleepScreenCoverMode == InkMODSettings::SLEEP_SCREEN_COVER_MODE::CROP;
-    success = epub.generateCoverBmp(cropped) && success;
+    success = epub.generateCoverBmp(cropped, /*deferProgressive=*/true) && success;
   }
   if (shouldPrepareMinimalCover()) {
-    success = epub.generateAdaptiveThumbBmp(kMinimalSleepCoverWidth, kMinimalSleepCoverHeight) && success;
+    success = epub.generateAdaptiveThumbBmp(kMinimalSleepCoverWidth, kMinimalSleepCoverHeight, /*deferProgressive=*/true) && success;
   }
   return success;
 }

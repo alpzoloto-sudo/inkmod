@@ -1,6 +1,8 @@
 #include "LyraCarouselTheme.h"
 
 #include <Bitmap.h>
+#include <Epub.h>
+#include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
@@ -18,6 +20,15 @@
 #include "fontIds.h"
 
 namespace {
+std::string lyraAdaptiveCoverPath(const RecentBook& book, int width, int height) {
+  if (book.coverBmpPath.empty() || width <= 0 || height <= 0) return {};
+  if (FsHelpers::hasEpubExtension(book.path)) {
+    const std::string adaptive = Epub(book.path, "/.inkmod").getAdaptiveThumbBmpPath(width, height);
+    if (!adaptive.empty() && Storage.exists(adaptive.c_str())) return adaptive;
+  }
+  return UITheme::getCoverThumbPath(book.coverBmpPath, width, height);
+}
+
 // Cover layout — keep Lyra Carousel's general geometry, but render the books
 // with the same visual treatment as Lyra Flow.
 constexpr int kCenterCoverMaxW = LyraCarouselTheme::kCenterCoverW;
@@ -275,7 +286,7 @@ void LyraCarouselTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect,
     outRect = shrinkCenterCoverRect(centerCoverSlotRect);
 
     if (!book.coverBmpPath.empty()) {
-      const std::string thumbPath = UITheme::getCoverThumbPath(book.coverBmpPath, kCenterThumbW, kCenterThumbH);
+      const std::string thumbPath = lyraAdaptiveCoverPath(book, outRect.width, outRect.height);
       FsFile file;
       if (Storage.openFileForRead("HOME", thumbPath, file)) {
         Bitmap bitmap(file);
@@ -296,9 +307,22 @@ void LyraCarouselTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect,
 
           renderer.fillRect(outRect.x - kCenterOutlineW, outRect.y - kCenterOutlineW,
                             outRect.width + 2 * kCenterOutlineW, outRect.height + 2 * kCenterOutlineW, false);
-          renderer.drawBitmap(bitmap, outRect.x, outRect.y, outRect.width, outRect.height, cropX, cropY);
-          renderer.maskRoundedRectOutsideCorners(outRect.x, outRect.y, outRect.width, outRect.height, kCornerRadius,
-                                                 Color::White);
+          Rect drawnRect = outRect;
+          if (!FsHelpers::hasEpubExtension(book.path)) {
+            const int srcWi = std::max(1, bitmap.getWidth());
+            const int srcHi = std::max(1, bitmap.getHeight());
+            const float scale = std::min(1.0f, std::min(static_cast<float>(outRect.width) / srcWi,
+                                                       static_cast<float>(outRect.height) / srcHi));
+            drawnRect.width = std::max(1, static_cast<int>(srcWi * scale));
+            drawnRect.height = std::max(1, static_cast<int>(srcHi * scale));
+            drawnRect.x = outRect.x + (outRect.width - drawnRect.width) / 2;
+            drawnRect.y = outRect.y + (outRect.height - drawnRect.height) / 2;
+            renderer.drawBitmap(bitmap, drawnRect.x, drawnRect.y, drawnRect.width, drawnRect.height);
+          } else {
+            renderer.drawBitmap(bitmap, outRect.x, outRect.y, outRect.width, outRect.height, cropX, cropY);
+          }
+          renderer.maskRoundedRectOutsideCorners(drawnRect.x, drawnRect.y, drawnRect.width, drawnRect.height,
+                                                 kCornerRadius, Color::White);
           file.close();
           return true;
         }
@@ -343,9 +367,26 @@ void LyraCarouselTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect,
     const RecentBook& book = recentBooks[bookIdx];
 
     if (!book.coverBmpPath.empty()) {
-      const std::string thumbPath = UITheme::getCoverThumbPath(book.coverBmpPath, kSideCoverMaxW, kSideCoverMaxH);
-      FsFile file;
-      if (Storage.openFileForRead("HOME", thumbPath, file)) {
+      // Side thumbnails are optional. In particular, FB2/prepared-book entries can
+      // have a perfectly valid centre thumbnail without a dedicated side-size one.
+      // Never decide this from the filename extension: try the cheap side asset
+      // first, then fall back to the *same centre asset* that drawCenterCover uses.
+      std::vector<std::string> candidates;
+      auto pushCandidate = [&](const std::string& path) {
+        if (path.empty()) return;
+        if (std::find(candidates.begin(), candidates.end(), path) == candidates.end()) candidates.push_back(path);
+      };
+
+      pushCandidate(lyraAdaptiveCoverPath(book, width, std::max(leftHeight, rightHeight)));
+      pushCandidate(lyraAdaptiveCoverPath(book, kCenterThumbW, kCenterThumbH));
+      pushCandidate(UITheme::getCoverThumbPath(book.coverBmpPath, kCenterThumbH));
+      if (Storage.exists(book.coverBmpPath.c_str())) pushCandidate(book.coverBmpPath);
+
+      for (const std::string& thumbPath : candidates) {
+        if (!Storage.exists(thumbPath.c_str())) continue;
+        FsFile file;
+        if (!Storage.openFileForRead("HOME", thumbPath, file)) continue;
+
         Bitmap bitmap(file);
         if (bitmap.parseHeaders() == BmpReaderError::Ok && bitmap.getWidth() > 0 && bitmap.getHeight() > 0) {
           const int sideHeight = std::max(leftHeight, rightHeight);

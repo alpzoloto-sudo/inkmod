@@ -13,6 +13,7 @@
 #include <Logging.h>
 #include <Memory.h>
 #include <MemoryBudget.h>
+#include <JpegTypeDetector.h>
 #include <HalSystem.h>
 
 #include <algorithm>
@@ -87,6 +88,37 @@ constexpr uint32_t FB2_LOGICAL_PAGES_MAGIC = 0x4C504246U;  // "FBPL"
 constexpr uint16_t FB2_LOGICAL_PAGES_VERSION = 1;
 constexpr uint32_t FB2_LAYOUT_SEMANTICS_GENERATION = 62;
 constexpr char FB2_LOGICAL_PAGES_FILE_NAME[] = "/logical_pages.bin";
+
+
+std::string readerImagePixelCachePath(const std::string& imagePath) {
+  const size_t dot = imagePath.rfind('.');
+  return dot == std::string::npos ? imagePath + ".pxc" : imagePath.substr(0, dot) + ".pxc";
+}
+
+bool pageNeedsProgressivePreparationPopup(const Page& page, const bool fb2Origin) {
+  for (const auto& element : page.elements) {
+    if (!element || element->getTag() != TAG_PageImage) continue;
+    const auto* pageImage = static_cast<const PageImage*>(element.get());
+    const std::string& imagePath = pageImage->getImageBlock().getImagePath();
+    if (!FsHelpers::hasJpgExtension(imagePath)) continue;
+
+    // A ready pixel cache means the expensive progressive reconstruction has
+    // already happened, so page turns must stay refresh-free and instant.
+    if (Storage.exists(readerImagePixelCachePath(imagePath).c_str())) continue;
+
+    // FB2 images may still live only as base64 in the source package at this
+    // point. In that case we cannot inspect SOF yet without doing extraction;
+    // show the preparation notice conservatively for the first JPEG render.
+    if (!Storage.exists(imagePath.c_str())) {
+      if (fb2Origin) return true;
+      continue;
+    }
+
+    const JpegHeaderInfo info = JpegTypeDetector::inspect(imagePath);
+    if (JpegTypeDetector::shouldUseFullProgressive(info)) return true;
+  }
+  return false;
+}
 
 struct Fb2LogicalPagesRecord {
   uint32_t magic;
@@ -3936,10 +3968,15 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   if (coalescedSpineDelta.load(std::memory_order_relaxed) != 0) {
     return;
   }
-  renderer.clearScreen(ReaderUtils::readerBackgroundColor());
 
+  // Keep the currently visible page in the framebuffer until we know whether
+  // the next page needs a slow, uncached progressive JPEG. That lets the
+  // preparation popup be drawn over the previous page instead of over a white
+  // screen. The framebuffer is cleared only immediately before rendering the
+  // new page.
   if (section->pageCount == 0) {
     LOG_DBG("ERS", "No pages to render");
+    renderer.clearScreen(ReaderUtils::readerBackgroundColor());
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_EMPTY_CHAPTER), ReaderUtils::readerForegroundBlack(),
                               EpdFontFamily::BOLD);
     renderStatusBar();
@@ -3951,6 +3988,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
   if (section->currentPage < 0 || section->currentPage >= section->pageCount) {
     LOG_DBG("ERS", "Page out of bounds: %d (max %d)", section->currentPage, section->pageCount);
+    renderer.clearScreen(ReaderUtils::readerBackgroundColor());
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_OUT_OF_BOUNDS), ReaderUtils::readerForegroundBlack(),
                               EpdFontFamily::BOLD);
     renderStatusBar();
@@ -3990,6 +4028,24 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // Collect footnotes from the loaded page
     currentPageFootnotes = std::move(p->footnotes);
     suppressCurrentChapterTitle = p->suppressChapterTitle;
+
+    const bool showPreparationPopup =
+        pageNeedsProgressivePreparationPopup(*p, epub && epub->isFb2Package());
+    if (showPreparationPopup) {
+      LOG_INF("ERS", "Preparing uncached progressive image before page render");
+      // drawPopup() performs the e-ink refresh itself. Because we intentionally
+      // kept the previous page in the framebuffer, the notice appears on top of
+      // that page instead of on a blank white screen. Do not call displayBuffer()
+      // a second time here; it only adds another ~500 ms refresh.
+      GUI.drawPopup(renderer, tr(STR_LOADING_CHAPTER));
+      delay(1);
+      yield();
+    }
+
+    // Clear only after the preparation notice has reached the panel. This is a
+    // framebuffer-only operation; the physical display keeps showing the old
+    // page + popup while the progressive decoder works.
+    renderer.clearScreen(ReaderUtils::readerBackgroundColor());
 
     const auto start = millis();
     const int renderFontId = activeSectionFontId != 0 ? activeSectionFontId : SETTINGS.getReaderFontId();
@@ -4419,14 +4475,45 @@ void EpubReaderActivity::renderStatusBar() const {
   int bookWideCurrentPage = -1;
   int bookWideTotalPages = -1;
   if (SETTINGS.statusBarChapterPageCount == 2 && section->pageCount > 0) {
-    const size_t cumulativeThroughHere = epub->getCumulativeSpineItemSize(currentSpineIndex);
-    const size_t cumulativeThroughPrevious =
-        currentSpineIndex > 0 ? epub->getCumulativeSpineItemSize(currentSpineIndex - 1) : 0;
-    const size_t currentChapterBytes =
-        cumulativeThroughHere > cumulativeThroughPrevious ? cumulativeThroughHere - cumulativeThroughPrevious : 0;
+    int sampleStartSpine = currentSpineIndex;
+    int sampleEndSpine = currentSpineIndex;
+    float samplePageCount = static_cast<float>(section->pageCount);
+
+    // FB2 keeps large source <section>s RAM-safe by exposing them as several
+    // ~24 KiB virtual spine items.  The old whole-book estimate paired the
+    // page count of the logical chapter with the byte size of only the current
+    // virtual slice.  That can exaggerate the denominator by tens/hundreds of
+    // times (for example 1/189188).  EPUB does not use this FB2 virtual split,
+    // so preserve its existing calculation verbatim.
+    if (epub->isFb2Package()) {
+      int logicalStart = currentSpineIndex;
+      int logicalEnd = currentSpineIndex;
+      if (epub->getLogicalChapterBounds(currentSpineIndex, logicalStart, logicalEnd)) {
+        sampleStartSpine = logicalStart;
+        sampleEndSpine = logicalEnd;
+
+        // Exact FB2 pagination is prepared for every virtual sibling before
+        // the first page is shown.  Use that logical total even while the user
+        // is still on title/annotation front matter, where section->pageCount
+        // by itself is only a few pages and is a terrible density sample.
+        if (fb2ExactLogicalStart == logicalStart && fb2ExactLogicalEnd == logicalEnd &&
+            fb2ExactLogicalTotalPages > 0) {
+          samplePageCount = static_cast<float>(fb2ExactLogicalTotalPages);
+        } else if (!onFb2FrontMatter && pageCount > 0) {
+          samplePageCount = static_cast<float>(pageCount);
+        }
+      }
+    }
+
+    const size_t cumulativeThroughSample = epub->getCumulativeSpineItemSize(sampleEndSpine);
+    const size_t cumulativeBeforeSample =
+        sampleStartSpine > 0 ? epub->getCumulativeSpineItemSize(sampleStartSpine - 1) : 0;
+    const size_t sampleChapterBytes = cumulativeThroughSample > cumulativeBeforeSample
+                                          ? cumulativeThroughSample - cumulativeBeforeSample
+                                          : 0;
     const size_t totalBookBytes = epub->getBookSize();
-    if (currentChapterBytes > 0 && totalBookBytes > 0) {
-      const float avgPagesPerByte = section->pageCount / static_cast<float>(currentChapterBytes);
+    if (samplePageCount > 0.0f && sampleChapterBytes > 0 && totalBookBytes > 0) {
+      const float avgPagesPerByte = samplePageCount / static_cast<float>(sampleChapterBytes);
       const float estimatedTotalPages = avgPagesPerByte * static_cast<float>(totalBookBytes);
       bookWideTotalPages = std::max(1, static_cast<int>(std::lround(estimatedTotalPages)));
       bookWideCurrentPage =

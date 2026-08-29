@@ -1,6 +1,8 @@
 #include "LyraTheme.h"
 
 #include <GfxRenderer.h>
+#include <Epub.h>
+#include <FsHelpers.h>
 #include <HalGPIO.h>
 #include <HalPowerManager.h>
 #include <HalStorage.h>
@@ -676,20 +678,33 @@ void LyraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
       if (coverPath.empty()) {
         hasCover = false;
       } else {
-        const std::string coverBmpPath = UITheme::getCoverThumbPath(coverPath, LyraMetrics::values.homeCoverHeight);
+        // Plain Lyra must use the exact same prepared thumbnail key as
+        // Classic/BaseTheme. The shared converter now produces this cache at
+        // full Progressive quality when 1/8 would be too small, so there is no
+        // reason for Lyra to invent a second FB2 thumbnail path here.
+        const std::string coverBmpPath =
+            UITheme::getCoverThumbPath(coverPath, LyraMetrics::values.homeCoverHeight);
 
-        // First time: load cover from SD and render
+        // First time: load the already prepared theme thumbnail from SD.
         HalFile file;
         if (Storage.openFileForRead("HOME", coverBmpPath, file)) {
           Bitmap bitmap(file);
           if (bitmap.parseHeaders() == BmpReaderError::Ok) {
             coverWidth = bitmap.getWidth();
+            // drawBitmap() only adds dark pixels.  Clear the destination first
+            // so a previously drawn placeholder (black lower 2/3) cannot show
+            // through the first real cover render.  This also makes a transient
+            // short BMP read fail white instead of leaving a black block.
+            renderer.fillRect(tileX + hPaddingInSelection, tileY + hPaddingInSelection, coverWidth,
+                              LyraMetrics::values.homeCoverHeight, false);
             renderer.drawBitmap(bitmap, tileX + hPaddingInSelection, tileY + hPaddingInSelection, coverWidth,
                                 LyraMetrics::values.homeCoverHeight);
           } else {
             hasCover = false;
           }
           file.close();
+        } else {
+          hasCover = false;
         }
       }
 

@@ -24,6 +24,7 @@ class ParsedText {
   bool hyphenationEnabled;
   bool bionicReadingEnabled;
   bool guideReadingEnabled;
+  bool preserveNaturalWordSpaces;  // FB2: never compress justified spaces below their natural width
   BlockStyle blockStyle;
   bool hasRtlWord;
   // Once a paragraph has been drained in RAM windows, keep using a local/greedy
@@ -64,12 +65,14 @@ class ParsedText {
  public:
   explicit ParsedText(const bool extraParagraphSpacing, const bool forceParagraphIndents = false,
                       const bool hyphenationEnabled = false, const bool bionicReadingEnabled = false,
-                      const bool guideReadingEnabled = false, const BlockStyle& blockStyle = BlockStyle())
+                      const bool guideReadingEnabled = false, const BlockStyle& blockStyle = BlockStyle(),
+                      const bool preserveNaturalWordSpaces = false)
       : extraParagraphSpacing(extraParagraphSpacing),
         forceParagraphIndents(forceParagraphIndents),
         hyphenationEnabled(hyphenationEnabled),
         bionicReadingEnabled(bionicReadingEnabled),
         guideReadingEnabled(guideReadingEnabled),
+        preserveNaturalWordSpaces(preserveNaturalWordSpaces),
         blockStyle(blockStyle),
         hasRtlWord(false) {}
   ~ParsedText() = default;

@@ -39,6 +39,7 @@ struct IntervalResult {
 
 struct OptionSelectionResult {
   uint8_t index = 0;
+  bool longPress = false;
 };
 
 struct PageResult {

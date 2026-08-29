@@ -35,6 +35,7 @@
 #include "SystemDiagnosticsActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/reader/GlobalReadingStats.h"
+#include "activities/reader/StatsBackup.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "activities/util/IntervalSelectionActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
@@ -548,6 +549,37 @@ void SettingsActivity::loop() {
     requestUpdate();
   }
 
+  // Physical front button 3 (raw LEFT) / 4 (raw RIGHT): switch the
+  // top-level Settings category after 0.5 s from anywhere, including a submenu.
+  // One hold = one step; no wrap and no repeat while the button stays down.
+  constexpr unsigned long CATEGORY_HOLD_MS = 500;
+  if (categoryHoldButton >= 0) {
+    if (mappedInput.isFrontButtonPressed(static_cast<uint8_t>(categoryHoldButton))) return;
+    categoryHoldButton = -1;
+    return;  // consume the release so short-navigation does not fire as well
+  }
+
+  int heldCategoryButton = -1;
+  int categoryDelta = 0;
+  if (mappedInput.isFrontButtonPressed(HalGPIO::BTN_LEFT) && mappedInput.getHeldTime() >= CATEGORY_HOLD_MS) {
+    heldCategoryButton = HalGPIO::BTN_LEFT;
+    categoryDelta = -1;
+  } else if (mappedInput.isFrontButtonPressed(HalGPIO::BTN_RIGHT) &&
+             mappedInput.getHeldTime() >= CATEGORY_HOLD_MS) {
+    heldCategoryButton = HalGPIO::BTN_RIGHT;
+    categoryDelta = 1;
+  }
+  if (heldCategoryButton >= 0) {
+    categoryHoldButton = heldCategoryButton;
+    const int targetCategory = std::max(0, std::min(categoryCount - 1, selectedCategoryIndex + categoryDelta));
+    if (targetCategory != selectedCategoryIndex) {
+      enterCategory(targetCategory);
+      selectedSettingIndex = 0;
+      requestUpdate();
+    }
+    return;
+  }
+
   bool hasChangedCategory = false;
 
   // Handle actions with early return
@@ -758,6 +790,76 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::BackupStats:
         startActivityForResult(std::make_unique<BackupStatsActivity>(renderer, mappedInput), resultHandler);
         break;
+      case SettingAction::RestoreStats: {
+        const auto backups = listGlobalStatsBackups();
+        if (backups.empty()) {
+          GUI.drawPopup(renderer, tr(STR_RESTORE_STATS_NONE));
+          renderer.displayBuffer();
+          delay(900);
+          requestUpdate();
+          break;
+        }
+
+        std::vector<std::string> options = backups;
+        startActivityForResult(
+            std::make_unique<OptionSelectionActivity>(renderer, mappedInput, "StatsBackupSelect",
+                                                      StrId::STR_RESTORE_STATS, std::move(options), 0, false, true,
+                                                      std::vector<std::string>{}, true),
+            [this, backups](const ActivityResult& selectResult) {
+              if (selectResult.isCancelled) {
+                requestUpdate();
+                return;
+              }
+
+              const auto* selection = std::get_if<OptionSelectionResult>(&selectResult.data);
+              if (selection == nullptr || selection->index >= backups.size()) {
+                requestUpdate();
+                return;
+              }
+
+              const std::string selectedBackup = backups[selection->index];
+              if (selection->longPress) {
+                char deleteText[144];
+                snprintf(deleteText, sizeof(deleteText), tr(STR_DELETE_STATS_BACKUP_CONFIRM), selectedBackup.c_str());
+                startActivityForResult(
+                    std::make_unique<ConfirmationActivity>(renderer, mappedInput, tr(STR_DELETE), deleteText),
+                    [this, selectedBackup](const ActivityResult& deleteResult) {
+                      if (!deleteResult.isCancelled) {
+                        const bool deleted = deleteGlobalStatsBackup(selectedBackup.c_str());
+                        GUI.drawPopup(renderer,
+                                      deleted ? tr(STR_DELETE_STATS_BACKUP_DONE) : tr(STR_DELETE_STATS_BACKUP_FAILED));
+                        renderer.displayBuffer();
+                        delay(700);
+                        // Re-open the same Restore row so the user immediately sees
+                        // the shortened list rather than being thrown out of it.
+                        toggleCurrentSetting();
+                      } else {
+                        requestUpdate();
+                      }
+                    });
+                return;
+              }
+
+              char confirmText[160];
+              snprintf(confirmText, sizeof(confirmText), tr(STR_RESTORE_STATS_CONFIRM), selectedBackup.c_str());
+              startActivityForResult(
+                  std::make_unique<ConfirmationActivity>(renderer, mappedInput, tr(STR_RESTORE_STATS), confirmText),
+                  [this, selectedBackup](const ActivityResult& confirmResult) {
+                    if (confirmResult.isCancelled) {
+                      requestUpdate();
+                      return;
+                    }
+
+                    const bool restored = restoreGlobalStatsFromBackup(selectedBackup.c_str());
+                    GUI.drawPopup(renderer, restored ? tr(STR_RESTORE_STATS_DONE) : tr(STR_RESTORE_STATS_FAILED));
+                    renderer.displayBuffer();
+                    delay(900);
+                    rebuildSettingsLists();
+                    requestUpdate();
+                  });
+            });
+        break;
+      }
       case SettingAction::ResetGlobalStats:
         startActivityForResult(
             std::make_unique<ConfirmationActivity>(renderer, mappedInput, tr(STR_RESET_ALL_TIME_STATS),
@@ -945,12 +1047,18 @@ void SettingsActivity::render(RenderLock&&) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto safeArea = UITheme::getInstance().getScreenSafeArea(renderer, /*hasFrontButtonHints=*/true, /*hasSideButtonHints=*/false);
 
-  GUI.drawHeader(renderer, Rect{safeArea.x, metrics.topPadding, safeArea.width, metrics.headerHeight}, tr(STR_SETTINGS_TITLE));
-  int headerDateLineBottom = headerDateLineBottomY(renderer, metrics);
-  if (SETTINGS.uiTheme == InkMODSettings::ROUNDEDRAFF) {
-    headerDateLineBottom += roundedRaffHeaderDateYOffset;
+  const Rect headerRect{safeArea.x, metrics.topPadding, safeArea.width, metrics.headerHeight};
+  GUI.drawHeader(renderer, headerRect, tr(STR_SETTINGS_TITLE));
+
+  if (SETTINGS.uiTheme == InkMODSettings::CLASSIC || SETTINGS.uiTheme == InkMODSettings::DASHBOARD) {
+    drawHeaderDateBeforeClock(renderer, headerRect, metrics);
+  } else {
+    int headerDateLineBottom = headerDateLineBottomY(renderer, metrics);
+    if (SETTINGS.uiTheme == InkMODSettings::ROUNDEDRAFF) {
+      headerDateLineBottom += roundedRaffHeaderDateYOffset;
+    }
+    drawHeaderDateAtLineBottom(renderer, pageWidth, headerDateLineBottom);
   }
-  drawHeaderDateAtLineBottom(renderer, pageWidth, headerDateLineBottom);
 
   std::vector<TabInfo> tabs;
   tabs.reserve(categoryCount);

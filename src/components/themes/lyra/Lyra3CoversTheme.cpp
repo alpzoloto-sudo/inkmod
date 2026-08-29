@@ -1,6 +1,8 @@
 #include "Lyra3CoversTheme.h"
 
 #include <GfxRenderer.h>
+#include <Epub.h>
+#include <FsHelpers.h>
 #include <HalStorage.h>
 
 #include <algorithm>
@@ -15,6 +17,15 @@
 
 // Internal constants
 namespace {
+std::string lyra3CoverThumbPath(const RecentBook& book, int width, int height) {
+  if (book.coverBmpPath.empty() || width <= 0 || height <= 0) return {};
+  if (FsHelpers::hasEpubExtension(book.path)) {
+    const std::string adaptive = Epub(book.path, "/.inkmod").getAdaptiveThumbBmpPath(width, height);
+    if (!adaptive.empty() && Storage.exists(adaptive.c_str())) return adaptive;
+  }
+  return UITheme::getCoverThumbPath(book.coverBmpPath, width, height);
+}
+
 constexpr int hPaddingInSelection = 8;
 constexpr int cornerRadius = 6;
 }  // namespace
@@ -40,8 +51,9 @@ void Lyra3CoversTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
         if (coverPath.empty()) {
           hasCover = false;
         } else {
+          const int targetCoverWidth = tileWidth - 2 * hPaddingInSelection;
           const std::string coverBmpPath =
-              UITheme::getCoverThumbPath(coverPath, Lyra3CoversMetrics::values.homeCoverHeight);
+              lyra3CoverThumbPath(recentBooks[i], targetCoverWidth, Lyra3CoversMetrics::values.homeCoverHeight);
 
           // First time: load cover from SD and render
           HalFile file;
@@ -67,9 +79,25 @@ void Lyra3CoversTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
                 cropY = 1.0f - (ratio / tileRatio);
               }
 
-              renderer.drawBitmap(bitmap, tileX + hPaddingInSelection, tileY + hPaddingInSelection,
-                                  tileWidth - 2 * hPaddingInSelection, Lyra3CoversMetrics::values.homeCoverHeight,
-                                  cropX, cropY);
+              const int slotW = tileWidth - 2 * hPaddingInSelection;
+              const int slotH = Lyra3CoversMetrics::values.homeCoverHeight;
+              if (!FsHelpers::hasEpubExtension(recentBooks[i].path)) {
+                // FB2: keep the already-dithered thumbnail at or below its
+                // native resolution. Enlarging a 1-bit/dithered bitmap is the
+                // source of the large square pixels seen in Lyra.
+                const int srcW = std::max(1, bitmap.getWidth());
+                const int srcH = std::max(1, bitmap.getHeight());
+                const float scale = std::min(1.0f, std::min(static_cast<float>(slotW) / srcW,
+                                                           static_cast<float>(slotH) / srcH));
+                const int drawW = std::max(1, static_cast<int>(srcW * scale));
+                const int drawH = std::max(1, static_cast<int>(srcH * scale));
+                const int drawX = tileX + hPaddingInSelection + (slotW - drawW) / 2;
+                const int drawY = tileY + hPaddingInSelection + (slotH - drawH) / 2;
+                renderer.drawBitmap(bitmap, drawX, drawY, drawW, drawH);
+              } else {
+                renderer.drawBitmap(bitmap, tileX + hPaddingInSelection, tileY + hPaddingInSelection,
+                                    slotW, slotH, cropX, cropY);
+              }
             } else {
               hasCover = false;
             }

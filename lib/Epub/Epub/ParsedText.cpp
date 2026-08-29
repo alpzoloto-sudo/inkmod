@@ -892,6 +892,15 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
   int justifyExtra = (effectiveAlignment == CssTextAlign::Justify && !isLastLine && actualGapCount >= 1)
                           ? spareSpace / static_cast<int>(actualGapCount)
                           : 0;
+  // FB2 source text frequently contains NBSP/regular-space mixtures and long
+  // justified Russian lines. Rounding differences after hyphenation can make
+  // spareSpace slightly negative. The generic path then compresses every word
+  // gap, and on narrow lines an ordinary space can collapse to ~0 px ("ж я"
+  // becomes "жя"). For FB2 keep at least the font's natural space width.
+  // EPUB keeps its existing justification behavior unchanged.
+  if (preserveNaturalWordSpaces && justifyExtra < 0) {
+    justifyExtra = 0;
+  }
   // A line with very few words - common on a narrow e-reader column,
   // especially with a short one-letter Russian preposition ("и", "с", "в")
   // taking up its own gap - can end up needing to stretch each of its few
@@ -981,6 +990,9 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
         (effectiveAlignment == CssTextAlign::Justify && !isLastLine && reorderedGapCount >= 1)
             ? reorderedSpare / static_cast<int>(reorderedGapCount)
             : 0;
+    if (preserveNaturalWordSpaces && reorderedJustifyExtra < 0) {
+      reorderedJustifyExtra = 0;
+    }
     // Same cap as the non-reordered path above, for the same reason - see
     // its comment for why.
     if (reorderedJustifyExtra > 0 && reorderedGapCount >= 1) {

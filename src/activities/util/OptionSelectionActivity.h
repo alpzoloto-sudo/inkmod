@@ -13,7 +13,7 @@ class OptionSelectionActivity final : public Activity {
   OptionSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string activityName,
                           StrId titleId, std::vector<std::string> options, uint8_t selectedIndex,
                           bool readerMode = false, bool showCurrentMarker = true,
-                          std::vector<std::string> subtitles = {});
+                          std::vector<std::string> subtitles = {}, bool enableLongPressSelect = false);
 
   void onEnter() override;
   void loop() override;
@@ -22,7 +22,7 @@ class OptionSelectionActivity final : public Activity {
 
  private:
   void cancel();
-  void select();
+  void select(bool longPress = false);
 
   ButtonNavigator buttonNavigator_;
   StrId titleId_;
@@ -32,4 +32,6 @@ class OptionSelectionActivity final : public Activity {
   int selectedIndex_ = 0;
   bool readerMode_ = false;
   bool showCurrentMarker_ = true;
+  bool enableLongPressSelect_ = false;
+  bool longPressHandled_ = false;
 };

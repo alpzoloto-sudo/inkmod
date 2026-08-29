@@ -5,6 +5,8 @@
 #include <JPEGDEC.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <JpegTypeDetector.h>
+#include <ProgressiveJpegDecoder.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -472,41 +474,109 @@ int bmpDrawCallback(JPEGDRAW* pDraw) {
   return ctx->error ? 0 : 1;
 }
 
-// Scans JPEG markers for SOF2 (progressive DCT) — JPEGDEC only handles baseline/sequential.
-static bool isProgressiveJpeg(FsFile& file) {
-  file.seek(0);
-  uint8_t buf[2];
-  if (file.read(buf, 2) != 2 || buf[0] != 0xFF || buf[1] != 0xD8) {
-    file.seek(0);
+
+
+static bool convertProgressiveJpegToBmp(FsFile& jpegFile, Print& bmpOut, int targetWidth, int targetHeight,
+                                        bool oneBit, bool crop, bool adaptiveContain, const JpegHeaderInfo& header) {
+  constexpr int MAX_IMAGE_WIDTH = 4096;
+  constexpr int MAX_IMAGE_HEIGHT = 4096;
+  constexpr int64_t MAX_IMAGE_PIXELS = 16LL * 1024LL * 1024LL;
+  const int srcWidth = header.width;
+  const int srcHeight = header.height;
+  const int64_t srcPixels = static_cast<int64_t>(srcWidth) * srcHeight;
+  if (srcWidth <= 0 || srcHeight <= 0 || srcWidth > MAX_IMAGE_WIDTH || srcHeight > MAX_IMAGE_HEIGHT ||
+      srcPixels > MAX_IMAGE_PIXELS) {
+    LOG_ERR("PJPG", "Progressive JPEG dimensions rejected: %dx%d", srcWidth, srcHeight);
     return false;
   }
-  while (file.available() >= 2) {
-    uint8_t b;
-    if (file.read(&b, 1) != 1 || b != 0xFF) break;
-    // skip fill bytes (JPEG allows 0xFF padding before a marker byte)
-    do {
-      if (file.read(&b, 1) != 1) {
-        file.seek(0);
-        return false;
-      }
-    } while (b == 0xFF);
-    const uint8_t marker = b;
-    if (marker == 0xC2) {
-      LOG_DBG("JPG", "Detected progressive JPEG (SOF2)");
-      file.seek(0);
-      return true;
-    }
-    if (marker == 0xC0 || marker == 0xC1 || marker == 0xC3) {
-      file.seek(0);
+
+  const int progressiveScaleDenom =
+      ProgressiveJpegDecoder::chooseScaleDenom(srcWidth, srcHeight, targetWidth, targetHeight);
+  const int effectiveSrcW = (srcWidth + progressiveScaleDenom - 1) / progressiveScaleDenom;
+  const int effectiveSrcH = (srcHeight + progressiveScaleDenom - 1) / progressiveScaleDenom;
+
+  const bool containInsteadOfCrop =
+      crop && adaptiveContain && shouldContainAdaptive(effectiveSrcW, effectiveSrcH, targetWidth, targetHeight);
+  const float fitUpscale = std::min(static_cast<float>(targetWidth) / std::max(1, srcWidth),
+                                    static_cast<float>(targetHeight) / std::max(1, srcHeight));
+  const bool sourceHasUsefulDetail =
+      fitUpscale <= 2.50f || srcWidth >= 240 || srcHeight >= 360 || srcPixels >= 90000;
+  const bool allowUpscale = fitUpscale <= 1.0f || sourceHasUsefulDetail;
+  const bool cropOutput = crop && !containInsteadOfCrop && allowUpscale;
+  const OutputGeometry geometry =
+      calculateOutputGeometry(effectiveSrcW, effectiveSrcH, targetWidth, targetHeight, cropOutput, allowUpscale);
+  const int outWidth = geometry.outWidth;
+  const int outHeight = geometry.outHeight;
+  if (outWidth <= 0 || outHeight <= 0) return false;
+
+  int bytesPerRow;
+  if (USE_8BIT_OUTPUT && !oneBit) {
+    writeBmpHeader8bit(bmpOut, outWidth, outHeight);
+    bytesPerRow = (outWidth + 3) / 4 * 4;
+  } else if (oneBit) {
+    writeBmpHeader1bit(bmpOut, outWidth, outHeight);
+    bytesPerRow = (outWidth + 31) / 32 * 4;
+  } else {
+    writeBmpHeader2bit(bmpOut, outWidth, outHeight);
+    bytesPerRow = (outWidth * 2 + 31) / 32 * 4;
+  }
+
+  BmpConvertCtx ctx = {};
+  ctx.bmpOut = &bmpOut;
+  ctx.srcWidth = effectiveSrcW;
+  ctx.srcHeight = effectiveSrcH;
+  ctx.outWidth = outWidth;
+  ctx.outHeight = outHeight;
+  ctx.oneBit = oneBit;
+  ctx.bytesPerRow = bytesPerRow;
+  ctx.needsScaling = geometry.needsScaling;
+  ctx.scaleX_fp = geometry.scaleX_fp;
+  ctx.scaleY_fp = geometry.scaleY_fp;
+  ctx.srcXOffset_fp = geometry.srcXOffset_fp;
+  ctx.srcYOffset_fp = geometry.srcYOffset_fp;
+
+  ctx.mcuBuf = makeUniqueNoThrow<uint8_t[]>(MAX_MCU_HEIGHT * effectiveSrcW);
+  ctx.bmpRow = makeUniqueNoThrow<uint8_t[]>(bytesPerRow);
+  if (!ctx.mcuBuf || !ctx.bmpRow) {
+    LOG_ERR("PJPG", "OOM allocating progressive BMP stream buffers");
+    return false;
+  }
+  memset(ctx.mcuBuf.get(), 0, MAX_MCU_HEIGHT * effectiveSrcW);
+
+  if (ctx.needsScaling) {
+    ctx.rowAccum = makeUniqueNoThrow<uint32_t[]>(outWidth);
+    ctx.rowCount = makeUniqueNoThrow<uint32_t[]>(outWidth);
+    if (!ctx.rowAccum || !ctx.rowCount) {
+      LOG_ERR("PJPG", "OOM allocating progressive scaling buffers");
       return false;
     }
-    if (marker == 0xD9) break;
-    if (file.read(buf, 2) != 2) break;
-    const int segLen = (static_cast<int>(buf[0]) << 8) | buf[1];
-    if (segLen < 2 || !file.seek(file.position() + segLen - 2)) break;
+    ctx.nextOutY_srcStart = geometry.srcYOffset_fp + geometry.scaleY_fp;
   }
-  file.seek(0);
-  return false;
+
+  if (oneBit) {
+    ctx.atkinson1BitDitherer = makeUniqueNoThrow<Atkinson1BitDitherer>(outWidth);
+    if (!ctx.atkinson1BitDitherer) return false;
+  } else if (!USE_8BIT_OUTPUT) {
+    if (USE_ATKINSON) {
+      ctx.atkinsonDitherer = makeUniqueNoThrow<AtkinsonDitherer>(outWidth);
+      if (!ctx.atkinsonDitherer) return false;
+    } else if (USE_FLOYD_STEINBERG) {
+      ctx.fsDitherer = makeUniqueNoThrow<FloydSteinbergDitherer>(outWidth);
+      if (!ctx.fsDitherer) return false;
+    }
+  }
+
+  ProgressiveJpegInfo info;
+  if (!ProgressiveJpegDecoder::decode(jpegFile, bmpDrawCallback, &ctx, info, targetWidth, targetHeight) || ctx.error) {
+    LOG_ERR("PJPG", "Progressive JPEG cover decode failed safely");
+    return false;
+  }
+  if (ctx.needsScaling && ctx.currentOutY < ctx.outHeight) {
+    LOG_ERR("PJPG", "Progressive JPEG output incomplete: %d/%d rows", ctx.currentOutY, ctx.outHeight);
+    return false;
+  }
+  LOG_DBG("PJPG", "Progressive JPEG converted to BMP: %dx%d -> %dx%d", srcWidth, srcHeight, outWidth, outHeight);
+  return true;
 }
 
 }  // namespace
@@ -516,14 +586,68 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(FsFile& jpegFile, Print& bm
                                                      bool oneBit, bool crop, bool adaptiveContain) {
   LOG_DBG("JPG", "Converting JPEG to %s BMP (target: %dx%d)", oneBit ? "1-bit" : "2-bit", targetWidth, targetHeight);
 
+  const JpegHeaderInfo jpegHeader = JpegTypeDetector::inspect(jpegFile);
+
+  // Full progressive reconstruction is valuable for reader illustrations, but
+  // it is wasteful for tiny derived assets such as the 136x226 home thumbnail.
+  // Those assets used to trigger the same 10 progressive scans again after the
+  // reader had already decoded/cached the image, adding tens of seconds for no
+  // visible benefit at thumbnail resolution. Keep the high-quality path for
+  // normal/full-size BMP output, but use inkMOD's legacy JPEGDEC 1/8 path when
+  // the requested output is small. Baseline JPEG routing is untouched.
+  constexpr int64_t FULL_PROGRESSIVE_MIN_OUTPUT_PIXELS = 160000LL;
+  const int64_t requestedOutputPixels =
+      static_cast<int64_t>(std::max(1, targetWidth)) * static_cast<int64_t>(std::max(1, targetHeight));
+
+  // The legacy progressive path only has a 1/8-scale DC reconstruction. It is
+  // perfectly adequate for a genuinely tiny derived asset when that 1/8 image
+  // is still at least as large as the requested thumbnail. But when the 1/8
+  // image is smaller than the target, the scaler has to magnify already coarse
+  // 8x8 information and the cover becomes visibly blocky in Classic/Lyra.
+  // In that case pay the one-time full progressive decode and cache the sharp
+  // thumbnail instead. Large covers (for example 1524x2339 -> ~191x293 at 1/8)
+  // can still use the fast route for a 136x226 thumbnail.
+  const int legacyWidth = (jpegHeader.width + 7) / 8;
+  const int legacyHeight = (jpegHeader.height + 7) / 8;
+  const float legacyFitScale = std::min(
+      static_cast<float>(std::max(1, targetWidth)) / std::max(1, legacyWidth),
+      static_cast<float>(std::max(1, targetHeight)) / std::max(1, legacyHeight));
+  const bool legacyWouldUpscale = legacyFitScale > 1.0f;
+
+  const bool smallDerivedProgressive =
+      JpegTypeDetector::shouldUseFullProgressive(jpegHeader) &&
+      requestedOutputPixels < FULL_PROGRESSIVE_MIN_OUTPUT_PIXELS &&
+      !legacyWouldUpscale;
+
+  if (JpegTypeDetector::shouldUseFullProgressive(jpegHeader) && !smallDerivedProgressive) {
+    const int64_t pixels = static_cast<int64_t>(jpegHeader.width) * jpegHeader.height;
+    LOG_INF("PJPG", "SOF2 full-quality BMP route: %dx%d (%lld px <= %lld, out=%dx%d)", jpegHeader.width,
+            jpegHeader.height, static_cast<long long>(pixels),
+            static_cast<long long>(JpegTypeDetector::FULL_PROGRESSIVE_MAX_PIXELS), targetWidth, targetHeight);
+    return convertProgressiveJpegToBmp(jpegFile, bmpOut, targetWidth, targetHeight, oneBit, crop, adaptiveContain,
+                                       jpegHeader);
+  }
+  if (smallDerivedProgressive) {
+    LOG_INF("PJPG",
+            "SOF2 small-output BMP route: %dx%d -> %dx%d (%lld output px, legacy=%dx%d) -> legacy JPEGDEC 1/8",
+            jpegHeader.width, jpegHeader.height, targetWidth, targetHeight,
+            static_cast<long long>(requestedOutputPixels), legacyWidth, legacyHeight);
+  } else if (JpegTypeDetector::shouldUseFullProgressive(jpegHeader) &&
+             requestedOutputPixels < FULL_PROGRESSIVE_MIN_OUTPUT_PIXELS && legacyWouldUpscale) {
+    LOG_INF("PJPG",
+            "SOF2 cover-quality route: legacy 1/8 %dx%d would upscale to %dx%d -> full progressive",
+            legacyWidth, legacyHeight, targetWidth, targetHeight);
+  }
+  const bool legacyProgressive = jpegHeader.type == JpegType::Progressive;
+  if (jpegHeader.type != JpegType::Baseline && !legacyProgressive) {
+    LOG_ERR("JPG", "JPEG header rejected: %s", JpegTypeDetector::toString(jpegHeader.type));
+    return false;
+  }
+
   if (ESP.getFreeHeap() < MIN_FREE_HEAP) {
     LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", ESP.getFreeHeap(), MIN_FREE_HEAP);
     return false;
   }
-
-  // Progressive JPEGs (SOF2) must use JPEG_SCALE_EIGHTH — the only mode safe with the MCU_SKIP patch.
-  // The 1/8-scale output is then passed through the custom scaler to reach the target dimensions.
-  const bool progressive = isProgressiveJpeg(jpegFile);
 
   s_jpegFile = &jpegFile;
 
@@ -544,7 +668,7 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(FsFile& jpegFile, Print& bm
   const int srcWidth = jpeg->getWidth();
   const int srcHeight = jpeg->getHeight();
 
-  LOG_DBG("JPG", "JPEG dimensions: %dx%d%s", srcWidth, srcHeight, progressive ? " (progressive)" : "");
+  LOG_DBG("JPG", "JPEG dimensions: %dx%d", srcWidth, srcHeight);
 
   // JPEGDEC works MCU-by-MCU and the cover scaler streams output, so the
   // source image does not need to fit in RAM.  Keep a generous but finite
@@ -568,9 +692,15 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(FsFile& jpegFile, Print& bm
   // pixels only to throw most of them away for the 800x480 panel/thumbnail.
   int decodeDenom = 1;
   int decodeFlags = 0;
-  if (progressive) {
+  if (legacyProgressive) {
+    // Exact legacy behavior from inkMOD before the full progressive decoder:
+    // patched JPEGDEC decodes the first/DC scan at 1/8 very quickly.
     decodeDenom = 8;
     decodeFlags = JPEG_SCALE_EIGHTH;
+    const int64_t pixels = static_cast<int64_t>(srcWidth) * srcHeight;
+    LOG_INF("PJPG", "SOF2 large-image BMP route: %dx%d (%lld px > %lld) -> legacy JPEGDEC 1/8",
+            srcWidth, srcHeight, static_cast<long long>(pixels),
+            static_cast<long long>(JpegTypeDetector::FULL_PROGRESSIVE_MAX_PIXELS));
   } else {
     const float scaleX = static_cast<float>(targetWidth) / std::max(1, srcWidth);
     const float scaleY = static_cast<float>(targetHeight) / std::max(1, srcHeight);
@@ -610,17 +740,6 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(FsFile& jpegFile, Print& bm
   const bool sourceHasUsefulDetail =
       fitUpscale <= 2.50f || srcWidth >= 240 || srcHeight >= 360 || sourcePixels >= 90000;
 
-  // IMPORTANT: progressive JPEGs are decoded by JPEGDEC at 1/8 internally,
-  // but geometry must still be based on the ORIGINAL JPEG quality/size.
-  // Forbidding upscale merely because the file is progressive makes a
-  // perfectly normal 470x720 FB2 cover become a ~59x90 postage stamp both
-  // on Home and on the sleep screen.
-  //
-  // Keep the existing "don't blow up genuinely tiny source images" guard,
-  // but allow a normal-sized progressive cover to fill the requested box.
-  // Browser uploads normalize FB2 covers to baseline JPEG, so newly uploaded
-  // books retain full source detail; this fallback keeps old/on-card books
-  // usable instead of tiny.
   const bool allowUpscale = fitUpscale <= 1.0f || sourceHasUsefulDetail;
   const bool cropOutput = crop && !containInsteadOfCrop && allowUpscale;
   const OutputGeometry geometry =

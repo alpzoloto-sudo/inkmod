@@ -4,6 +4,7 @@
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <JpegToBmpConverter.h>
+#include <JpegTypeDetector.h>
 #include <Logging.h>
 #include <PngToBmpConverter.h>
 #include <ReaderWork.h>
@@ -673,7 +674,7 @@ std::string Epub::getCoverBmpPath(bool cropped) const {
   return cachePath + "/" + coverFileName + ".bmp";
 }
 
-bool Epub::generateCoverBmp(bool cropped) const {
+bool Epub::generateCoverBmp(bool cropped, const bool deferProgressive) const {
   if (Storage.exists(getCoverBmpPath(cropped).c_str())) {
     return true;
   }
@@ -708,6 +709,13 @@ bool Epub::generateCoverBmp(bool cropped) const {
     if (!Storage.openFileForRead("EBP", coverJpgTempPath, coverJpg)) {
       Storage.remove(coverJpgTempPath.c_str());
       return false;
+    }
+
+    if (deferProgressive && JpegTypeDetector::shouldUseFullProgressive(JpegTypeDetector::inspect(coverJpg))) {
+      LOG_INF("PJPG", "Deferred progressive cover decode until actually needed");
+      coverJpg.close();
+      Storage.remove(coverJpgTempPath.c_str());
+      return true;
     }
 
     FsFile coverBmp;
@@ -797,11 +805,11 @@ bool Epub::generateThumbBmp(int height) const { return generateThumbBmp(0, heigh
 
 bool Epub::generateThumbBmp(int width, int height) const { return generateThumbBmpInternal(width, height, false); }
 
-bool Epub::generateAdaptiveThumbBmp(int width, int height) const {
-  return generateThumbBmpInternal(width, height, true);
+bool Epub::generateAdaptiveThumbBmp(int width, int height, const bool deferProgressive) const {
+  return generateThumbBmpInternal(width, height, true, deferProgressive);
 }
 
-bool Epub::generateThumbBmpInternal(int width, int height, const bool adaptiveContain) const {
+bool Epub::generateThumbBmpInternal(int width, int height, const bool adaptiveContain, const bool deferProgressive) const {
   if (height <= 0) {
     LOG_DBG("EBP", "Using default thumb BMP height for requested dimensions: %dx%d", width, height);
   }
@@ -840,6 +848,13 @@ bool Epub::generateThumbBmpInternal(int width, int height, const bool adaptiveCo
     if (!Storage.openFileForRead("EBP", coverJpgTempPath, coverJpg)) {
       Storage.remove(coverJpgTempPath.c_str());
       return false;
+    }
+
+    if (deferProgressive && JpegTypeDetector::shouldUseFullProgressive(JpegTypeDetector::inspect(coverJpg))) {
+      LOG_INF("PJPG", "Deferred progressive thumbnail decode until actually needed");
+      coverJpg.close();
+      Storage.remove(coverJpgTempPath.c_str());
+      return true;
     }
 
     FsFile thumbBmp;

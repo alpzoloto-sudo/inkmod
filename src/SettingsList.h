@@ -308,7 +308,7 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                           "sleepScreenCoverFilter", StrId::STR_CAT_DISPLAY));
     add(SettingInfo::Enum(StrId::STR_TIMEOUT_SLEEP_SCREEN, &InkMODSettings::quickResumeSleepScreen,
                           {StrId::STR_TIMEOUT_SAME_AS_MAIN, StrId::STR_TIMEOUT_QUICK_RESUME,
-                           StrId::STR_TIMEOUT_OVERLAY, StrId::STR_TIMEOUT_CUSTOM},
+                           StrId::STR_TIMEOUT_OVERLAY, StrId::STR_TIMEOUT_CUSTOM, StrId::STR_COVER},
                           "quickResumeSleepScreen", StrId::STR_CAT_DISPLAY));
     add(SettingInfo::Enum(StrId::STR_HIDE_BATTERY, &InkMODSettings::hideBatteryPercentage,
                           {StrId::STR_NEVER, StrId::STR_IN_READER, StrId::STR_ALWAYS}, "hideBatteryPercentage",
@@ -1057,11 +1057,12 @@ inline std::vector<SettingInfo> buildSystemReadingStatsSettingsList(const std::v
 
 inline std::vector<SettingInfo> buildSystemGlobalStatsSettingsList(const std::vector<SettingInfo>& allSettings) {
   std::vector<SettingInfo> settings;
-  settings.reserve(3);
+  settings.reserve(4);
   if (halClock.isAvailable()) {
     addSettingByName(settings, allSettings, StrId::STR_AUTO_BACKUP_STATS);
   }
   settings.push_back(SettingInfo::Action(StrId::STR_BACKUP_NOW, SettingAction::BackupStats));
+  settings.push_back(SettingInfo::Action(StrId::STR_RESTORE_STATS, SettingAction::RestoreStats));
   settings.push_back(SettingInfo::Action(StrId::STR_RESET_ALL_TIME_STATS, SettingAction::ResetGlobalStats));
   return settings;
 }

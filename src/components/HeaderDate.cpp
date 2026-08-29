@@ -9,6 +9,7 @@
 
 #include "InkMODSettings.h"
 #include "components/themes/BaseTheme.h"
+#include "components/UITheme.h"
 #include "fontIds.h"
 
 namespace {
@@ -48,4 +49,38 @@ void drawHeaderDateAtLineBottom(const GfxRenderer& renderer, const int pageWidth
   const int dateX = pageWidth - kHeaderDateRightInset - textWidth;
   const int dateY = lineBottomY - renderer.getLineHeight(dateFontId);
   renderer.drawText(dateFontId, std::max(0, dateX), std::max(0, dateY), dateBuf);
+}
+
+
+bool drawHeaderDateBeforeClock(const GfxRenderer& renderer, const Rect& headerRect, const ThemeMetrics& metrics) {
+  char dateBuf[13];
+  if (!formatHeaderDate(dateBuf, sizeof(dateBuf))) return false;
+  if (!halClock.isAvailable() || !SETTINGS.shouldShowClockOutsideReader()) return false;
+
+  char timeBuf[9];
+  if (!halClock.formatTime(timeBuf, sizeof(timeBuf), SETTINGS.clockUtcOffsetQ, SETTINGS.clockFormat == 1)) return false;
+
+  constexpr int rightInset = 12;
+  constexpr int batteryPercentSpacing = 4;
+  constexpr int clockBatteryGap = 14;
+  constexpr int dateClockGap = 8;
+  constexpr int topStatusY = 2;  // Same homeHeaderTopInset used by BaseTheme.
+  constexpr int fontId = SMALL_FONT_ID;
+
+  const bool showBatteryPercentage =
+      SETTINGS.hideBatteryPercentage != InkMODSettings::HIDE_BATTERY_PERCENTAGE::HIDE_ALWAYS;
+  int batteryClusterLeftX = headerRect.x + headerRect.width - rightInset - metrics.batteryWidth;
+  if (showBatteryPercentage) {
+    batteryClusterLeftX -= renderer.getTextWidth(fontId, "100%") + batteryPercentSpacing;
+  }
+
+  const int clockRightX = batteryClusterLeftX - clockBatteryGap;
+  const int clockWidth = renderer.getTextWidth(fontId, timeBuf);
+  const int clockX = clockRightX - clockWidth;
+  const int dateWidth = renderer.getTextWidth(fontId, dateBuf);
+  const int dateX = std::max(headerRect.x, clockX - dateClockGap - dateWidth);
+  const int dateY = headerRect.y + topStatusY;
+
+  renderer.drawText(fontId, dateX, dateY, dateBuf);
+  return true;
 }

@@ -32,6 +32,7 @@ enum class SettingAction {
   SystemGlobalStats,
   Network,
   BackupStats,
+  RestoreStats,
   ResetGlobalStats,
   ClearCache,
   CheckForUpdates,
@@ -282,6 +283,11 @@ class SettingsActivity final : public Activity {
   // cursor where it was rather than resetting to the top of the parent
   // list every time.
   int parentSelectedIndex = 0;
+
+  // Physical front buttons 3/4: one category step after a 0.5 s hold.
+  // The active raw button is consumed until release so ButtonNavigator does
+  // not also start its normal 500 ms continuous-repeat path.
+  int categoryHoldButton = -1;
 
   static constexpr int categoryCount = 4;
   static const StrId categoryNames[categoryCount];

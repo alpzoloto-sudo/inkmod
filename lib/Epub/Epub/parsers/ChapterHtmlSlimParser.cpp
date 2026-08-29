@@ -628,8 +628,10 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   // If the pending anchor is a TOC chapter boundary, force a page break after the previous
   // block is flushed so the chapter starts on a fresh page.
   flushPendingAnchor();
+  const bool preserveNaturalWordSpaces = epub && epub->isFb2Package();
   currentTextBlock.reset(new (std::nothrow) ParsedText(extraParagraphSpacing, forceParagraphIndents, hyphenationEnabled,
-                                                       bionicReadingEnabled, guideReadingEnabled, blockStyle));
+                                                       bionicReadingEnabled, guideReadingEnabled, blockStyle,
+                                                       preserveNaturalWordSpaces));
   if (!currentTextBlock) {
     const auto heap = MemoryBudget::snapshot();
     LOG_ERR("EHP", "Failed to create text block (%u free, %u max alloc)", heap.freeHeap, heap.maxAllocHeap);
@@ -2285,6 +2287,19 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
     //   standalone word for hyphenation purposes, so Liang patterns can produce
     //   "200 Quadrat-" / "kilometer" instead of the unusable "200" / "Quadratkilometer".
     if (static_cast<uint8_t>(s[i]) == 0xC2 && i + 1 < len && static_cast<uint8_t>(s[i + 1]) == 0xA0) {
+      // FB2 converters commonly use NBSP as an ordinary inter-word separator.
+      // The generic EPUB continuation-token representation can become visually
+      // zero-width with some fonts, producing glued words such as "Нуачто?".
+      // For FB2 only, treat NBSP exactly like normal whitespace: flush the word
+      // and let ParsedText add its normal font-aware inter-word advance. EPUB
+      // keeps the original no-break behavior below unchanged.
+      if (self->epub && self->epub->isFb2Package()) {
+        if (self->partWordBufferIndex > 0) self->flushPartWordBuffer();
+        self->nextWordContinues = false;
+        i++;  // Skip 0xA0.
+        continue;
+      }
+
       if (self->partWordBufferIndex > 0) {
         self->flushPartWordBuffer();
       }
@@ -2304,6 +2319,14 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
     // U+202F (narrow no-break space) — identical logic to U+00A0 above.
     if (static_cast<uint8_t>(s[i]) == 0xE2 && i + 2 < len && static_cast<uint8_t>(s[i + 1]) == 0x80 &&
         static_cast<uint8_t>(s[i + 2]) == 0xAF) {
+      // Same FB2-only normalization for U+202F narrow no-break space.
+      if (self->epub && self->epub->isFb2Package()) {
+        if (self->partWordBufferIndex > 0) self->flushPartWordBuffer();
+        self->nextWordContinues = false;
+        i += 2;
+        continue;
+      }
+
       if (self->partWordBufferIndex > 0) {
         self->flushPartWordBuffer();
       }

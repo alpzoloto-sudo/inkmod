@@ -74,7 +74,7 @@ class Epub {
   const std::string& getAuthor() const;
   const std::string& getLanguage() const;
   std::string getCoverBmpPath(bool cropped = false) const;
-  bool generateCoverBmp(bool cropped = false) const;
+  bool generateCoverBmp(bool cropped = false, bool deferProgressive = false) const;
   std::string getThumbBmpPath() const;
   // Deprecated compatibility wrapper; forwards to getThumbBmpPath(0, height).
   [[deprecated("use getThumbBmpPath(int width, int height)")]]
@@ -96,7 +96,7 @@ class Epub {
   bool generateThumbBmp(int width, int height) const;
   // Writes a thumbnail that can either crop-to-fill or contain unusual cover
   // ratios, depending on the source image dimensions.
-  bool generateAdaptiveThumbBmp(int width, int height) const;
+  bool generateAdaptiveThumbBmp(int width, int height, bool deferProgressive = false) const;
   uint8_t* readItemContentsToBytes(const std::string& itemHref, size_t* size = nullptr,
                                    bool trailingNullByte = false) const;
   bool readItemContentsToStream(const std::string& itemHref, Print& out, size_t chunkSize,
@@ -125,5 +125,5 @@ class Epub {
   int resolveHrefToSpineIndex(const std::string& href) const;
 
  private:
-  bool generateThumbBmpInternal(int width, int height, bool adaptiveContain) const;
+  bool generateThumbBmpInternal(int width, int height, bool adaptiveContain, bool deferProgressive = false) const;
 };

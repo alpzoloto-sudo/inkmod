@@ -4,6 +4,7 @@
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalClock.h>
+#include <HalGPIO.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <PNGdec.h>
@@ -458,6 +459,8 @@ uint8_t SleepActivity::effectiveSleepScreenMode() const {
       return InkMODSettings::SLEEP_SCREEN_MODE::OVERLAY;
     case InkMODSettings::TIMEOUT_SLEEP_CUSTOM:
       return InkMODSettings::SLEEP_SCREEN_MODE::CUSTOM;
+    case InkMODSettings::TIMEOUT_SLEEP_COVER:
+      return InkMODSettings::SLEEP_SCREEN_MODE::COVER;
     default:
       return SETTINGS.sleepScreen;
   }
@@ -527,8 +530,28 @@ void SleepActivity::onEnter() {
 
 void SleepActivity::renderCustomSleepScreen() const {
   SleepImageSelection selection;
-  if (selectPinnedSleepImage(SleepImageMode::Custom, effectivePinnedSleepImagePath(), selection) ||
-      selectRandomSleepImage(SleepImageMode::Custom, selection)) {
+
+  // X3 keeps two independent user-facing concepts:
+  //   * manual power-button sleep: "Wallpapers -> Custom" = random image from .sleep
+  //   * timeout sleep: optional pinned custom/overlay image + quick resume
+  //
+  // Since timeout overlays gained their own path, the generic pinned-first logic
+  // could make manual CUSTOM reuse that overlay as a full-screen wallpaper.
+  // Transparent/dithered overlay assets look nearly black when rendered that way.
+  // Restore the pre-1.1.6 X3 behaviour by preferring the .sleep pool only for
+  // manual CUSTOM. Timeout rendering and all X4 behaviour stay unchanged.
+  const bool x3ManualCustom = gpio.deviceIsX3() && !fromTimeout;
+  const bool imageSelected =
+      x3ManualCustom
+          ? (selectRandomSleepImage(SleepImageMode::Custom, selection) ||
+             selectPinnedSleepImage(SleepImageMode::Custom, effectivePinnedSleepImagePath(), selection))
+          : (selectPinnedSleepImage(SleepImageMode::Custom, effectivePinnedSleepImagePath(), selection) ||
+             selectRandomSleepImage(SleepImageMode::Custom, selection));
+
+  if (imageSelected) {
+    if (x3ManualCustom) {
+      LOG_INF("SLP", "X3 manual custom wallpaper selected from .sleep pool: %s", selection.path.c_str());
+    }
     if (selection.isPng) {
       ImageDimensions dims;
       if (PngToFramebufferConverter::getDimensionsStatic(selection.path, dims)) {

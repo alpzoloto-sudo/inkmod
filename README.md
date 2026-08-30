@@ -392,9 +392,12 @@ inkMOD is free, open-source and community-driven.
 
 For project news, firmware releases, discussion and support:
 
-**Telegram:** [@inkmodx4](https://t.me/inkmodx4)
+inkMOD is a fork of [Crosspoint](https://github.com/crosspoint-reader/crosspoint-reader).
 
-The repository's **Sponsor** button points to the same project channel.
+### 💖 Support & Community
+
+* 📢 **Telegram Channel:** [t.me/inkmodx4](https://t.me/inkmodx4)
+* 💸 **Donate via Crypto Bot:** [Send Tip](https://t.me/send?start=IVwqEXbSLhTR)
 
 Support is completely optional and does not unlock or restrict any firmware functionality.
 
@@ -403,3 +406,4 @@ Support is completely optional and does not unlock or restrict any firmware func
 # Keywords
 
 Xteink X4 firmware · Xteink X3 firmware · inkMOD · Xteink custom firmware · Xteink X4 FB2 · Xteink X4 FB2.ZIP · Xteink X4 EPUB · ESP32-C3 e-reader · FB2 e-reader · custom e-reader firmware
+

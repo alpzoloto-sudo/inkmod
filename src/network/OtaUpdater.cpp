@@ -7,6 +7,10 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() { return NO_UPDATE; }
 OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback, void*, std::atomic<bool>*) { return NO_UPDATE; }
 #else
 #include <Logging.h>
+#include <mbedtls/sha256.h>
+
+#include "FirmwareFlasher.h"
+#include "HttpDownloader.h"
 #include <ReleaseJsonParser.h>
 
 #include <cstring>
@@ -139,6 +143,68 @@ esp_err_t http_client_set_header_cb(esp_http_client_handle_t http_client) {
 
 size_t totalBytesReceived = 0;
 
+constexpr const char* OTA_STAGING_PATH = "/.inkmod/ota-update.bin";
+
+bool parseSha256Digest(const std::string& digest, uint8_t expected[32]) {
+  constexpr const char* prefix = "sha256:";
+  if (digest.size() != 7 + 64 || digest.compare(0, 7, prefix) != 0) return false;
+
+  auto hexValue = [](char c) -> int {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+  };
+
+  for (size_t i = 0; i < 32; ++i) {
+    const int hi = hexValue(digest[7 + i * 2]);
+    const int lo = hexValue(digest[7 + i * 2 + 1]);
+    if (hi < 0 || lo < 0) return false;
+    expected[i] = static_cast<uint8_t>((hi << 4) | lo);
+  }
+  return true;
+}
+
+bool verifyStagedSha256(const char* path, const std::string& digest) {
+  uint8_t expected[32];
+  if (!parseSha256Digest(digest, expected)) {
+    LOG_ERR("OTA", "No usable authenticated SHA256 digest for staging fallback");
+    return false;
+  }
+
+  HalFile file;
+  if (!Storage.openFileForRead("OTA", path, file) || !file) {
+    LOG_ERR("OTA", "Failed to open staged firmware for SHA256 verification");
+    return false;
+  }
+
+  mbedtls_sha256_context sha;
+  mbedtls_sha256_init(&sha);
+  mbedtls_sha256_starts(&sha, 0);
+  uint8_t buffer[4096];
+  while (true) {
+    const int n = file.read(buffer, sizeof(buffer));
+    if (n < 0) {
+      file.close();
+      mbedtls_sha256_free(&sha);
+      LOG_ERR("OTA", "Read failure while hashing staged firmware");
+      return false;
+    }
+    if (n == 0) break;
+    mbedtls_sha256_update(&sha, buffer, static_cast<size_t>(n));
+  }
+  file.close();
+
+  uint8_t actual[32];
+  mbedtls_sha256_finish(&sha, actual);
+  mbedtls_sha256_free(&sha);
+  if (memcmp(actual, expected, sizeof(actual)) != 0) {
+    LOG_ERR("OTA", "Staged firmware SHA256 does not match GitHub release digest");
+    return false;
+  }
+  return true;
+}
+
 esp_err_t event_handler(esp_http_client_event_t* event) {
   if (event->event_id != HTTP_EVENT_ON_DATA) return ESP_OK;
   if (event->data_len <= 0) return ESP_OK;
@@ -162,6 +228,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   updateAvailable = false;
   latestVersion.clear();
   otaUrl.clear();
+  otaDigest.clear();
   otaSize = 0;
   processedSize = 0;
   totalSize = 0;
@@ -229,11 +296,13 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   }
 
   otaUrl = releaseParser.getFirmwareUrl();
+  otaDigest = releaseParser.getFirmwareDigest();
   otaSize = releaseParser.getFirmwareSize();
   totalSize = otaSize;
   updateAvailable = true;
 
-  LOG_DBG("OTA", "Found update: tag=%s size=%zu", latestVersion.c_str(), otaSize);
+  LOG_DBG("OTA", "Found update: tag=%s size=%zu digest=%s", latestVersion.c_str(), otaSize,
+          otaDigest.empty() ? "missing" : otaDigest.c_str());
   LOG_DBG("OTA", "Firmware URL: %s", otaUrl.c_str());
   return OK;
 }
@@ -302,10 +371,103 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
 
   WifiPowerSaveGuard wifiPowerSaveGuard;
 
+  const auto installViaAuthenticatedStaging = [&]() -> OtaUpdaterError {
+    // GitHub's release CDN occasionally moves to a certificate chain that the
+    // ESP-IDF bundle in older inkMOD releases cannot verify. The release JSON
+    // itself comes from api.github.com over verified TLS and includes GitHub's
+    // SHA256 digest for each asset. We can therefore use the existing low-memory
+    // wolfSSL downloader as a transport fallback, but only when that authenticated
+    // digest is present and matches the complete downloaded file.
+    uint8_t expectedDigest[32];
+    if (!parseSha256Digest(otaDigest, expectedDigest)) {
+      LOG_ERR("OTA", "TLS fallback refused: GitHub asset SHA256 digest missing/invalid");
+      return HTTP_ERROR;
+    }
+
+    Storage.mkdir("/.inkmod");
+    if (Storage.exists(OTA_STAGING_PATH)) Storage.remove(OTA_STAGING_PATH);
+
+    totalSize = otaSize > 0 ? otaSize * 2 : 0;
+    processedSize = 0;
+    int downloadPct = -1;
+    HttpDownloader::DownloadOptions options(false, false, [&]() { return isCancellationRequested(); }, 4096);
+    const auto dl = HttpDownloader::downloadToFile(
+        otaUrl, OTA_STAGING_PATH,
+        [&](size_t downloaded, size_t total) {
+          const size_t expectedTotal = otaSize > 0 ? otaSize : total;
+          processedSize = downloaded;
+          if (onProgress && expectedTotal > 0) {
+            const int pct = static_cast<int>(static_cast<uint64_t>(downloaded) * 100 / expectedTotal);
+            if (pct != downloadPct) {
+              downloadPct = pct;
+              onProgress(ctx);
+            }
+          }
+        },
+        nullptr, "", "", options);
+
+    if (dl == HttpDownloader::ABORTED || isCancellationRequested()) {
+      Storage.remove(OTA_STAGING_PATH);
+      return CANCELLED_ERROR;
+    }
+    if (dl != HttpDownloader::OK) {
+      Storage.remove(OTA_STAGING_PATH);
+      LOG_ERR("OTA", "Authenticated staging download failed: %d", static_cast<int>(dl));
+      return HTTP_ERROR;
+    }
+
+    HalFile staged;
+    if (!Storage.openFileForRead("OTA", OTA_STAGING_PATH, staged) || !staged) {
+      Storage.remove(OTA_STAGING_PATH);
+      return INTERNAL_UPDATE_ERROR;
+    }
+    const size_t stagedSize = staged.fileSize();
+    staged.close();
+    if (otaSize > 0 && stagedSize != otaSize) {
+      LOG_ERR("OTA", "Staged firmware size mismatch: got=%zu expected=%zu", stagedSize, otaSize);
+      Storage.remove(OTA_STAGING_PATH);
+      return HTTP_ERROR;
+    }
+
+    if (!verifyStagedSha256(OTA_STAGING_PATH, otaDigest)) {
+      Storage.remove(OTA_STAGING_PATH);
+      return HTTP_ERROR;
+    }
+    LOG_INF("OTA", "Staged firmware matches authenticated GitHub SHA256");
+
+    struct FlashProgressCtx {
+      OtaUpdater* self;
+      ProgressCallback cb;
+      void* cbCtx;
+      size_t base;
+      int lastPct;
+    } flashCtx{this, onProgress, ctx, otaSize, -1};
+    auto flashProgress = +[](size_t written, size_t total, void* opaque) {
+      auto* p = static_cast<FlashProgressCtx*>(opaque);
+      p->self->processedSize = p->base + written;
+      if (!p->cb || total == 0) return;
+      const int pct = static_cast<int>(static_cast<uint64_t>(written) * 100 / total);
+      if (pct != p->lastPct) {
+        p->lastPct = pct;
+        p->cb(p->cbCtx);
+      }
+    };
+
+    const auto flashResult = firmware_flash::flashFromSdPath(OTA_STAGING_PATH, flashProgress, &flashCtx);
+    Storage.remove(OTA_STAGING_PATH);
+    if (flashResult != firmware_flash::Result::OK) {
+      LOG_ERR("OTA", "Staged firmware flash failed: %s", firmware_flash::resultName(flashResult));
+      return INTERNAL_UPDATE_ERROR;
+    }
+    processedSize = totalSize;
+    LOG_INF("OTA", "Authenticated staging OTA completed");
+    return OK;
+  };
+
   esp_err = esp_https_ota_begin(&ota_config, &ota_handle);
   if (esp_err != ESP_OK) {
-    LOG_DBG("OTA", "HTTP OTA Begin Failed: %s", esp_err_to_name(esp_err));
-    return INTERNAL_UPDATE_ERROR;
+    LOG_ERR("OTA", "HTTP OTA Begin Failed: %s; trying authenticated staging fallback", esp_err_to_name(esp_err));
+    return installViaAuthenticatedStaging();
   }
 
   int lastReportedPct = -1;
@@ -339,9 +501,10 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
   }
 
   if (esp_err != ESP_OK) {
-    LOG_ERR("OTA", "esp_https_ota_perform Failed: %s", esp_err_to_name(esp_err));
-    esp_https_ota_finish(ota_handle);
-    return HTTP_ERROR;
+    LOG_ERR("OTA", "esp_https_ota_perform Failed: %s; trying authenticated staging fallback", esp_err_to_name(esp_err));
+    esp_https_ota_abort(ota_handle);
+    processedSize = 0;
+    return installViaAuthenticatedStaging();
   }
 
   if (!esp_https_ota_is_complete_data_received(ota_handle)) {

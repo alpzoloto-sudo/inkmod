@@ -1,5 +1,27 @@
 # Changelog
 
+## [v1.1.7] - 2026-09-03
+
+### Added
+- Quick Sync for KOReader progress synchronization.
+- OPDS catalog caching and improved book downloads.
+- Browser-side cache preparation for EPUB, FB2 and supported ZIP books.
+
+### Changed
+- Improved FB2 synchronization accuracy.
+- Improved EPUB/FB2 image and cover handling.
+- Improved X3/X4 theme compatibility and stability.
+- Restored fast page-by-page scrolling in the file browser.
+
+### Fixed
+- Fixed FB2 empty lines, subtitles, poetry and citation synchronization.
+- Fixed EPUB SVG covers and some blank image pages.
+- Fixed EPUB/EPUB.ZIP covers in home themes.
+- Fixed X3 cover generation issues in Lyra themes.
+- Fixed large interface font layout issues.
+- Fixed X3 header date placement across themes.
+- Fixed font ZIP uploads containing Windows-style paths.
+- Improved file handle cleanup and backup rotation.
 ## [v1.1.6] - 2026-08-27
 
 ### Added

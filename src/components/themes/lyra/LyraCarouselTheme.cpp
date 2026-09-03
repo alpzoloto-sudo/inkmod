@@ -465,29 +465,72 @@ void LyraCarouselTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect,
     const int footerWidth = std::min(footerMaxWidth, centerCoverRect.width);
     const int footerX = centerCoverRect.x + (centerCoverRect.width - footerWidth) / 2;
 
+    char timeLabelBuf[48] = {0};
+    std::string timeLabel;
     if (hasStats) {
-      char buf[48];
-      formatCompactReadingTime(stats->totalReadingSeconds, buf, sizeof(buf));
-      const auto timeLabel = renderer.truncatedText(footerLabelFontId, buf, footerWidth, EpdFontFamily::REGULAR);
-      renderer.drawText(footerLabelFontId, footerX, infoY, timeLabel.c_str(), true, EpdFontFamily::REGULAR);
+      formatCompactReadingTime(stats->totalReadingSeconds, timeLabelBuf, sizeof(timeLabelBuf));
+      timeLabel = renderer.truncatedText(footerLabelFontId, timeLabelBuf, footerWidth, EpdFontFamily::REGULAR);
     }
 
+    char progressLabel[16] = {0};
+    float clampedProgress = 0.0f;
+    int progressLabelW = 0;
     if (hasProgress) {
-      const int progressBarY = infoY + (hasStats ? footerLabelLineHeight + kFooterLabelToBarGap : 0);
-      const float clampedProgress = std::clamp(progressPercent, 0.0f, 100.0f);
-      const int filledWidth = std::clamp(static_cast<int>((clampedProgress / 100.0f) * footerWidth), 0, footerWidth);
-      char progressLabel[16];
+      clampedProgress = std::clamp(progressPercent, 0.0f, 100.0f);
       snprintf(progressLabel, sizeof(progressLabel), "%.0f%%", clampedProgress);
+      progressLabelW = renderer.getTextWidth(footerLabelFontId, progressLabel, EpdFontFamily::REGULAR);
+    }
+
+    // With the large UI font the old layout used three vertical rows:
+    // reading time -> bar -> percentage. On both X3 and X4 the last row can
+    // fall outside the carousel tile and gets clipped. Compact the footer by
+    // putting time and percentage on one line whenever the legacy layout
+    // would not fit (or when the selected UI font is clearly enlarged).
+    const int legacyProgressBarY = infoY + (hasStats ? footerLabelLineHeight + kFooterLabelToBarGap : 0);
+    const int legacyBottom = hasProgress
+                                 ? legacyProgressBarY + kFooterProgressBarHeight + kFooterPercentTopGap +
+                                       footerLabelLineHeight
+                                 : infoY + (hasStats ? footerLabelLineHeight : 0);
+    const int footerBottomLimit = rect.y + rect.height - 2;
+    const bool largeUiFont = footerLabelLineHeight >= 18;
+    const bool compactFooter = hasProgress && (largeUiFont || legacyBottom > footerBottomLimit);
+
+    if (compactFooter) {
+      // Keep both labels inside the same row. Reserve the right side for the
+      // percentage before truncating the reading-time label.
+      const int percentX = std::max(footerX, footerX + footerWidth - progressLabelW - kFooterPercentRightInset);
+      if (hasStats) {
+        const int labelGap = 10;
+        const int timeMaxWidth = std::max(0, percentX - footerX - labelGap);
+        timeLabel = renderer.truncatedText(footerLabelFontId, timeLabelBuf, timeMaxWidth, EpdFontFamily::REGULAR);
+        renderer.drawText(footerLabelFontId, footerX, infoY, timeLabel.c_str(), true, EpdFontFamily::REGULAR);
+      }
+      renderer.drawText(footerLabelFontId, percentX, infoY, progressLabel, true, EpdFontFamily::REGULAR);
+
+      const int progressBarY = infoY + footerLabelLineHeight + kFooterLabelToBarGap;
+      const int filledWidth = std::clamp(static_cast<int>((clampedProgress / 100.0f) * footerWidth), 0, footerWidth);
       renderer.fillRectDither(footerX, progressBarY, footerWidth, kFooterProgressBarHeight, Color::LightGray);
       if (filledWidth > 0) {
         renderer.fillRect(footerX, progressBarY, filledWidth, kFooterProgressBarHeight, true);
       }
-      const int progressLabelW = renderer.getTextWidth(footerLabelFontId, progressLabel, EpdFontFamily::REGULAR);
-      const int progressLabelY = progressBarY + kFooterProgressBarHeight + kFooterPercentTopGap;
-      const int progressLabelX =
-          std::max(footerX, footerX + footerWidth - progressLabelW - kFooterPercentRightInset);
-      renderer.drawText(footerLabelFontId, progressLabelX, progressLabelY, progressLabel, true,
-                        EpdFontFamily::REGULAR);
+    } else {
+      if (hasStats) {
+        renderer.drawText(footerLabelFontId, footerX, infoY, timeLabel.c_str(), true, EpdFontFamily::REGULAR);
+      }
+
+      if (hasProgress) {
+        const int progressBarY = legacyProgressBarY;
+        const int filledWidth = std::clamp(static_cast<int>((clampedProgress / 100.0f) * footerWidth), 0, footerWidth);
+        renderer.fillRectDither(footerX, progressBarY, footerWidth, kFooterProgressBarHeight, Color::LightGray);
+        if (filledWidth > 0) {
+          renderer.fillRect(footerX, progressBarY, filledWidth, kFooterProgressBarHeight, true);
+        }
+        const int progressLabelY = progressBarY + kFooterProgressBarHeight + kFooterPercentTopGap;
+        const int progressLabelX =
+            std::max(footerX, footerX + footerWidth - progressLabelW - kFooterPercentRightInset);
+        renderer.drawText(footerLabelFontId, progressLabelX, progressLabelY, progressLabel, true,
+                          EpdFontFamily::REGULAR);
+      }
     }
 
     coverBufferStored = storeCoverBuffer();

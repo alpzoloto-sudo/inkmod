@@ -663,7 +663,7 @@ void enterDeepSleep(bool fromTimeout) {
     delay(POST_SLEEP_SCREEN_SETTLE_MS);
   }
 
-  if (gpio.deviceIsX3() && SETTINGS.autoBackupStats != 0) {
+  if (SETTINGS.autoBackupStats != 0) {
     ReadingStatsDateTime now;
     if (getCurrentLocalReadingStatsDateTime(now) && !backupGlobalStats(false)) {
       LOG_ERR("MAIN", "Automatic reading-stats backup failed before deep sleep");

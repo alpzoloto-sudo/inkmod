@@ -26,7 +26,7 @@ constexpr uint32_t SECTION_CACHE_MAGIC = 0x535843FF;  // bytes: 0xFF, "CXS"
 // spacing only on normal <p> elements while preserving publisher spacing on
 // headings and structural containers. Old section pages cannot be reused
 // safely because their vertical positions/page counts differ.
-constexpr uint8_t SECTION_FILE_VERSION = 59;
+constexpr uint8_t SECTION_FILE_VERSION = 61;
 constexpr uint32_t HEADER_SIZE = sizeof(SECTION_CACHE_MAGIC) + sizeof(uint8_t) + sizeof(int) + sizeof(float) +
                                  sizeof(bool) + sizeof(bool) + sizeof(uint8_t) + sizeof(uint16_t) + sizeof(uint16_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) + sizeof(uint8_t) + sizeof(bool) +
@@ -43,23 +43,24 @@ static_assert(sizeof(PageLutEntry) == 12, "Unexpected page spool record padding"
 constexpr uint32_t PAGE_SPOOL_NEXT_OFFSET = sizeof(uint32_t) + sizeof(uint16_t) + sizeof(uint16_t);
 
 
-// FB2 virtual chapters contain at most a small number of illustrations.  Decode
-// their PNGs to the on-SD 2-bit pixel cache before CSS/layout starts, while the
-// heap is still contiguous. PNGdec itself already streams scanlines, but its
-// fixed zlib + two-line workspace is ~48 KiB; waiting until an <img> is reached
-// can leave plenty of total free heap but no sufficiently large contiguous
-// block. Pre-caching here keeps image decoding out of the RAM-heavy paginator
-// without changing page boundaries or text layout.
+// Decode the first few inline illustrations to the on-SD 2-bit pixel cache
+// before CSS/layout starts, while the heap is still contiguous. This originally
+// existed only for FB2-origin packages, but real EPUBs hit the same failure mode:
+// by the time <img> is reached, CSS, ParsedText and page objects may have
+// fragmented the ESP32-C3 heap enough that PNG/JPEG decoding fails and an
+// image-only page becomes blank. Early preparation uses the exact same .pxc
+// format as ImageBlock, so normal rendering later only streams small rows from SD.
+// Page boundaries and CSS image sizing are unchanged: if the final layout size
+// differs from the screen-fitting precache size, ImageBlock scales the cached
+// 2-bit bitmap while rendering.
 bool collectHtmlImageSources(const std::string& htmlPath, std::vector<std::string>& sources) {
   HalFile source;
   if (!Storage.openFileForRead("SCT", htmlPath, source) || source.isDirectory()) return false;
 
-  // Never materialize an FB2 virtual chapter into one std::string here. Large
-  // chapters can easily be 50-200 KiB, while a long reading session often has
-  // only ~45-55 KiB as the largest contiguous block. The old whole-file
-  // allocation therefore rebooted the C3 before pagination even started.
-  // Scan the HTML in a bounded rolling window instead; only an unfinished <img>
-  // tag is carried across SD reads.
+  // Bounded rolling scan: recognize both XHTML <img src="..."> and the very
+  // common Calibre cover form <svg><image xlink:href="cover.jpg"/></svg>.
+  // Arbitrary SVG drawing is intentionally not interpreted; only raster assets
+  // referenced by SVG <image> are handed to the normal EPUB image pipeline.
   constexpr size_t READ_CHUNK = 4096;
   constexpr size_t MAX_TAG_CARRY = 8192;
   char chunk[READ_CHUNK];
@@ -67,54 +68,66 @@ bool collectHtmlImageSources(const std::string& htmlPath, std::vector<std::strin
   window.reserve(READ_CHUNK + 256);
 
   auto processWindow = [&](bool eof) {
-    size_t searchPos = 0;
     while (sources.size() < 8) {
-      const size_t img = window.find("<img", searchPos);
-      if (img == std::string::npos) {
-        // No partial tag: keep only the few bytes needed to detect a '<img'
-        // token split across two SD chunks.
-        if (!eof && window.size() > 3) {
-          window.erase(0, window.size() - 3);
+      const size_t img = window.find("<img");
+      const size_t svgImage = window.find("<image");
+      size_t tagStart = std::string::npos;
+      bool isSvgImage = false;
+      if (img != std::string::npos && (svgImage == std::string::npos || img < svgImage)) {
+        tagStart = img;
+      } else if (svgImage != std::string::npos) {
+        tagStart = svgImage;
+        isSvgImage = true;
+      }
+
+      if (tagStart == std::string::npos) {
+        // Keep enough tail to recognize '<image' or '<img' split across chunks.
+        if (!eof && window.size() > 6) {
+          window.erase(0, window.size() - 6);
         } else if (eof) {
           window.clear();
         }
         return;
       }
 
-      const size_t tagEnd = window.find('>', img + 4);
+      const size_t tagEnd = window.find('>', tagStart + (isSvgImage ? 6 : 4));
       if (tagEnd == std::string::npos) {
-        // Keep only the unfinished tag. Pathological multi-KiB tags are not
-        // useful to the reader and must not grow the heap without bound.
-        if (img > 0) window.erase(0, img);
+        if (tagStart > 0) window.erase(0, tagStart);
         if (window.size() > MAX_TAG_CARRY) {
-          LOG_ERR("SCT", "Skipping oversized <img> tag while scanning %s", htmlPath.c_str());
+          LOG_ERR("SCT", "Skipping oversized image tag while scanning %s", htmlPath.c_str());
           window.clear();
         }
         return;
       }
 
-      const size_t src = window.find("src", img + 4);
-      if (src != std::string::npos && src < tagEnd) {
-        size_t eq = window.find('=', src + 3);
-        if (eq != std::string::npos && eq < tagEnd) {
-          ++eq;
-          while (eq < tagEnd &&
-                 (window[eq] == ' ' || window[eq] == '\t' || window[eq] == '\r' || window[eq] == '\n')) {
-            ++eq;
-          }
-          if (eq < tagEnd && (window[eq] == '"' || window[eq] == '\'')) {
-            const char quote = window[eq++];
-            const size_t close = window.find(quote, eq);
-            if (close != std::string::npos && close <= tagEnd && close > eq) {
-              sources.emplace_back(window.substr(eq, close - eq));
-            }
-          }
-        }
-      }
+      auto readQuotedAttribute = [&](const char* key, size_t& valueStart, size_t& valueEnd) -> bool {
+        size_t pos = window.find(key, tagStart + 1);
+        if (pos == std::string::npos || pos >= tagEnd) return false;
+        size_t eq = window.find('=', pos + strlen(key));
+        if (eq == std::string::npos || eq >= tagEnd) return false;
+        ++eq;
+        while (eq < tagEnd && (window[eq] == ' ' || window[eq] == '\t' || window[eq] == '\r' || window[eq] == '\n')) ++eq;
+        if (eq >= tagEnd || (window[eq] != '"' && window[eq] != '\'')) return false;
+        const char quote = window[eq++];
+        const size_t close = window.find(quote, eq);
+        if (close == std::string::npos || close > tagEnd || close <= eq) return false;
+        valueStart = eq;
+        valueEnd = close;
+        return true;
+      };
 
-      // Discard everything through the completed tag before reading more data.
+      size_t valueStart = 0, valueEnd = 0;
+      bool found = false;
+      if (!isSvgImage) {
+        found = readQuotedAttribute("src", valueStart, valueEnd);
+      } else {
+        // SVG 1.1 (Calibre) uses xlink:href; SVG2 can use plain href.
+        found = readQuotedAttribute("xlink:href", valueStart, valueEnd) ||
+                readQuotedAttribute("href", valueStart, valueEnd);
+      }
+      if (found) sources.emplace_back(window.substr(valueStart, valueEnd - valueStart));
+
       window.erase(0, tagEnd + 1);
-      searchPos = 0;
     }
   };
 
@@ -129,14 +142,14 @@ bool collectHtmlImageSources(const std::string& htmlPath, std::vector<std::strin
   return true;
 }
 
-void precacheFb2PngImages(Epub* epub, const std::string& htmlPath, const std::string& localPath,
-                          const std::string& imageBasePath, GfxRenderer& renderer, const int fontId,
-                          const uint16_t viewportWidth, const uint16_t viewportHeight,
-                          const reader::ReaderCancellationToken* cancellationToken) {
-  if (!epub || !epub->isFb2Package()) return;
+void precacheSectionImages(Epub* epub, const std::string& htmlPath, const std::string& localPath,
+                           const std::string& imageBasePath, GfxRenderer& renderer, const int fontId,
+                           const uint16_t viewportWidth, const uint16_t viewportHeight,
+                           const reader::ReaderCancellationToken* cancellationToken) {
+  if (!epub) return;
 
   std::vector<std::string> sources;
-  sources.reserve(2);
+  sources.reserve(4);
   if (!collectHtmlImageSources(htmlPath, sources) || sources.empty()) return;
 
   const size_t slash = localPath.find_last_of('/');
@@ -147,17 +160,22 @@ void precacheFb2PngImages(Epub* epub, const std::string& htmlPath, const std::st
     if (cancellationToken && cancellationToken->isCancellationRequested()) return;
 
     const std::string resolvedPath = FsHelpers::normalisePath(FsHelpers::decodeUriEscapes(contentBase + src));
+    // Mirror ChapterHtmlSlimParser exactly: unsupported images do not consume
+    // an imageCounter slot, otherwise the early cache name would not match the
+    // ImageBlock path created during the real layout pass.
+    if (!ImageDecoderFactory::isFormatSupported(resolvedPath)) continue;
+
     const size_t dot = resolvedPath.rfind('.');
     const std::string ext = dot == std::string::npos ? std::string() : resolvedPath.substr(dot);
     const std::string cachedImagePath = imageBasePath + std::to_string(imageCounter++) + ext;
-    if (!FsHelpers::hasPngExtension(cachedImagePath)) continue;
-
     const size_t cacheDot = cachedImagePath.rfind('.');
     const std::string pixelCachePath = cacheDot == std::string::npos
                                            ? cachedImagePath + ".pxc"
                                            : cachedImagePath.substr(0, cacheDot) + ".pxc";
     if (Storage.exists(pixelCachePath.c_str())) continue;
 
+    // Materialize only this one source image from the EPUB/FB2 package. The
+    // extraction itself is chunked and never keeps the compressed entry in RAM.
     if (!Storage.exists(cachedImagePath.c_str())) {
       FsFile imageOut;
       if (!Storage.openFileForWrite("SCT", cachedImagePath, imageOut)) continue;
@@ -170,22 +188,35 @@ void precacheFb2PngImages(Epub* epub, const std::string& htmlPath, const std::st
       }
     }
 
-    // Glyph bitmaps are reconstructible and are the largest avoidable source
-    // of fragmentation before image decode. The low-memory streaming PNG path
-    // only needs the mandatory 32KB DEFLATE history plus row buffers, so allow
-    // pre-caching at substantially lower contiguous-heap levels than PNGdec.
+    // Reclaim rebuildable font glyphs before the decoder asks for its largest
+    // contiguous workspace. This is the important part of the FB2 strategy:
+    // decode while the section heap is still clean, not halfway through layout.
     renderer.trimSdCardFontForLowMemory(fontId);
     const auto before = MemoryBudget::snapshot();
-    if (before.freeHeap < 48U * 1024U || before.maxAllocHeap < 36U * 1024U) {
-      LOG_DBG("SCT", "Deferring FB2 PNG precache: free=%u maxAlloc=%u path=%s",
-              before.freeHeap, before.maxAllocHeap, cachedImagePath.c_str());
-      continue;
-    }
 
     ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(cachedImagePath);
     if (!decoder) continue;
     ImageDimensions dims{};
     if (!decoder->getDimensions(cachedImagePath, dims) || dims.width <= 0 || dims.height <= 0) continue;
+
+    // PNG has a low-memory streaming fallback whose fixed DEFLATE history fits
+    // with ~36 KiB contiguous heap. For JPEG and other supported formats use
+    // the same conservative gate already used by the normal EPUB image path.
+    const bool png = FsHelpers::hasPngExtension(cachedImagePath);
+    if (png) {
+      if (before.freeHeap < 48U * 1024U || before.maxAllocHeap < 36U * 1024U) {
+        LOG_DBG("SCT", "Deferring early PNG cache: free=%u maxAlloc=%u path=%s",
+                before.freeHeap, before.maxAllocHeap, cachedImagePath.c_str());
+        continue;
+      }
+    } else {
+      const auto req = MemoryBudget::epubInlineImageRequirementForSource(cachedImagePath.c_str());
+      if (!MemoryBudget::hasHeap(before, req.minFree, req.minMaxAlloc)) {
+        LOG_DBG("SCT", "Deferring early image cache: free=%u maxAlloc=%u need=%u/%u path=%s",
+                before.freeHeap, before.maxAllocHeap, req.minFree, req.minMaxAlloc, cachedImagePath.c_str());
+        continue;
+      }
+    }
 
     float scaleX = static_cast<float>(viewportWidth) / static_cast<float>(dims.width);
     float scaleY = static_cast<float>(viewportHeight) / static_cast<float>(dims.height);
@@ -203,15 +234,23 @@ void precacheFb2PngImages(Epub* epub, const std::string& htmlPath, const std::st
     config.useExactDimensions = true;
     config.cachePath = pixelCachePath;
 
-    LOG_INF("SCT", "Pre-caching FB2 PNG before layout: %s (%dx%d -> %dx%d, free=%u maxAlloc=%u)",
-            cachedImagePath.c_str(), dims.width, dims.height, outWidth, outHeight,
-            before.freeHeap, before.maxAllocHeap);
+    LOG_INF("SCT", "Pre-caching %s image before layout: %s (%dx%d -> %dx%d, free=%u maxAlloc=%u)",
+            epub->isFb2Package() ? "FB2" : "EPUB", cachedImagePath.c_str(), dims.width, dims.height, outWidth,
+            outHeight, before.freeHeap, before.maxAllocHeap);
     if (!decoder->decodeToFramebuffer(cachedImagePath, renderer, config)) {
       Storage.remove(pixelCachePath.c_str());
-      LOG_ERR("SCT", "FB2 PNG pre-cache failed: %s", cachedImagePath.c_str());
+      LOG_ERR("SCT", "Early image cache failed; normal on-display retry remains available: %s",
+              cachedImagePath.c_str());
+      continue;
     }
+
+    LOG_DBG("SCT", "Early image cache ready: %s", pixelCachePath.c_str());
+    // Yield between illustrations so opening an image-heavy chapter does not
+    // starve Wi-Fi/input/watchdog work. No screen refresh is performed here.
+    vTaskDelay(1);
   }
 }
+
 }  // namespace
 
 uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
@@ -570,12 +609,15 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   LOG_DBG("SCT", "Prepared HTML source %s (%d bytes, free=%u, maxAlloc=%u)", sourceHtmlPath.c_str(), fileSize,
           ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 
-  // FB2 PNG illustrations are decoded before CSS/layout consumes and fragments
-  // the heap. This only creates the same .pxc cache the normal image path
-  // would create later; pagination and image sizing remain unchanged.
-  const std::string earlyImageBasePath = epub->getCachePath() + "/img_" + std::to_string(spineIndex) + "_";
-  precacheFb2PngImages(epub.get(), sourceHtmlPath, localPath, earlyImageBasePath, renderer, fontId, viewportWidth,
-                       viewportHeight, cancellationToken);
+  // Prepare inline images before CSS/layout consumes and fragments the heap.
+  // This is the same SD pixel-cache strategy that made FB2 illustrated books
+  // reliable, now also applied to real EPUBs. It is skipped entirely when the
+  // user disabled image rendering.
+  if (imageRendering != 1) {
+    const std::string earlyImageBasePath = epub->getCachePath() + "/img_" + std::to_string(spineIndex) + "_";
+    precacheSectionImages(epub.get(), sourceHtmlPath, localPath, earlyImageBasePath, renderer, fontId, viewportWidth,
+                          viewportHeight, cancellationToken);
+  }
 
   if (Storage.exists(tmpSectionPath.c_str())) {
     Storage.remove(tmpSectionPath.c_str());

@@ -15,6 +15,7 @@
 #include <cstdio>
 
 #include "BookActions.h"
+#include "util/BookArchiveUtils.h"
 #include "InkMODSettings.h"
 #include "FileBrowserActionActivity.h"
 #include "MappedInputManager.h"
@@ -159,6 +160,18 @@ bool hasThumbnailPlaceholder(const std::string& coverBmpPath) {
   return coverBmpPath.find("[WIDTH]") != std::string::npos || coverBmpPath.find("[HEIGHT]") != std::string::npos;
 }
 
+bool resolveRecentEpubPath(const RecentBook& book, std::string& epubPath) {
+  if (FsHelpers::hasEpubExtension(book.path)) {
+    epubPath = book.path;
+    return true;
+  }
+  if (FsHelpers::checkFileExtension(book.path, ".zip") &&
+      detectBookArchiveType(book.path) == BookArchiveType::WrappedEpub) {
+    return extractWrappedEpub(book.path, epubPath);
+  }
+  return false;
+}
+
 bool needsCoverThumbGeneration(const RecentBook& book, const std::string& thumbPath) {
   if (thumbPath.empty() || !Storage.exists(thumbPath.c_str())) {
     return true;
@@ -197,8 +210,9 @@ void calculateCoverFillCrop(const Bitmap& bitmap, float& cropX, float& cropY) {
 }
 
 std::string getReusableCoverPath(const RecentBook& book) {
-  if (FsHelpers::hasEpubExtension(book.path)) {
-    return Epub(book.path, "/.inkmod").getThumbBmpPath();
+  std::string epubPath;
+  if (resolveRecentEpubPath(book, epubPath)) {
+    return Epub(epubPath, "/.inkmod").getThumbBmpPath();
   }
   if (FsHelpers::hasXtcExtension(book.path)) {
     return Xtc(book.path, "/.inkmod").getThumbBmpPath();
@@ -207,7 +221,16 @@ std::string getReusableCoverPath(const RecentBook& book) {
 }
 
 void ensureReusableCoverPath(RecentBook& book) {
-  if (book.coverBmpPath.empty() || hasThumbnailPlaceholder(book.coverBmpPath)) {
+  if (book.coverBmpPath.empty()) {
+    std::string epubPath;
+    if (!resolveRecentEpubPath(book, epubPath)) return;
+    const std::string reusablePath = Epub(epubPath, "/.inkmod").getThumbBmpPath();
+    if (reusablePath.empty()) return;
+    book.coverBmpPath = reusablePath;
+    updateRecentBookCoverPath(book, reusablePath);
+    return;
+  }
+  if (hasThumbnailPlaceholder(book.coverBmpPath)) {
     return;
   }
 
@@ -275,8 +298,9 @@ void RecentBooksGridActivity::loadPageCovers(int pageStart) {
     const std::string coverPath =
         book.coverBmpPath.empty() ? "" : UITheme::getCoverThumbPath(book.coverBmpPath, COVER_WIDTH, COVER_HEIGHT);
     if (needsCoverThumbGeneration(book, coverPath)) {
-      if (FsHelpers::hasEpubExtension(book.path)) {
-        Epub epub(book.path, "/.inkmod");
+      std::string epubPath;
+      if (resolveRecentEpubPath(book, epubPath)) {
+        Epub epub(epubPath, "/.inkmod");
         if (epub.load(false, true)) {
           if (!showingLoading) {
             showingLoading = true;
@@ -288,8 +312,8 @@ void RecentBooksGridActivity::loadPageCovers(int pageStart) {
             book.coverBmpPath = reusablePath;
             updateRecentBookCoverPath(book, reusablePath);
           } else {
-            updateRecentBookCoverPath(book, "");
-            book.coverBmpPath = "";
+            LOG_ERR("RBGA", "EPUB thumbnail generation failed; keeping cover source for retry: %s",
+                    book.path.c_str());
           }
         }
       } else if (FsHelpers::hasXtcExtension(book.path)) {

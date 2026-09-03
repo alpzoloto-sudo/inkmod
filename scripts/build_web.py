@@ -80,7 +80,7 @@ def read(*parts):
         return f.read()
 
 def emit_gzip(path, ident, text):
-    gz = gzip.compress(text.encode("utf-8"), compresslevel=9)
+    gz = gzip.compress(text.encode("utf-8"), compresslevel=9, mtime=0)
     emit_header(path, ident, gz, original_len=len(text))
     return len(text), len(gz)
 
@@ -90,17 +90,11 @@ logo_png = open(os.path.join(WEB, "assets", "logo.png"), "rb").read()
 v = hashlib.sha1(style_css.encode("utf-8") + logo_png).hexdigest()[:8]
 
 base = read(WEB, "templates", "base.html")
-classic_book_js = read(WEB, "assets", "classic-book.js").strip()
 
 for slug, (ident, title, active, head_extra) in PAGES.items():
     page_css = read(WEB, "pages", f"{slug}.css")
     page_html = read(WEB, "pages", f"{slug}.html")
     page_js = read(WEB, "pages", f"{slug}.js").strip()
-    # The file-manager owns all browser-side EPUB/FB2 conversion and prepared
-    # cache generation. Append the shared Classic Book wrapper after files.js
-    # so it can wrap those functions without duplicating the large converter.
-    if slug == "files":
-        page_js = page_js + "\n\n" + classic_book_js
     script = f"<script>\n{page_js}\n</script>" if page_js else ""
     values = {
         "title": title, "v": v, "head_extra": head_extra,

@@ -16,6 +16,10 @@ struct InkMODPosition {
   uint16_t liIndex = 0;            // Running <li> count at the matched XPath element
   bool hasLiIndex = false;         // True when target element is <li> and liIndex was resolved
   char xpathAnchorId[64] = {};     // First <a id> captured inside the matched XPath element
+  std::string topTextSnippet;       // First visible words on the rendered X4 page (sync-only, not persisted)
+  uint32_t paragraphCharOffset = 0; // Exact source paragraph char offset when available
+  uint32_t paragraphCharCount = 0;  // Visible chars in that paragraph (for page-range refinement)
+  bool hasParagraphCharOffset = false;
 };
 
 /**
@@ -62,6 +66,14 @@ class ProgressMapper {
   static InkMODPosition toInkMOD(const std::shared_ptr<Epub>& epub, const KOReaderPosition& koPos,
                                          int currentSpineIndex = -1, int totalPagesInCurrentSpine = 0);
 
+  // FB2-aware reverse mapping. CREngine DocFragment[N] is an internal DOM
+  // fragment index, not a stable FB2 chapter number. The mapper therefore
+  // resolves a logical source section from structural hints + text-weighted
+  // progress and learns a per-book DocFragment<->section calibration.
+  static InkMODPosition toInkMODFb2(const std::shared_ptr<Epub>& epub, const KOReaderPosition& koPos,
+                                    const std::string& packageCachePath, int currentSpineIndex = -1,
+                                    int totalPagesInCurrentSpine = 0);
+
  private:
   /**
    * Generate a fallback XPath by streaming the spine item's XHTML and resolving
@@ -77,4 +89,12 @@ class ProgressMapper {
   // conservative crengine-compatible FB2 XPointer instead of publishing the
   // synthetic XHTML ancestry.
   static std::string generateFb2CompatibleXPath(const InkMODPosition& pos, int originalSectionOrdinal);
+
+  // FB2 source-aware position. Converts inkMOD's virtual slice position into
+  // a source-section paragraph and uses the per-book CREngine calibration to
+  // emit the DocFragment number KOReader expects.
+  static std::string generateFb2SourceXPath(const std::shared_ptr<Epub>& epub,
+                                             const std::string& packageCachePath,
+                                             const InkMODPosition& pos,
+                                             int originalSectionOrdinal);
 };

@@ -8,6 +8,14 @@ enum class DocumentMatchMethod : uint8_t {
   BINARY = 1,    // Match by partial MD5 of file content (more accurate, but files must be identical)
 };
 
+// Mirrors current CrossPoint sync semantics. New configurations use SMART;
+// existing inkMOD credential files are migrated to ASK_EVERY_TIME so behavior
+// does not silently change after updating firmware.
+enum class KOReaderSyncBehavior : uint8_t {
+  ASK_EVERY_TIME = 0,
+  SMART = 1,
+};
+
 /**
  * Singleton class for storing KOReader sync credentials on the SD card.
  * Passwords are XOR-obfuscated with the device's unique hardware MAC address
@@ -21,6 +29,8 @@ class KOReaderCredentialStore {
   std::string password;
   std::string serverUrl;                                            // Custom sync server URL (empty = default)
   DocumentMatchMethod matchMethod = DocumentMatchMethod::FILENAME;  // Default to filename for compatibility
+  bool sendMetadata = false;
+  KOReaderSyncBehavior syncBehavior = KOReaderSyncBehavior::SMART;
 
   // Private constructor for singleton
   KOReaderCredentialStore() = default;
@@ -63,11 +73,17 @@ class KOReaderCredentialStore {
   // CrossPoint sync supports the extended rich-position object used by the
   // CrossInk KOReader client. Keep this as a pure URL capability check so the
   // existing inkMOD credential file format and default server stay untouched.
-  bool usesCrossPointSyncServer() const { return getBaseUrl() == "https://sync.crosspointreader.com"; }
+  bool usesCrossPointSyncServer() const;
 
   // Document matching method
   void setMatchMethod(DocumentMatchMethod method);
   DocumentMatchMethod getMatchMethod() const { return matchMethod; }
+
+  void setSendMetadata(bool enabled) { sendMetadata = enabled; }
+  bool getSendMetadata() const { return sendMetadata; }
+
+  void setSyncBehavior(KOReaderSyncBehavior behavior) { syncBehavior = behavior; }
+  KOReaderSyncBehavior getSyncBehavior() const { return syncBehavior; }
 };
 
 // Helper macro to access credential store

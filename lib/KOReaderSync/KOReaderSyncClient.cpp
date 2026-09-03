@@ -191,15 +191,9 @@ KOReaderSyncClient::Error KOReaderSyncClient::authenticate() {
 
   LOG_DBG("KOSync", "Auth response: %d", httpCode);
 
-  if (httpCode == 200) {
-    String responseBody = http.getString();
-    http.end();
-    return validateAuthResponse(responseBody.c_str());
-  }
-
   http.end();
 
-  // KOSync-compatible implementations can use other successful 2xx codes.
+  // Match current CrossPoint: any 2xx is a valid authentication result.
   if (isSuccessfulHttpCode(httpCode)) return OK;
   if (httpCode == 401) return AUTH_FAILED;
   if (httpCode < 0) return NETWORK_ERROR;
@@ -218,18 +212,10 @@ KOReaderSyncClient::Error KOReaderSyncClient::authenticate() {
 
   LOG_DBG("KOSync", "Auth response: %d", httpCode);
 
-  if (httpCode <= 0) {
-    http.end();
-    return NETWORK_ERROR;
-  }
-  if (httpCode == 200) {
-    const Error result = validateAuthResponse(http.getString().c_str());
-    http.end();
-    return result;
-  }
   http.end();
-  // KOSync-compatible implementations use different successful 2xx codes.
-  // Keep CrossInk's validation of the reference server's 200 JSON response.
+  if (httpCode <= 0) return NETWORK_ERROR;
+  // Current CrossPoint treats every 2xx response as successful authentication.
+  // Several compatible servers return 200/204 without the legacy JSON body.
   if (isSuccessfulHttpCode(httpCode)) return OK;
   if (httpCode == 401) return AUTH_FAILED;
   return SERVER_ERROR;

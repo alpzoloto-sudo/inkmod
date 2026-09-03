@@ -1,6 +1,7 @@
 #include "BookCacheUtils.h"
 
 #include <Epub.h>
+#include <Fb2.h>
 #include <FsHelpers.h>
 #include <Logging.h>
 #include <Txt.h>
@@ -38,9 +39,22 @@ constexpr size_t MAX_CACHE_CLEAR_PRESERVED_FILES = MAX_PRESERVED_CACHE_FILES > s
                                                        ? MAX_PRESERVED_CACHE_FILES
                                                        : std::size(BOOK_STATS_FILES);
 
+bool hasFb2LikeExtension(const std::string& path) {
+  std::string lower = path;
+  for (char& c : lower) {
+    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+  }
+  return (lower.size() >= 4 && lower.compare(lower.size() - 4, 4, ".fb2") == 0) ||
+         (lower.size() >= 8 && lower.compare(lower.size() - 8, 8, ".fb2.zip") == 0) ||
+         (lower.size() >= 4 && lower.compare(lower.size() - 4, 4, ".zip") == 0);
+}
+
 std::string getBookCachePath(const std::string& path) {
   if (FsHelpers::hasEpubExtension(path)) {
     return Epub(path, "/.inkmod").getCachePath();
+  }
+  if (hasFb2LikeExtension(path)) {
+    return Fb2(path, "/.inkmod").getCachePath();
   }
   if (FsHelpers::hasXtcExtension(path)) {
     return Xtc(path, "/.inkmod").getCachePath();
@@ -131,6 +145,9 @@ bool preserveUserStateFiles(const std::string& cachePath, const PreservedCacheFi
 bool clearBookCacheForPath(const std::string& path) {
   if (FsHelpers::hasEpubExtension(path)) {
     return Epub(path, "/.inkmod").clearCache();
+  }
+  if (hasFb2LikeExtension(path)) {
+    return Fb2(path, "/.inkmod").clearCache();
   }
   if (FsHelpers::hasXtcExtension(path)) {
     return Xtc(path, "/.inkmod").clearCache();

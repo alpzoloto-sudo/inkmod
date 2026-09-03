@@ -2,20 +2,34 @@
 #include <Print.h>
 #include <expat.h>
 
+#include <array>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 
-constexpr size_t MAX_OPDS_FEED_ENTRIES = 50;
+constexpr size_t MAX_OPDS_FEED_ENTRIES = 32;
 
 /**
  * Type of OPDS entry.
  */
 enum class OpdsEntryType {
   NAVIGATION,  // Link to another catalog
-  BOOK         // Downloadable book
+  BOOK,        // Downloadable book
+  SEARCH,      // Synthetic "Search" row inserted by the browser
+  REFRESH,     // Synthetic "Refresh catalog" row inserted by the browser
+  INFO         // Metadata-only OPDS entry (author/book information)
 };
 
-enum class OpdsParserError { NONE, NO_ENTRY_BUFFER, INVALID_INPUT, PARSER_MEMORY, BUFFER_MEMORY, XML_PARSE };
+enum class OpdsBookFormat : uint8_t { EPUB, FB2, FB2_ZIP };
+
+struct OpdsAcquisition {
+  OpdsBookFormat format = OpdsBookFormat::EPUB;
+  std::string href;
+};
+
+constexpr size_t MAX_OPDS_ACQUISITIONS = 3;
+
+enum class OpdsParserError { NONE, NO_ENTRY_BUFFER, INVALID_INPUT, PARSER_MEMORY, BUFFER_MEMORY, XML_PARSE, SINK_ERROR };
 
 /**
  * Represents an entry from an OPDS feed (either a navigation link or a book).
@@ -24,8 +38,12 @@ struct OpdsEntry {
   OpdsEntryType type = OpdsEntryType::NAVIGATION;
   std::string title;
   std::string author;  // Only for books
-  std::string href;    // Navigation URL or epub download URL
+  std::string description;  // Short OPDS summary/content text
+  std::string href;    // Primary navigation/download URL (legacy compatibility)
   std::string id;
+  std::string navigationHref;  // Optional details/navigation link for a publication
+  std::array<OpdsAcquisition, MAX_OPDS_ACQUISITIONS> acquisitions{};
+  uint8_t acquisitionCount = 0;
 };
 
 // Legacy alias for backward compatibility
@@ -126,7 +144,10 @@ class OpdsBookView {
  */
 class OpdsParser final : public Print {
  public:
+  using EntrySink = bool (*)(void* context, OpdsEntry&& entry);
+
   OpdsParser(OpdsEntry* entries, size_t entryCapacity);
+  OpdsParser(EntrySink sink, void* sinkContext);
   template <size_t N>
   explicit OpdsParser(OpdsEntry (&entries)[N]) : OpdsParser(entries, N) {}
   ~OpdsParser();
@@ -170,6 +191,7 @@ class OpdsParser final : public Print {
   static void XMLCALL endElement(void* userData, const XML_Char* name);
   static void XMLCALL characterData(void* userData, const XML_Char* s, int len);
   bool resetXmlParser();
+  bool protectHeap(size_t requested = 0);
 
   std::string searchTemplate;
   std::string nextPageUrl;
@@ -180,6 +202,8 @@ class OpdsParser final : public Print {
   XML_Parser parser = nullptr;
   OpdsEntry* entries = nullptr;
   size_t entryCapacity = 0;
+  EntrySink entrySink = nullptr;
+  void* sinkContext = nullptr;
   size_t entryCount = 0;
   OpdsEntry currentEntry;
   std::string currentText;
@@ -190,8 +214,12 @@ class OpdsParser final : public Print {
   bool inAuthor = false;
   bool inAuthorName = false;
   bool inId = false;
+  bool inSummary = false;
+  bool inContent = false;
+  bool discardCurrentEntry = false;
 
   bool errorOccured = false;
   OpdsParserError errorReason = OpdsParserError::NONE;
   bool truncated = false;
+  bool saturated = false;  // entry buffer is full; stop feeding Expat to protect heap
 };

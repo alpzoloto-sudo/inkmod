@@ -116,6 +116,25 @@ class Fb2 {
   // for CREngine/KOReader FB2 XPointer generation. Returns a 1-based ordinal.
   static bool getOriginalSectionOrdinal(const std::string& packageCachePath, int chapterIndex, int& ordinal);
 
+  // Reverse mapping for KOReader/CREngine FB2 XPointers. DocFragment[N] refers
+  // to the Nth original FB2 <section>, while inkMOD may split one source
+  // section into several virtual spines. Returns the inclusive virtual-spine
+  // range corresponding to a 1-based original section ordinal.
+  static bool getChapterRangeForOriginalSectionOrdinal(const std::string& packageCachePath, int ordinal,
+                                                        int& startIndex, int& endIndex);
+
+  // Exact source-document section hierarchy used by KOReader/CREngine for FB2.
+  // Example: body=1, path={2,7} corresponds to
+  // /FictionBook/body/section[2]/section[7].  Unlike DocFragment indices or
+  // page percentages, this coordinate is stable across devices and layouts.
+  static bool getSourceSectionPath(const std::string& packageCachePath, int originalSectionOrdinal,
+                                   uint16_t& bodyIndex, std::vector<uint16_t>& sectionPath);
+  static bool findOriginalSectionBySourcePath(const std::string& packageCachePath, uint16_t bodyIndex,
+                                              const std::vector<uint16_t>& sectionPath,
+                                              int& originalSectionOrdinal);
+  static std::string buildCanonicalSourceSectionXPath(const std::string& packageCachePath,
+                                                       int originalSectionOrdinal);
+
   // Given the path to a converted package (e.g. ".../package.epub"),
   // returns the real original .fb2/.zip location recorded in
   // ORIGINAL_PATH_MARKER_FILE alongside it, or packagePath unchanged if

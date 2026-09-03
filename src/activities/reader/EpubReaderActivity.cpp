@@ -89,6 +89,55 @@ constexpr uint16_t FB2_LOGICAL_PAGES_VERSION = 1;
 constexpr uint32_t FB2_LAYOUT_SEMANTICS_GENERATION = 62;
 constexpr char FB2_LOGICAL_PAGES_FILE_NAME[] = "/logical_pages.bin";
 
+constexpr uint32_t BOOK_WIDE_PAGES_MAGIC = 0x47505742U;  // "BWPG"
+constexpr uint16_t BOOK_WIDE_PAGES_VERSION = 1;
+constexpr char BOOK_WIDE_PAGES_FILE_NAME[] = "/book_wide_pages.bin";
+
+struct BookWidePagesRecord {
+  uint32_t magic;
+  uint16_t version;
+  uint16_t reserved;
+  uint32_t layoutSignature;
+  int32_t totalPages;
+  uint32_t sampleBytes;
+  int32_t samplePages;
+};
+
+bool loadBookWidePagesTotal(const std::shared_ptr<Epub>& epub, const uint32_t layoutSignature,
+                            int& totalPagesOut) {
+  if (!epub) return false;
+  const std::string path = epub->getCachePath() + BOOK_WIDE_PAGES_FILE_NAME;
+  if (!Storage.exists(path.c_str())) return false;
+
+  HalFile file;
+  if (!Storage.openFileForRead("ERS", path, file)) return false;
+  BookWidePagesRecord record{};
+  const bool ok = file.read(&record, sizeof(record)) == static_cast<int>(sizeof(record));
+  file.close();
+  if (!ok || record.magic != BOOK_WIDE_PAGES_MAGIC || record.version != BOOK_WIDE_PAGES_VERSION ||
+      record.layoutSignature != layoutSignature || record.totalPages <= 0) {
+    return false;
+  }
+  totalPagesOut = record.totalPages;
+  return true;
+}
+
+bool saveBookWidePagesTotal(const std::shared_ptr<Epub>& epub, const uint32_t layoutSignature,
+                            const int totalPages, const uint32_t sampleBytes, const int samplePages) {
+  if (!epub || totalPages <= 0 || sampleBytes == 0 || samplePages <= 0) return false;
+  const std::string path = epub->getCachePath() + BOOK_WIDE_PAGES_FILE_NAME;
+  if (Storage.exists(path.c_str())) Storage.remove(path.c_str());
+
+  HalFile file = Storage.open(path.c_str(), O_WRONLY | O_CREAT);
+  if (!file) return false;
+  const BookWidePagesRecord record{BOOK_WIDE_PAGES_MAGIC, BOOK_WIDE_PAGES_VERSION, 0,
+                                   layoutSignature, totalPages, sampleBytes, samplePages};
+  const bool ok = file.write(&record, sizeof(record)) == sizeof(record) && file.sync();
+  file.close();
+  if (!ok) Storage.remove(path.c_str());
+  return ok;
+}
+
 
 std::string readerImagePixelCachePath(const std::string& imagePath) {
   const size_t dot = imagePath.rfind('.');
@@ -1425,7 +1474,7 @@ void EpubReaderActivity::loop() {
       longPressMenuHandled = false;
       if (pendingLongMenuSyncOnRelease) {
         pendingLongMenuSyncOnRelease = false;
-        executeReaderQuickAction(InkMODSettings::LONG_MENU_SYNC_PROGRESS);
+        executeReaderQuickAction(pendingLongMenuSyncAction);
       }
       return;
     }
@@ -1491,6 +1540,15 @@ void EpubReaderActivity::loop() {
       RenderLock lock(*this);
       currentPage = section ? section->currentPage + 1 : 0;
       totalPages = section ? section->pageCount : 0;
+      if (section && !epub->isFb2Package()) {
+        int tocIndex = -1;
+        int chapterStart = 0;
+        int chapterEnd = section->pageCount - 1;
+        if (resolveCurrentEpubTocPageWindow(section->currentPage, tocIndex, chapterStart, chapterEnd)) {
+          currentPage = section->currentPage - chapterStart + 1;
+          totalPages = chapterEnd - chapterStart + 1;
+        }
+      }
       bmSpine = static_cast<uint16_t>(currentSpineIndex);
       bmProgress =
           (section && section->pageCount > 0) ? static_cast<float>(section->currentPage) / section->pageCount : 0.0f;
@@ -1546,7 +1604,7 @@ void EpubReaderActivity::loop() {
     if (pendingLongBackSyncOnRelease) {
       pendingLongBackSyncOnRelease = false;
       BootLog::step("SYNC", "long-press Back released; starting deferred progress sync");
-      executeReaderQuickAction(InkMODSettings::LONG_MENU_SYNC_PROGRESS);
+      executeReaderQuickAction(pendingLongBackSyncAction);
     }
     return;
   }
@@ -1555,8 +1613,11 @@ void EpubReaderActivity::loop() {
       mappedInput.getHeldTime() >= ReaderUtils::GO_HOME_MS) {
     longPressBackHandled = true;
     BootLog::stepf("SYNC", "long-press Back triggered, action=%d", static_cast<int>(SETTINGS.longPressBackAction));
-    if (SETTINGS.longPressBackAction == InkMODSettings::LONG_MENU_SYNC_PROGRESS) {
+    if (SETTINGS.longPressBackAction == InkMODSettings::LONG_MENU_SYNC_PROGRESS ||
+        SETTINGS.longPressBackAction == InkMODSettings::LONG_MENU_QUICK_SYNC ||
+        SETTINGS.longPressBackAction == InkMODSettings::LONG_MENU_QUICK_SYNC_LEGACY_ALT) {
       // Do not enter Wi-Fi/KOReader sync while Back is physically held.
+      pendingLongBackSyncAction = static_cast<InkMODSettings::LONG_PRESS_MENU_ACTION>(SETTINGS.longPressBackAction);
       pendingLongBackSyncOnRelease = true;
       BootLog::step("SYNC", "progress sync armed; waiting for Back release");
     } else {
@@ -1724,6 +1785,54 @@ void EpubReaderActivity::loop() {
   }
 
   if (skipChapter) {
+    // Ordinary EPUB chapter boundaries come from NCX/nav anchors, not from
+    // spine files. A single contentN.html may contain several real chapters.
+    // Prefer those TOC targets; FB2 and split-EPUB internal chunks keep the
+    // existing logical-spine behaviour.
+    if (section && epub && !epub->isFb2Package()) {
+      int currentToc = -1;
+      int chapterStart = 0;
+      int chapterEnd = section->pageCount - 1;
+      if (resolveCurrentEpubTocPageWindow(section->currentPage, currentToc, chapterStart, chapterEnd)) {
+        int targetToc = currentToc;
+        if (nextTriggered) {
+          targetToc = -1;
+          for (int i = currentToc + 1; i < epub->getTocItemsCount(); ++i) {
+            if (epub->getTocItem(i).spineIndex >= 0) {
+              targetToc = i;
+              break;
+            }
+          }
+        } else if (section->currentPage <= chapterStart) {
+          targetToc = -1;
+          for (int i = currentToc - 1; i >= 0; --i) {
+            if (epub->getTocItem(i).spineIndex >= 0) {
+              targetToc = i;
+              break;
+            }
+          }
+        }
+
+        if (targetToc >= 0) {
+          const auto target = epub->getTocItem(targetToc);
+          {
+            RenderLock lock(*this);
+            clearLogicalPageCarry();
+            currentSpineIndex = target.spineIndex;
+            pendingAnchor = target.anchor;
+            nextPageNumber = 0;
+            pendingPageJump = 0;
+            section.reset();
+            logicalStatusCacheSpineIndex = -1;
+            logicalStatusCacheLocalPageCount = -1;
+            invalidateEpubTocPageWindow();
+          }
+          requestUpdate();
+          return;
+        }
+      }
+    }
+
     int targetSpine = logicalChapterSkipTarget(*epub, currentSpineIndex, nextTriggered);
     if (!nextTriggered && section) {
       int logicalStart = currentSpineIndex;
@@ -1740,11 +1849,13 @@ void EpubReaderActivity::loop() {
       RenderLock lock(*this);
       clearLogicalPageCarry();
       currentSpineIndex = targetSpine;
+      pendingAnchor.clear();
       nextPageNumber = 0;
       pendingPageJump = 0;
       section.reset();
       logicalStatusCacheSpineIndex = -1;
       logicalStatusCacheLocalPageCount = -1;
+      invalidateEpubTocPageWindow();
     }
     requestUpdate();
     return;
@@ -1982,10 +2093,19 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
   switch (action) {
     case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER: {
       const int spineIdx = currentSpineIndex;
+      int tocIdx = epub->getTocIndexForSpineIndex(currentSpineIndex);
+      if (section && !epub->isFb2Package()) {
+        int chapterStart = 0;
+        int chapterEnd = section->pageCount - 1;
+        int resolvedToc = -1;
+        if (resolveCurrentEpubTocPageWindow(section->currentPage, resolvedToc, chapterStart, chapterEnd)) {
+          tocIdx = resolvedToc;
+        }
+      }
       const std::string path = epub->getPath();
       pauseReadingPaceTimer("chapter_selection");
       startActivityForResult(
-          std::make_unique<EpubReaderChapterSelectionActivity>(renderer, mappedInput, epub, path, spineIdx),
+          std::make_unique<EpubReaderChapterSelectionActivity>(renderer, mappedInput, epub, path, spineIdx, tocIdx),
           [this](const ActivityResult& result) {
             if (!result.isCancelled) {
               returnToReaderMenuOnBack = false;
@@ -1994,6 +2114,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
 
               currentSpineIndex = chapterResult.spineIndex;
               clearLogicalPageCarry();
+              invalidateEpubTocPageWindow();
 
               // If anchor is not empty, it will be used later to calculate the page number.
               pendingAnchor = chapterResult.anchor;
@@ -2364,9 +2485,11 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
 
         pauseReadingPaceTimer("sync_progress");
         BootLog::step("SYNC", "constructing KOReaderSyncActivity + replaceActivity");
+        const auto syncMode = static_cast<KOReaderSyncActivity::Mode>(pendingKOReaderSyncMode);
+        pendingKOReaderSyncMode = 0;
         activityManager.replaceActivity(std::make_unique<KOReaderSyncActivity>(
             renderer, mappedInput, savedEpubPath, currentSpineIndex, currentPage, totalPages, std::move(localKoPos),
-            std::move(localChapterName), paragraphIndex));
+            std::move(localChapterName), paragraphIndex, syncMode));
       }
       break;
     }
@@ -2724,9 +2847,12 @@ void EpubReaderActivity::executeReaderQuickAction(InkMODSettings::LONG_PRESS_MEN
       requestUpdate();
       break;
     case InkMODSettings::LONG_MENU_SYNC_PROGRESS:
-      // Reuse the exact same implementation as Menu -> Sync. Long-press
-      // front-button handlers defer this call until the physical button is
-      // released, avoiding the old held-button/network transition race.
+      pendingKOReaderSyncMode = static_cast<uint8_t>(KOReaderSyncActivity::Mode::INTERACTIVE);
+      onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction::SYNC);
+      break;
+    case InkMODSettings::LONG_MENU_QUICK_SYNC:
+    case InkMODSettings::LONG_MENU_QUICK_SYNC_LEGACY_ALT:
+      pendingKOReaderSyncMode = static_cast<uint8_t>(KOReaderSyncActivity::Mode::AUTO);
       onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction::SYNC);
       break;
     case InkMODSettings::LONG_MENU_MARK_FINISHED: {
@@ -2985,7 +3111,10 @@ bool EpubReaderActivity::executeLongPowerButtonAction() {
 }
 
 void EpubReaderActivity::executeLongPressMenuAction() {
-  if (SETTINGS.longPressMenuAction == InkMODSettings::LONG_MENU_SYNC_PROGRESS) {
+  if (SETTINGS.longPressMenuAction == InkMODSettings::LONG_MENU_SYNC_PROGRESS ||
+      SETTINGS.longPressMenuAction == InkMODSettings::LONG_MENU_QUICK_SYNC ||
+      SETTINGS.longPressMenuAction == InkMODSettings::LONG_MENU_QUICK_SYNC_LEGACY_ALT) {
+    pendingLongMenuSyncAction = static_cast<InkMODSettings::LONG_PRESS_MENU_ACTION>(SETTINGS.longPressMenuAction);
     pendingLongMenuSyncOnRelease = true;
     BootLog::step("SYNC", "progress sync armed; waiting for Menu release");
     return;
@@ -3200,6 +3329,121 @@ void EpubReaderActivity::rememberLogicalForwardCarry() {
 void EpubReaderActivity::clearLogicalPageCarry() {
   logicalPageCarryNextSpine = -1;
   logicalPageCarryPagesBefore = 0;
+}
+
+void EpubReaderActivity::invalidateEpubTocPageWindow() {
+  epubTocWindowSpineIndex = -1;
+  epubTocWindowSectionPageCount = -1;
+  epubTocWindowTocIndex = -1;
+  epubTocWindowStartPage = 0;
+  epubTocWindowEndPage = -1;
+}
+
+bool EpubReaderActivity::resolveCurrentEpubTocPageWindow(const int page, int& tocIndex, int& startPage,
+                                                         int& endPage) const {
+  tocIndex = -1;
+  startPage = 0;
+  endPage = section ? std::max(0, section->pageCount - 1) : 0;
+  if (!epub || !section || epub->isFb2Package() || section->pageCount <= 0) return false;
+
+  // Memory-safe split EPUB chunks already have their own cross-spine logical
+  // page aggregation. Anchor-subchapters are only exact while the whole HTML
+  // document is represented by this one spine item.
+  int logicalStart = currentSpineIndex;
+  int logicalEnd = currentSpineIndex;
+  if (epub->getLogicalChapterBounds(currentSpineIndex, logicalStart, logicalEnd) && logicalStart != logicalEnd) {
+    return false;
+  }
+
+  if (epubTocWindowSpineIndex == currentSpineIndex &&
+      epubTocWindowSectionPageCount == section->pageCount &&
+      epubTocWindowTocIndex >= 0 && page >= epubTocWindowStartPage && page <= epubTocWindowEndPage) {
+    tocIndex = epubTocWindowTocIndex;
+    startPage = epubTocWindowStartPage;
+    endPage = epubTocWindowEndPage;
+    return true;
+  }
+
+  const int tocCount = epub->getTocItemsCount();
+  int bestIndex = -1;
+  int bestStart = -1;
+  int bestLevel = -1;
+
+  // A TOC entry can point to an anchor in the middle of one XHTML spine item.
+  // Pick the deepest/latest anchor whose rendered page is at-or-before the
+  // current page. This makes e.g. content2.html#chapter4 distinct from another
+  // chapter that also lives in content2.html.
+  for (int i = 0; i < tocCount; ++i) {
+    const auto item = epub->getTocItem(i);
+    if (item.spineIndex != currentSpineIndex) continue;
+
+    int itemStart = 0;
+    if (!item.anchor.empty()) {
+      const auto anchorPage = section->getPageForAnchor(item.anchor);
+      if (!anchorPage.has_value()) continue;
+      itemStart = *anchorPage;
+    }
+
+    if (itemStart > page) continue;
+    if (itemStart > bestStart ||
+        (itemStart == bestStart && static_cast<int>(item.level) > bestLevel) ||
+        (itemStart == bestStart && static_cast<int>(item.level) == bestLevel && i > bestIndex)) {
+      bestIndex = i;
+      bestStart = itemStart;
+      bestLevel = item.level;
+    }
+  }
+
+  if (bestIndex < 0) {
+    // If the first anchor in this spine lands after page 0 (front matter before
+    // the first TOC marker), use the first TOC item only for title/navigation;
+    // the page window still begins at 0.
+    for (int i = 0; i < tocCount; ++i) {
+      const auto item = epub->getTocItem(i);
+      if (item.spineIndex == currentSpineIndex) {
+        bestIndex = i;
+        bestStart = 0;
+        bestLevel = item.level;
+        break;
+      }
+    }
+  }
+  if (bestIndex < 0) return false;
+
+  int nextStart = section->pageCount;
+  for (int i = bestIndex + 1; i < tocCount; ++i) {
+    const auto item = epub->getTocItem(i);
+    if (item.spineIndex != currentSpineIndex) {
+      // TOC is document ordered. Once we have moved to a later spine there is
+      // no later anchor in this spine that can close the current chapter.
+      if (item.spineIndex > currentSpineIndex) break;
+      continue;
+    }
+
+    int candidate = 0;
+    if (!item.anchor.empty()) {
+      const auto anchorPage = section->getPageForAnchor(item.anchor);
+      if (!anchorPage.has_value()) continue;
+      candidate = *anchorPage;
+    }
+    // Several hierarchy levels may share the same heading/page. They do not
+    // create an extra zero-page chapter; look for the next real page boundary.
+    if (candidate > bestStart) {
+      nextStart = candidate;
+      break;
+    }
+  }
+
+  tocIndex = bestIndex;
+  startPage = std::max(0, bestStart);
+  endPage = std::max(startPage, std::min(section->pageCount - 1, nextStart - 1));
+
+  epubTocWindowSpineIndex = currentSpineIndex;
+  epubTocWindowSectionPageCount = section->pageCount;
+  epubTocWindowTocIndex = tocIndex;
+  epubTocWindowStartPage = startPage;
+  epubTocWindowEndPage = endPage;
+  return true;
 }
 
 // TODO: Failure handling
@@ -4444,6 +4688,20 @@ void EpubReaderActivity::renderStatusBar() const {
     }
   }
 
+  // For ordinary EPUBs the NCX/nav TOC may define several chapters inside a
+  // single spine XHTML file. The legacy counter used the whole spine pageCount,
+  // so books such as "Треки смерти" showed wrong chapter totals and chapter
+  // titles. Restrict the visible counter to the current TOC anchor window.
+  int currentEpubTocIndex = -1;
+  if (epub && section && !epub->isFb2Package()) {
+    int chapterStart = 0;
+    int chapterEnd = section->pageCount - 1;
+    if (resolveCurrentEpubTocPageWindow(section->currentPage, currentEpubTocIndex, chapterStart, chapterEnd)) {
+      currentPage = std::max(1, section->currentPage - chapterStart + 1);
+      pageCount = std::max(1, chapterEnd - chapterStart + 1);
+    }
+  }
+
   std::string title;
 
   int textYOffset = 0;
@@ -4462,7 +4720,8 @@ void EpubReaderActivity::renderStatusBar() const {
   } else if (SETTINGS.statusBarTitle == InkMODSettings::STATUS_BAR_TITLE::CHAPTER_TITLE) {
     if (!suppressCurrentChapterTitle) {
       title = tr(STR_UNNAMED);
-      const int tocIndex = epub->getTocIndexForSpineIndex(currentSpineIndex);
+      int tocIndex = currentEpubTocIndex;
+      if (tocIndex < 0) tocIndex = epub->getTocIndexForSpineIndex(currentSpineIndex);
       if (tocIndex != -1) {
         const auto tocItem = epub->getTocItem(tocIndex);
         title = tocItem.title;
@@ -4480,62 +4739,74 @@ void EpubReaderActivity::renderStatusBar() const {
   char timeLeftLabel[24] = {};
   const char* timeLeft = formatTimeLeftLabel(timeLeftLabel, sizeof(timeLeftLabel)) ? timeLeftLabel : nullptr;
 
-  // A whole-book page count isn't something this reader actually has -
-  // computing one for real would mean paginating every chapter up front,
-  // which is exactly what the lazy per-chapter loading (FB2 and otherwise)
-  // is built to avoid. This is an estimate instead: how many pages-per-byte
-  // the *current* chapter works out to, scaled up to the book's total byte
-  // size. It's only as good as that one chapter is representative of the
-  // whole book (a title page or a chapter with unusually dense/sparse
-  // formatting will skew it), but it's cheap - reusing byte totals the
-  // reader already tracks for the % progress bar - and self-corrects as
-  // the reader moves through chapters with different densities.
+  // Whole-book pages are still an estimate (the reader deliberately does not
+  // paginate every unopened spine up front), but the estimate must be STABLE.
+  // The old code recalculated pages-per-byte from the current chapter on every
+  // render, which made 21/1846 suddenly become 28/2330 after one page turn.
+  // Lock the first representative estimate to the book cache for this exact
+  // layout. Font/viewport/style changes alter the signature and naturally
+  // create a new estimate; normal page turns never move the denominator.
   int bookWideCurrentPage = -1;
   int bookWideTotalPages = -1;
   if (SETTINGS.statusBarChapterPageCount == 2 && section->pageCount > 0) {
-    int sampleStartSpine = currentSpineIndex;
-    int sampleEndSpine = currentSpineIndex;
-    float samplePageCount = static_cast<float>(section->pageCount);
+    const auto bookWideLayout = computeReaderViewportLayout(renderer, automaticPageTurnActive);
+    const uint32_t layoutSignature =
+        fb2LogicalPagesLayoutSignature(SETTINGS.getReaderFontId(), bookWideLayout.viewportWidth,
+                                       bookWideLayout.viewportHeight);
 
-    // FB2 keeps large source <section>s RAM-safe by exposing them as several
-    // ~24 KiB virtual spine items.  The old whole-book estimate paired the
-    // page count of the logical chapter with the byte size of only the current
-    // virtual slice.  That can exaggerate the denominator by tens/hundreds of
-    // times (for example 1/189188).  EPUB does not use this FB2 virtual split,
-    // so preserve its existing calculation verbatim.
-    if (epub->isFb2Package()) {
-      int logicalStart = currentSpineIndex;
-      int logicalEnd = currentSpineIndex;
-      if (epub->getLogicalChapterBounds(currentSpineIndex, logicalStart, logicalEnd)) {
-        sampleStartSpine = logicalStart;
-        sampleEndSpine = logicalEnd;
+    int lockedTotal = 0;
+    if (loadBookWidePagesTotal(epub, layoutSignature, lockedTotal)) {
+      bookWideTotalPages = lockedTotal;
+    } else {
+      int sampleStartSpine = currentSpineIndex;
+      int sampleEndSpine = currentSpineIndex;
+      float samplePageCount = static_cast<float>(section->pageCount);
 
-        // Exact FB2 pagination is prepared for every virtual sibling before
-        // the first page is shown.  Use that logical total even while the user
-        // is still on title/annotation front matter, where section->pageCount
-        // by itself is only a few pages and is a terrible density sample.
-        if (fb2ExactLogicalStart == logicalStart && fb2ExactLogicalEnd == logicalEnd &&
-            fb2ExactLogicalTotalPages > 0) {
-          samplePageCount = static_cast<float>(fb2ExactLogicalTotalPages);
-        } else if (!onFb2FrontMatter && pageCount > 0) {
-          samplePageCount = static_cast<float>(pageCount);
+      if (epub->isFb2Package()) {
+        int logicalStart = currentSpineIndex;
+        int logicalEnd = currentSpineIndex;
+        if (epub->getLogicalChapterBounds(currentSpineIndex, logicalStart, logicalEnd)) {
+          sampleStartSpine = logicalStart;
+          sampleEndSpine = logicalEnd;
+          if (fb2ExactLogicalStart == logicalStart && fb2ExactLogicalEnd == logicalEnd &&
+              fb2ExactLogicalTotalPages > 0) {
+            samplePageCount = static_cast<float>(fb2ExactLogicalTotalPages);
+          } else if (!onFb2FrontMatter && pageCount > 0) {
+            samplePageCount = static_cast<float>(pageCount);
+          }
+        }
+      }
+
+      const size_t cumulativeThroughSample = epub->getCumulativeSpineItemSize(sampleEndSpine);
+      const size_t cumulativeBeforeSample =
+          sampleStartSpine > 0 ? epub->getCumulativeSpineItemSize(sampleStartSpine - 1) : 0;
+      const size_t sampleChapterBytes = cumulativeThroughSample > cumulativeBeforeSample
+                                            ? cumulativeThroughSample - cumulativeBeforeSample
+                                            : 0;
+      const size_t totalBookBytes = epub->getBookSize();
+
+      // Do not lock a cover/title fragment. A tiny 1-2 page sample can be
+      // wildly unrepresentative. Until a useful sample appears, leave the
+      // whole-book page counter hidden rather than publish a number that will
+      // immediately jump.
+      const bool representative = samplePageCount >= 4.0f && sampleChapterBytes >= 2048;
+      if (representative && totalBookBytes > 0) {
+        const float avgPagesPerByte = samplePageCount / static_cast<float>(sampleChapterBytes);
+        const float estimatedTotalPages = avgPagesPerByte * static_cast<float>(totalBookBytes);
+        bookWideTotalPages = std::max(1, static_cast<int>(std::lround(estimatedTotalPages)));
+        if (saveBookWidePagesTotal(epub, layoutSignature, bookWideTotalPages,
+                                   static_cast<uint32_t>(std::min<size_t>(sampleChapterBytes, UINT32_MAX)),
+                                   static_cast<int>(std::lround(samplePageCount)))) {
+          LOG_INF("ERS", "Locked book-wide page estimate: total=%d samplePages=%d sampleBytes=%u",
+                  bookWideTotalPages, static_cast<int>(std::lround(samplePageCount)),
+                  static_cast<unsigned>(std::min<size_t>(sampleChapterBytes, UINT32_MAX)));
         }
       }
     }
 
-    const size_t cumulativeThroughSample = epub->getCumulativeSpineItemSize(sampleEndSpine);
-    const size_t cumulativeBeforeSample =
-        sampleStartSpine > 0 ? epub->getCumulativeSpineItemSize(sampleStartSpine - 1) : 0;
-    const size_t sampleChapterBytes = cumulativeThroughSample > cumulativeBeforeSample
-                                          ? cumulativeThroughSample - cumulativeBeforeSample
-                                          : 0;
-    const size_t totalBookBytes = epub->getBookSize();
-    if (samplePageCount > 0.0f && sampleChapterBytes > 0 && totalBookBytes > 0) {
-      const float avgPagesPerByte = samplePageCount / static_cast<float>(sampleChapterBytes);
-      const float estimatedTotalPages = avgPagesPerByte * static_cast<float>(totalBookBytes);
-      bookWideTotalPages = std::max(1, static_cast<int>(std::lround(estimatedTotalPages)));
+    if (bookWideTotalPages > 0) {
       bookWideCurrentPage =
-          std::max(1, static_cast<int>(std::lround(bookProgress / 100.0f * estimatedTotalPages)));
+          std::max(1, static_cast<int>(std::lround(bookProgress / 100.0f * bookWideTotalPages)));
       bookWideCurrentPage = std::min(bookWideCurrentPage, bookWideTotalPages);
     }
   }

@@ -20,10 +20,23 @@ namespace {
 std::string lyra3CoverThumbPath(const RecentBook& book, int width, int height) {
   if (book.coverBmpPath.empty() || width <= 0 || height <= 0) return {};
   if (FsHelpers::hasEpubExtension(book.path)) {
-    const std::string adaptive = Epub(book.path, "/.inkmod").getAdaptiveThumbBmpPath(width, height);
+    Epub epub(book.path, "/.inkmod");
+    const std::string adaptive = epub.getAdaptiveThumbBmpPath(width, height);
     if (!adaptive.empty() && Storage.exists(adaptive.c_str())) return adaptive;
+
+    const std::string readyThumb = epub.getThumbBmpPath();
+    if (!readyThumb.empty() && Storage.exists(readyThumb.c_str())) return readyThumb;
   }
-  return UITheme::getCoverThumbPath(book.coverBmpPath, width, height);
+
+  std::string themed = UITheme::getCoverThumbPath(book.coverBmpPath, width, height);
+  if (!themed.empty() && Storage.exists(themed.c_str())) return themed;
+
+  themed = UITheme::getCoverThumbPath(book.coverBmpPath, height);
+  if (!themed.empty() && Storage.exists(themed.c_str())) return themed;
+
+  if (Storage.exists(book.coverBmpPath.c_str())) return book.coverBmpPath;
+
+  return {};
 }
 
 constexpr int hPaddingInSelection = 8;

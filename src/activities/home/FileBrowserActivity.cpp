@@ -141,12 +141,16 @@ void collectMetadataPathsRecursively(const std::string& dirPath, std::vector<std
   for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
     file.getName(name, sizeof(name));
     const std::string childPath = buildFullPath(dirPath, name);
-    if (file.isDirectory()) {
+    const bool isDirectory = file.isDirectory();
+    // Do not carry the child descriptor through recursion: deleting a deeply
+    // nested folder otherwise consumes two file handles per level (parent dir
+    // + child entry) and can hit SdFat's small open-file limit.
+    file.close();
+    if (isDirectory) {
       collectMetadataPathsRecursively(childPath, paths);
     } else if (hasFileMetadata(childPath)) {
       paths.push_back(childPath);
     }
-    file.close();
   }
   dir.close();
 }
@@ -839,6 +843,18 @@ void FileBrowserActivity::loop() {
           }
         } else if (!isZip || archiveType == BookArchiveType::Epub) {
           onSelectBook(fullPath);
+        } else if (archiveType == BookArchiveType::WrappedEpub) {
+          const Rect popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+          GUI.fillPopupProgress(renderer, popupRect, 10);
+          std::string extractedEpub;
+          if (extractWrappedEpub(fullPath, extractedEpub)) {
+            GUI.fillPopupProgress(renderer, popupRect, 100);
+            LOG_INF("FileBrowser", "Opening EPUB wrapped in ZIP: %s -> %s", fullPath.c_str(), extractedEpub.c_str());
+            onSelectBook(extractedEpub);
+          } else {
+            LOG_ERR("FileBrowser", "Failed to extract EPUB wrapped in ZIP: %s", fullPath.c_str());
+            GUI.drawPopup(renderer, tr(STR_UNKNOWN_ERROR));
+          }
         } else {
           LOG_ERR("FileBrowser", "ZIP is neither an EPUB nor an FB2 book: %s", fullPath.c_str());
           GUI.drawPopup(renderer, tr(STR_UNKNOWN_ERROR));
@@ -888,13 +904,17 @@ void FileBrowserActivity::loop() {
     requestUpdate();
   });
 
-  buttonNavigator.onNextContinuous([this, listSize] {
-    selectorIndex = ButtonNavigator::nextIndex(static_cast<int>(selectorIndex), listSize);
+  // Short press still moves one entry.  Once the button enters the repeat
+  // phase, jump by a whole visible page.  This is intentionally the old
+  // file-browser behaviour: it makes large libraries practical to scan
+  // without changing ButtonNavigator semantics for the rest of the UI.
+  buttonNavigator.onNextContinuous([this, listSize, pageItems] {
+    selectorIndex = ButtonNavigator::nextPageIndex(static_cast<int>(selectorIndex), listSize, pageItems);
     requestUpdate();
   });
 
-  buttonNavigator.onPreviousContinuous([this, listSize] {
-    selectorIndex = ButtonNavigator::previousIndex(static_cast<int>(selectorIndex), listSize);
+  buttonNavigator.onPreviousContinuous([this, listSize, pageItems] {
+    selectorIndex = ButtonNavigator::previousPageIndex(static_cast<int>(selectorIndex), listSize, pageItems);
     requestUpdate();
   });
 }

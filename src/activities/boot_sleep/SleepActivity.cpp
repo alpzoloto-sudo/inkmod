@@ -460,6 +460,10 @@ uint8_t SleepActivity::effectiveSleepScreenMode() const {
     case InkMODSettings::TIMEOUT_SLEEP_CUSTOM:
       return InkMODSettings::SLEEP_SCREEN_MODE::CUSTOM;
     case InkMODSettings::TIMEOUT_SLEEP_COVER:
+      // Timeout cover is independent from the normal/manual sleep-screen
+      // setting. Without this explicit mapping it fell through to
+      // SETTINGS.sleepScreen, so users who selected wallpapers for manual
+      // sleep got a wallpaper on timeout instead of the current book cover.
       return InkMODSettings::SLEEP_SCREEN_MODE::COVER;
     default:
       return SETTINGS.sleepScreen;
@@ -1504,10 +1508,23 @@ void SleepActivity::renderOverlaySleepScreen() const {
       return OverlayDrawResult::NotFound;
     }
 
-    constexpr size_t MIN_FREE_HEAP = 60 * 1024;  // PNG decoder ~42 KB + overhead
-    if (ESP.getFreeHeap() < MIN_FREE_HEAP) {
-      LOG_ERR("SLP", "Not enough heap for PNG overlay decoder: %u free, need %u for %s", ESP.getFreeHeap(),
-              static_cast<unsigned>(MIN_FREE_HEAP), filename.c_str());
+    // PNGdec performs at least one fairly large contiguous allocation internally.
+    // Checking only total free heap is not enough after long network/OPDS sessions:
+    // the heap can have 80+ KB free while the largest contiguous block is ~42 KB.
+    // In that state PNG's constructor can hit the global OOM handler and reboot the
+    // reader even though the sleep image itself is perfectly valid.
+    //
+    // Keep a conservative contiguous-block margin and gracefully fall back to the
+    // preserved reader page/default sleep screen instead of risking a reboot.
+    constexpr size_t MIN_FREE_HEAP = 60 * 1024;
+    constexpr size_t MIN_MAX_ALLOC_HEAP = 52 * 1024;
+    const size_t freeHeap = ESP.getFreeHeap();
+    const size_t maxAllocHeap = ESP.getMaxAllocHeap();
+    if (freeHeap < MIN_FREE_HEAP || maxAllocHeap < MIN_MAX_ALLOC_HEAP) {
+      LOG_ERR("SLP",
+              "Skipping PNG overlay: fragmented heap free=%u maxAlloc=%u needFree=%u needMax=%u file=%s",
+              static_cast<unsigned>(freeHeap), static_cast<unsigned>(maxAllocHeap),
+              static_cast<unsigned>(MIN_FREE_HEAP), static_cast<unsigned>(MIN_MAX_ALLOC_HEAP), filename.c_str());
       return OverlayDrawResult::Failed;
     }
     PNG* png = new (std::nothrow) PNG();

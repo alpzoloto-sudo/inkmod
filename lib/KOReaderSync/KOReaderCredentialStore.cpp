@@ -21,7 +21,8 @@ constexpr char KOREADER_FILE_JSON[] = "/.inkmod/koreader.json";
 constexpr char KOREADER_FILE_BAK[] = "/.inkmod/koreader.bin.bak";
 
 // Default sync server URL
-constexpr char DEFAULT_SERVER_URL[] = "https://sync.koreader.rocks:443";
+constexpr char DEFAULT_SERVER_URL[] = "https://sync.crosspointreader.com";
+constexpr char LEGACY_SERVER_URL[] = "https://sync.koreader.rocks";
 
 // Legacy obfuscation key - "KOReader" in ASCII (only used for binary migration)
 constexpr uint8_t LEGACY_OBFUSCATION_KEY[] = {0x4B, 0x4F, 0x52, 0x65, 0x61, 0x64, 0x65, 0x72};
@@ -165,6 +166,11 @@ std::string KOReaderCredentialStore::getBaseUrl() const {
   }
 
   return url;
+}
+
+bool KOReaderCredentialStore::usesCrossPointSyncServer() const {
+  const std::string base = getBaseUrl();
+  return base == "https://sync.crosspointreader.com" || base == "http://sync.crosspointreader.com";
 }
 
 void KOReaderCredentialStore::setMatchMethod(DocumentMatchMethod method) {

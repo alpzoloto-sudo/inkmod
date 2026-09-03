@@ -253,7 +253,7 @@ void fb2ZipScanTask(void* arg) {
 }
 
 
-constexpr uint8_t PACKAGE_VERSION = 22;  // fix false-positive FB2 letter-spacing collapse; invalidate older packages
+constexpr uint8_t PACKAGE_VERSION = 24;  // preserve visible FB2 <empty-line/> blocks; rebuild cached XHTML
 // A single FB2 <section> with more inline images than this gets split into
 // several virtual chapters while its SD-card index is written, so a chapter
 // that's actually opened never needs to extract more than this many images
@@ -699,6 +699,7 @@ constexpr char METADATA_FILE[] = "/fb2_metadata.txt";
 constexpr char ANNOTATION_FILE[] = "/fb2_annotation.txt";
 constexpr char PACKAGE_STATE_FILE[] = "/fb2_package.bin";
 constexpr char SECTIONS_INDEX_FILE[] = "/.fb2_sections.bin";
+constexpr char SOURCE_PATHS_INDEX_FILE[] = "/.fb2_sourcepaths.bin";
 constexpr char IMAGES_INDEX_FILE[] = "/.fb2_images.bin";
 
 std::vector<std::string> readLruIndex(const std::string& path) {
@@ -982,7 +983,7 @@ class StreamSink : public Fb2ContentSink {
     writeHeadingTag(out_, h, true);
   }
   void onTitleLineBreak() override { writeBytes(out_, "<br/>"); }
-  void onEmptyLine() override { writeBytes(out_, "<p class=\"empty-line\">&#160;</p>"); }
+  void onEmptyLine() override { writeBytes(out_, "<p class=\"empty-line\"><br/></p>"); }
   void onHorizontalRule() override { writeBytes(out_, "<hr/>"); }
 
   void onPoemBegin() override {
@@ -2168,6 +2169,47 @@ bool Fb2::convertToPackage(const ProgressFn& onProgress) {
   }
   LOG_INF("FB2-PROF", "package section index: %lums (chapters=%d)", millis() - phaseStarted, chapterCount);
 
+  // Persist the exact structural path of every ORIGINAL FB2 <section>.
+  // KOReader/CREngine exposes canonical FB2 positions such as
+  // /FictionBook/body/section[2]/section[7]/p[328]/text().76.  These section
+  // sibling indices are source-document coordinates and are independent of
+  // screen size, font, pagination, and inkMOD's virtual chapter splitting.
+  // One compact record is written per source section (not per virtual slice):
+  // bodyIndex(1-based), depth, then depth 1-based section sibling indices.
+  {
+    HalFile pathsOut;
+    if (!Storage.openFileForWrite("FB2", cachePath + SOURCE_PATHS_INDEX_FILE, pathsOut)) return fail();
+    BufferedFileWriter bufferedPaths(pathsOut);
+    writeCacheHeader(bufferedPaths);
+    std::array<uint16_t, 32> siblingCounters = {};
+    int currentBody = -1;
+    for (const auto& section : scan.sections) {
+      const int body = std::max(0, static_cast<int>(section.bodyIndex));
+      if (body != currentBody) {
+        siblingCounters.fill(0);
+        currentBody = body;
+      }
+      const size_t depth = std::min<size_t>(static_cast<size_t>(section.level) + 1, siblingCounters.size());
+      if (depth == 0) continue;
+      ++siblingCounters[depth - 1];
+      for (size_t d = depth; d < siblingCounters.size(); ++d) siblingCounters[d] = 0;
+
+      const uint16_t bodyOneBased = static_cast<uint16_t>(std::min(body + 1, 65535));
+      const uint8_t depth8 = static_cast<uint8_t>(std::min<size_t>(depth, 255));
+      bufferedPaths.write(reinterpret_cast<const uint8_t*>(&bodyOneBased), sizeof(bodyOneBased));
+      bufferedPaths.write(reinterpret_cast<const uint8_t*>(&depth8), sizeof(depth8));
+      for (size_t d = 0; d < depth; ++d) {
+        const uint16_t idx = std::max<uint16_t>(1, siblingCounters[d]);
+        bufferedPaths.write(reinterpret_cast<const uint8_t*>(&idx), sizeof(idx));
+      }
+    }
+    if (!bufferedPaths.finish()) {
+      pathsOut.close();
+      return fail();
+    }
+    pathsOut.close();
+  }
+
   if (chapterCount <= 0 || chapterCount > UINT16_MAX) {
     LOG_ERR("FB2", "FB2 has no readable chapters: %s", filepath.c_str());
     return fail();
@@ -2582,6 +2624,151 @@ bool Fb2::getOriginalSectionOrdinal(const std::string& packageCachePath, int cha
 }
 
 // static
+bool Fb2::getChapterRangeForOriginalSectionOrdinal(const std::string& packageCachePath, int ordinal,
+                                                    int& startIndex, int& endIndex) {
+  startIndex = -1;
+  endIndex = -1;
+  if (ordinal <= 0) return false;
+
+  HalFile sectionsIn;
+  if (!Storage.openFileForRead("FB2", packageCachePath + SECTIONS_INDEX_FILE, sectionsIn)) return false;
+  if (!readAndCheckCacheHeader(sectionsIn)) {
+    sectionsIn.close();
+    return false;
+  }
+
+  uint32_t previousOffset = UINT32_MAX;
+  int distinctSections = 0;
+  int chapterIndex = 0;
+  while (sectionsIn.available()) {
+    uint8_t level = 0;
+    uint32_t innerStartOffset = 0;
+    uint16_t idLen = 0, titleLen = 0;
+    uint32_t approxTextBytes = 0;
+    uint32_t imageRangeStart = 0, imageRangeEnd = 0, textRangeStart = 0, textRangeEnd = 0;
+
+    if (sectionsIn.read(&level, sizeof(level)) != sizeof(level) ||
+        sectionsIn.read(&innerStartOffset, sizeof(innerStartOffset)) != sizeof(innerStartOffset) ||
+        sectionsIn.read(&idLen, sizeof(idLen)) != sizeof(idLen)) break;
+    if (idLen && !skipCacheBytes(sectionsIn, idLen)) break;
+    if (sectionsIn.read(&titleLen, sizeof(titleLen)) != sizeof(titleLen)) break;
+    if (titleLen && !skipCacheBytes(sectionsIn, titleLen)) break;
+    if (sectionsIn.read(&approxTextBytes, sizeof(approxTextBytes)) != sizeof(approxTextBytes) ||
+        sectionsIn.read(&imageRangeStart, sizeof(imageRangeStart)) != sizeof(imageRangeStart) ||
+        sectionsIn.read(&imageRangeEnd, sizeof(imageRangeEnd)) != sizeof(imageRangeEnd) ||
+        sectionsIn.read(&textRangeStart, sizeof(textRangeStart)) != sizeof(textRangeStart) ||
+        sectionsIn.read(&textRangeEnd, sizeof(textRangeEnd)) != sizeof(textRangeEnd)) break;
+
+    if (chapterIndex == 0 || innerStartOffset != previousOffset) {
+      ++distinctSections;
+      previousOffset = innerStartOffset;
+      if (distinctSections > ordinal) break;
+    }
+
+    if (distinctSections == ordinal) {
+      if (startIndex < 0) startIndex = chapterIndex;
+      endIndex = chapterIndex;
+    }
+    ++chapterIndex;
+  }
+  sectionsIn.close();
+  return startIndex >= 0 && endIndex >= startIndex;
+}
+
+// static
+bool Fb2::getSourceSectionPath(const std::string& packageCachePath, int originalSectionOrdinal,
+                               uint16_t& bodyIndex, std::vector<uint16_t>& sectionPath) {
+  bodyIndex = 0;
+  sectionPath.clear();
+  if (originalSectionOrdinal <= 0) return false;
+
+  HalFile in;
+  if (!Storage.openFileForRead("FB2", packageCachePath + SOURCE_PATHS_INDEX_FILE, in)) return false;
+  if (!readAndCheckCacheHeader(in)) {
+    in.close();
+    return false;
+  }
+
+  for (int ordinal = 1; in.available(); ++ordinal) {
+    uint16_t body = 0;
+    uint8_t depth = 0;
+    if (in.read(&body, sizeof(body)) != sizeof(body) || in.read(&depth, sizeof(depth)) != sizeof(depth) || depth == 0) {
+      break;
+    }
+    if (ordinal == originalSectionOrdinal) {
+      sectionPath.resize(depth);
+      for (uint8_t i = 0; i < depth; ++i) {
+        if (in.read(&sectionPath[i], sizeof(sectionPath[i])) != sizeof(sectionPath[i])) {
+          sectionPath.clear();
+          in.close();
+          return false;
+        }
+      }
+      bodyIndex = body;
+      in.close();
+      return bodyIndex > 0 && !sectionPath.empty();
+    }
+    if (!skipCacheBytes(in, static_cast<uint32_t>(depth) * sizeof(uint16_t))) break;
+  }
+  in.close();
+  return false;
+}
+
+// static
+bool Fb2::findOriginalSectionBySourcePath(const std::string& packageCachePath, uint16_t bodyIndex,
+                                          const std::vector<uint16_t>& sectionPath, int& originalSectionOrdinal) {
+  originalSectionOrdinal = 0;
+  if (bodyIndex == 0 || sectionPath.empty()) return false;
+
+  HalFile in;
+  if (!Storage.openFileForRead("FB2", packageCachePath + SOURCE_PATHS_INDEX_FILE, in)) return false;
+  if (!readAndCheckCacheHeader(in)) {
+    in.close();
+    return false;
+  }
+
+  int ordinal = 0;
+  while (in.available()) {
+    ++ordinal;
+    uint16_t body = 0;
+    uint8_t depth = 0;
+    if (in.read(&body, sizeof(body)) != sizeof(body) || in.read(&depth, sizeof(depth)) != sizeof(depth) || depth == 0) {
+      break;
+    }
+    bool match = body == bodyIndex && depth == sectionPath.size();
+    for (uint8_t i = 0; i < depth; ++i) {
+      uint16_t idx = 0;
+      if (in.read(&idx, sizeof(idx)) != sizeof(idx)) {
+        in.close();
+        return false;
+      }
+      if (match && idx != sectionPath[i]) match = false;
+    }
+    if (match) {
+      originalSectionOrdinal = ordinal;
+      in.close();
+      return true;
+    }
+  }
+  in.close();
+  return false;
+}
+
+// static
+std::string Fb2::buildCanonicalSourceSectionXPath(const std::string& packageCachePath, int originalSectionOrdinal) {
+  uint16_t body = 0;
+  std::vector<uint16_t> path;
+  if (!getSourceSectionPath(packageCachePath, originalSectionOrdinal, body, path)) return {};
+
+  std::string out = "/FictionBook/body";
+  if (body > 1) out += "[" + std::to_string(body) + "]";
+  for (const uint16_t idx : path) {
+    out += "/section[" + std::to_string(std::max<uint16_t>(1, idx)) + "]";
+  }
+  return out;
+}
+
+// static
 std::string Fb2::resolveOriginalPath(const std::string& packagePath) {
   const size_t lastSlash = packagePath.find_last_of('/');
   if (lastSlash == std::string::npos) return packagePath;
@@ -2968,7 +3155,7 @@ bool Fb2::writeStyleFile() const {
       ".fb2-book-author { text-align: center; margin: 0.6em 0 0 0; }\n"
       ".fb2-book-title { text-align: center; margin: 0.6em 0 0.6em 0; }\n"
       ".fb2-book-date { text-align: right; text-indent: 0; margin: 0.5em 0 0 0; }\n"
-      ".empty-line { margin: 0.6em 0; text-indent: 0; }\n"
+      ".empty-line { margin: 0; text-indent: 0; }\n"
       ".annotation { }\n"
       ".strike { text-decoration: line-through; }\n"
       ".underline { text-decoration: underline; }\n"

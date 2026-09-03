@@ -2,6 +2,7 @@
 
 #include "BootLog.h"
 #include <GfxRenderer.h>
+#include <Epub/Page.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
@@ -11,11 +12,14 @@
 
 #include <algorithm>
 #include <cassert>
+#include <climits>
+#include <cstdlib>
 
 #include "InkMODSettings.h"
 #include "Epub/Section.h"
 #include "EpubReaderUtils.h"
 #include "Fb2.h"
+#include "ChapterXPathResolver.h"
 #include "KOReaderCredentialStore.h"
 #include "KOReaderDocumentId.h"
 #include "MappedInputManager.h"
@@ -28,6 +32,31 @@
 #include "fontIds.h"
 
 namespace {
+bool syncSnippetWhitespace(const std::string& word) {
+  if (word.empty()) return true;
+  return std::all_of(word.begin(), word.end(), [](char c) {
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+  });
+}
+
+std::string buildSyncTopSnippet(const Page& page) {
+  std::string out;
+  out.reserve(160);
+  for (const auto& el : page.elements) {
+    if (el->getTag() != TAG_PageLine) continue;
+    const auto& line = static_cast<const PageLine&>(*el);
+    if (!line.getBlock()) continue;
+    for (const auto& word : line.getBlock()->getWords()) {
+      if (syncSnippetWhitespace(word)) continue;
+      if (!out.empty()) out.push_back(' ');
+      if (out.size() + word.size() > 176) return out;
+      out += word;
+      if (out.size() >= 128) return out;
+    }
+  }
+  return out;
+}
+
 void syncTimeWithNTP() {
   // Stop SNTP if already running (can't reconfigure while running)
   if (esp_sntp_enabled()) {
@@ -139,25 +168,28 @@ void KOReaderSyncActivity::onWifiSelectionComplete(const bool success) {
   BootLog::step("SYNC", "performSync() returned");
 }
 
-void KOReaderSyncActivity::performSync() {
-  // Calculate document hash based on user's preferred method
-  BootLog::step("SYNC", "performSync: calculating document hash");
+bool KOReaderSyncActivity::ensureDocumentHash() {
+  if (!documentHash.empty()) return true;
   const std::string hashSourcePath = Fb2::resolveOriginalPath(epubPath);
   if (KOREADER_STORE.getMatchMethod() == DocumentMatchMethod::FILENAME) {
     documentHash = KOReaderDocumentId::calculateFromFilename(hashSourcePath);
   } else {
     documentHash = KOReaderDocumentId::calculate(hashSourcePath);
   }
-  BootLog::step("SYNC", "performSync: document hash done");
-  if (documentHash.empty()) {
-    {
-      RenderLock lock(*this);
-      state = SYNC_FAILED;
-      statusMessage = tr(STR_HASH_FAILED);
-    }
-    requestUpdate(true);
-    return;
+  if (!documentHash.empty()) return true;
+  {
+    RenderLock lock(*this);
+    state = SYNC_FAILED;
+    statusMessage = tr(STR_HASH_FAILED);
   }
+  requestUpdate(true);
+  return false;
+}
+
+void KOReaderSyncActivity::performSync() {
+  BootLog::step("SYNC", "performSync: calculating document hash");
+  if (!ensureDocumentHash()) return;
+  BootLog::step("SYNC", "performSync: document hash done");
 
   LOG_DBG("KOSync", "Document hash: %s", documentHash.c_str());
 
@@ -183,11 +215,16 @@ void KOReaderSyncActivity::performSync() {
   BootLog::stepf("SYNC", "performSync: getProgress() returned result=%d", static_cast<int>(result));
 
   if (result == KOReaderSyncClient::NOT_FOUND) {
-    // No remote progress - offer to upload
+    hasRemoteProgress = false;
+    if (mode == Mode::AUTO) {
+      LOG_INF("KOSync", "Quick sync: server has no progress; uploading local position");
+      performUpload();
+      return;
+    }
+    // Interactive mode: offer to upload.
     {
       RenderLock lock(*this);
       state = NO_REMOTE_PROGRESS;
-      hasRemoteProgress = false;
     }
     requestUpdate(true);
     return;
@@ -220,10 +257,138 @@ void KOReaderSyncActivity::performSync() {
   }
 
   KOReaderPosition koPos = {remoteProgress.progress, remoteProgress.percentage};
-  remotePosition = ProgressMapper::toInkMOD(epub, koPos, currentSpineIndex, totalPagesInSpine);
+  const bool fb2BackedRemote = Fb2::resolveOriginalPath(epubPath) != epubPath;
+  if (fb2BackedRemote) {
+    // KOReader/CREngine DocFragment[N] addresses the Nth section of the ORIGINAL
+    // FB2. inkMOD may have split that section into several virtual spines, so
+    // never treat N as a synthetic spine index.
+    remotePosition = ProgressMapper::toInkMODFb2(epub, koPos, epub->getCachePath(), currentSpineIndex,
+                                                 totalPagesInSpine);
+  } else {
+    remotePosition = ProgressMapper::toInkMOD(epub, koPos, currentSpineIndex, totalPagesInSpine);
+  }
+
+  // Canonical FB2 XPaths carry an exact character offset inside the source
+  // paragraph. First narrow the target to the pages spanned by that paragraph,
+  // then compare the *actual first rendered words* of nearby X4 pages against
+  // the paragraph. This makes the selected X4 page correspond to the same
+  // top-of-page text coordinate KOReader published, rather than just the same
+  // chapter/paragraph.
+  if (fb2BackedRemote && remotePosition.hasParagraphIndex && remotePosition.hasParagraphCharOffset) {
+    Section tempSection(epub, remotePosition.spineIndex, renderer);
+    const uint16_t p = remotePosition.paragraphIndex;
+
+    // The paragraph LUT stores the paragraph active at the TOP of each rendered
+    // page.  The previous implementation treated getPageForParagraphIndex(p)
+    // as the *end* of paragraph p, which shifts long paragraphs backwards by
+    // several pages.  Find the real contiguous run of pages whose top paragraph
+    // is p and compare the canonical text offset only inside that run.
+    // Use the REAL page count from the section cache. remotePosition.totalPages
+    // can legitimately be 1 here when the target FB2 virtual spine is not the
+    // currently-open spine (the mapper only has an estimate in that case).
+    // Using that estimate made every canonical point in such a chapter scan
+    // only page 0, collapsing title/p[8]/p[12].455 all to "Page 1".
+    const int mapperPageCount = remotePosition.totalPages;
+    const int cachedPageCount = static_cast<int>(tempSection.pageCount);
+    const int pageCount = cachedPageCount > 0
+        ? cachedPageCount
+        : std::max(mapperPageCount, remotePosition.pageNumber + 1);
+    if (cachedPageCount > 0) remotePosition.totalPages = cachedPageCount;
+    LOG_INF("KOSync", "FB2 exact refine page-count: mapper=%d cache=%d using=%d",
+            mapperPageCount, cachedPageCount, pageCount);
+    int first = -1;
+    int last = -1;
+    const auto hinted = tempSection.getPageForParagraphIndex(p);
+    if (hinted.has_value()) {
+      int probe = static_cast<int>(*hinted);
+      // getPageForParagraphIndex() returns the first page whose LUT value is
+      // >= p.  If p starts below the top of the previous page, include that
+      // page as a candidate as well.
+      if (probe > 0) {
+        const auto prevP = tempSection.getParagraphIndexForPage(static_cast<uint16_t>(probe - 1));
+        if (prevP.has_value() && *prevP == p) --probe;
+      }
+      while (probe > 0) {
+        const auto prevP = tempSection.getParagraphIndexForPage(static_cast<uint16_t>(probe - 1));
+        if (!prevP.has_value() || *prevP != p) break;
+        --probe;
+      }
+      const auto probeP = tempSection.getParagraphIndexForPage(static_cast<uint16_t>(probe));
+      if (probeP.has_value() && *probeP == p) {
+        first = probe;
+        last = probe;
+        while (last + 1 < pageCount) {
+          const auto nextP = tempSection.getParagraphIndexForPage(static_cast<uint16_t>(last + 1));
+          if (!nextP.has_value() || *nextP != p) break;
+          ++last;
+        }
+      } else if (probe > 0) {
+        // Paragraph p can begin part-way down a page whose top still belongs to
+        // p-1. Keep that page as a single fallback candidate.
+        first = last = probe - 1;
+      }
+    }
+
+    if (first >= 0 && last >= first) {
+      int bestPage = first;
+      int bestBeforeChar = -1;
+      int nearestDistance = INT_MAX;
+      int nearestPage = first;
+      int matchedPages = 0;
+
+      // Scan the complete paragraph run. A huge paragraph may span many X4
+      // pages; limiting this to approx +/-2 was the source of the 3-4 page
+      // misses seen in complex chapters.
+      for (int candidate = first; candidate <= last; ++candidate) {
+        tempSection.currentPage = candidate;
+        auto page = tempSection.loadPageFromSectionFile();
+        if (!page) continue;
+        const std::string snippet = buildSyncTopSnippet(*page);
+        if (snippet.empty()) continue;
+        const int topChar = ChapterXPathResolver::findCharOffsetForTextSnippet(
+            epub, remotePosition.spineIndex, p, snippet);
+        if (topChar < 0) continue;
+        ++matchedPages;
+        const int distance = std::abs(topChar - static_cast<int>(remotePosition.paragraphCharOffset));
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nearestPage = candidate;
+        }
+        // KOReader's xpointer represents the top-of-page text position. Choose
+        // the latest X4 page whose first text is not after that coordinate.
+        if (topChar <= static_cast<int>(remotePosition.paragraphCharOffset) && topChar > bestBeforeChar) {
+          bestBeforeChar = topChar;
+          bestPage = candidate;
+        }
+      }
+      if (bestBeforeChar < 0 && nearestDistance != INT_MAX) bestPage = nearestPage;
+
+      LOG_INF("KOSync", "FB2 exact-page refine v2: p=%u char=%u pages=%d..%d matched=%d -> %d topChar=%d nearest=%d",
+              p, static_cast<unsigned>(remotePosition.paragraphCharOffset), first, last, matchedPages,
+              bestPage, bestBeforeChar, nearestDistance == INT_MAX ? -1 : nearestDistance);
+      if (matchedPages > 0) remotePosition.pageNumber = bestPage;
+    }
+  }
+
+  // Canonical FB2 nodes without text content (notably <empty-line/>) still
+  // map to a real flattened render paragraph, but they have no charOffset to
+  // feed the exact text matcher above.  Resolve those directly through the
+  // section paragraph LUT instead of leaving the mapper's coarse page estimate.
+  if (fb2BackedRemote && remotePosition.hasParagraphIndex && !remotePosition.hasParagraphCharOffset) {
+    Section tempSection(epub, remotePosition.spineIndex, renderer);
+    const auto page = tempSection.getPageForParagraphIndex(remotePosition.paragraphIndex);
+    if (page.has_value()) {
+      LOG_INF("KOSync", "FB2 non-text source block refine: p=%u -> page=%u/%u",
+              remotePosition.paragraphIndex, static_cast<unsigned>(*page + 1),
+              static_cast<unsigned>(tempSection.pageCount));
+      remotePosition.pageNumber = static_cast<int>(*page);
+      if (tempSection.pageCount > 0) remotePosition.totalPages = tempSection.pageCount;
+    }
+  }
 
   // Refine page using section cache LUTs: li index, anchor, or paragraph index.
-  if (remotePosition.hasLiIndex || remotePosition.xpathAnchorId[0] != '\0' || remotePosition.hasParagraphIndex) {
+  if (!fb2BackedRemote &&
+      (remotePosition.hasLiIndex || remotePosition.xpathAnchorId[0] != '\0' || remotePosition.hasParagraphIndex)) {
     Section tempSection(epub, remotePosition.spineIndex, renderer);
     bool refined = false;
     if (remotePosition.hasLiIndex) {
@@ -274,23 +439,55 @@ void KOReaderSyncActivity::performSync() {
       }
     }
   }
-  // localProgress was pre-computed in EpubReaderActivity before the Epub was released.
+  // Use ONE recommendation path for both interactive Sync Progress and Quick Sync.
+  // Quick Sync must not have its own comparison rule: it simply executes the
+  // exact option that the normal comparison screen would preselect.
+  const auto chooseRecommendedSyncOption = [&]() -> int {
+    // 0 = Apply remote progress, 1 = Upload local progress.
+    return localProgress.percentage > remoteProgress.percentage ? 1 : 0;
+  };
+
+  selectedOption = chooseRecommendedSyncOption();
+
+  if (mode == Mode::AUTO) {
+    LOG_INF("KOSync",
+            "Quick sync: normal Sync Progress recommends option=%d (local=%.2f%% remote=%.2f%%); executing",
+            selectedOption, localProgress.percentage * 100.0f, remoteProgress.percentage * 100.0f);
+    if (selectedOption == 0) {
+      saveProgressAndReturn(remotePosition);
+    } else {
+      performUpload();
+    }
+    return;
+  }
 
   {
     RenderLock lock(*this);
     state = SHOWING_RESULT;
-
-    // Default to the option that corresponds to the furthest progress
-    if (localProgress.percentage > remoteProgress.percentage) {
-      selectedOption = 1;  // Upload local progress
-    } else {
-      selectedOption = 0;  // Apply remote progress
-    }
   }
   requestUpdate(true);
 }
 
 void KOReaderSyncActivity::performUpload() {
+  if (!ensureDocumentHash()) return;
+
+  // Interactive sync has already reloaded Epub before the user can choose Upload.
+  // Automatic sync may upload immediately after the comparison, so FB2 needs
+  // the cached synthetic Epub loaded before generating its canonical source XPath.
+  const bool fb2BackedBook = Fb2::resolveOriginalPath(epubPath) != epubPath;
+  if (fb2BackedBook && !epub) {
+    ensureEpubLoaded();
+    if (!epub) {
+      {
+        RenderLock lock(*this);
+        state = SYNC_FAILED;
+        statusMessage = tr(STR_SYNC_FAILED_MSG);
+      }
+      requestUpdate(true);
+      return;
+    }
+  }
+
   {
     RenderLock lock(*this);
     state = UPLOADING;
@@ -316,24 +513,45 @@ void KOReaderSyncActivity::performUpload() {
   // FB2 through crengine and would treat the foreign path as invalid (often
   // jumping to the beginning). Publish a native-FB2-compatible shallow XPointer.
   const std::string originalPath = Fb2::resolveOriginalPath(epubPath);
-  const bool fb2BackedBook = originalPath != epubPath;
   if (fb2BackedBook) {
     InkMODPosition fb2Pos{};
     fb2Pos.spineIndex = currentSpineIndex;
     fb2Pos.pageNumber = currentPage;
     fb2Pos.totalPages = totalPagesInSpine;
-    if (currentParagraphIndex.has_value()) {
+    // Re-open only the already-cached current page. The section LUT knows the
+    // paragraph that is actually present at the TOP of this rendered page;
+    // currentParagraphIndex may point at a later paragraph reached while the
+    // page was laid out, which is especially wrong for long prose, subtitles
+    // and verse blocks.
+    Section localSection(epub, currentSpineIndex, renderer);
+    const auto topP = localSection.getParagraphIndexForPage(static_cast<uint16_t>(currentPage));
+    if (topP.has_value() && *topP > 0) {
+      fb2Pos.paragraphIndex = *topP;
+      fb2Pos.hasParagraphIndex = true;
+      LOG_INF("KOSync", "FB2 upload top paragraph from page LUT: page=%d p=%u (readerP=%u)",
+              currentPage, *topP, currentParagraphIndex.has_value() ? *currentParagraphIndex : 0);
+    } else if (currentParagraphIndex.has_value()) {
       fb2Pos.paragraphIndex = *currentParagraphIndex;
       fb2Pos.hasParagraphIndex = true;
+    }
+    localSection.currentPage = currentPage;
+    if (auto localPage = localSection.loadPageFromSectionFile()) {
+      fb2Pos.topTextSnippet = buildSyncTopSnippet(*localPage);
     }
     int originalSectionOrdinal = currentSpineIndex + 1;
     if (!Fb2::getOriginalSectionOrdinal(epub->getCachePath(), currentSpineIndex, originalSectionOrdinal)) {
       LOG_DBG("KOSync", "FB2 source-section mapping unavailable for spine %d; using ordinal %d",
               currentSpineIndex, originalSectionOrdinal);
     }
-    progress.progress = ProgressMapper::generateFb2CompatibleXPath(fb2Pos, originalSectionOrdinal);
-    LOG_DBG("KOSync", "FB2 upload XPointer: %s (spine=%d sourceSection=%d p=%d)", progress.progress.c_str(),
-            currentSpineIndex, originalSectionOrdinal, fb2Pos.hasParagraphIndex ? fb2Pos.paragraphIndex : 1);
+    // Convert the paragraph inside inkMOD's virtual slice to a paragraph
+    // ordinal inside the original FB2 source section. This makes chapter +
+    // paragraph the primary coordinate; whole-book percentage is retained in
+    // the sync record only for old-client compatibility/fallback.
+    progress.progress = ProgressMapper::generateFb2SourceXPath(epub, epub->getCachePath(), fb2Pos,
+                                                               originalSectionOrdinal);
+    LOG_DBG("KOSync", "FB2 upload source XPointer: %s (spine=%d sourceSection=%d localP=%d)",
+            progress.progress.c_str(), currentSpineIndex, originalSectionOrdinal,
+            fb2Pos.hasParagraphIndex ? fb2Pos.paragraphIndex : 0);
   } else {
     progress.progress = localProgress.xpath;
   }
@@ -353,6 +571,12 @@ void KOReaderSyncActivity::performUpload() {
       statusMessage = KOReaderSyncClient::errorString(result);
     }
     requestUpdate();
+    return;
+  }
+
+  if (mode == Mode::AUTO) {
+    LOG_INF("KOSync", "Quick sync: upload complete, returning to reader");
+    returnToReader();
     return;
   }
 

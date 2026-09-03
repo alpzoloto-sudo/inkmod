@@ -185,9 +185,22 @@ bool hasThumbnailPlaceholder(const std::string& coverBmpPath) {
   return coverBmpPath.find("[WIDTH]") != std::string::npos || coverBmpPath.find("[HEIGHT]") != std::string::npos;
 }
 
-std::string getReusableCoverPath(const RecentBook& book) {
+bool resolveRecentEpubPath(const RecentBook& book, std::string& epubPath) {
   if (FsHelpers::hasEpubExtension(book.path)) {
-    return Epub(book.path, "/.inkmod").getThumbBmpPath();
+    epubPath = book.path;
+    return true;
+  }
+  if (FsHelpers::checkFileExtension(book.path, ".zip") &&
+      detectBookArchiveType(book.path) == BookArchiveType::WrappedEpub) {
+    return extractWrappedEpub(book.path, epubPath);
+  }
+  return false;
+}
+
+std::string getReusableCoverPath(const RecentBook& book) {
+  std::string epubPath;
+  if (resolveRecentEpubPath(book, epubPath)) {
+    return Epub(epubPath, "/.inkmod").getThumbBmpPath();
   }
   if (FsHelpers::hasXtcExtension(book.path)) {
     return Xtc(book.path, "/.inkmod").getThumbBmpPath();
@@ -196,7 +209,16 @@ std::string getReusableCoverPath(const RecentBook& book) {
 }
 
 bool ensureReusableCoverPath(RecentBook& book) {
-  if (book.coverBmpPath.empty() || hasThumbnailPlaceholder(book.coverBmpPath)) {
+  if (book.coverBmpPath.empty()) {
+    std::string epubPath;
+    if (!resolveRecentEpubPath(book, epubPath)) return false;
+    const std::string reusablePath = Epub(epubPath, "/.inkmod").getThumbBmpPath();
+    if (reusablePath.empty()) return false;
+    book.coverBmpPath = reusablePath;
+    updateRecentBookCoverPath(book, reusablePath);
+    return true;
+  }
+  if (hasThumbnailPlaceholder(book.coverBmpPath)) {
     return false;
   }
 
@@ -595,17 +617,17 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
         const bool sideMissing = !Storage.exists(sidePath.c_str());
 
         if (centerMissing || sideMissing) {
-          if (FsHelpers::hasEpubExtension(book.path)) {
-            Epub epub(book.path, "/.inkmod");
+          std::string epubPath;
+          if (resolveRecentEpubPath(book, epubPath)) {
+            Epub epub(epubPath, "/.inkmod");
             if (!showingLoading) {
               showingLoading = true;
               popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
             }
             GUI.fillPopupProgress(renderer, popupRect, 10 + progress * progressIncrement);
             if (!epub.load(false, true)) {
-              LOG_ERR("HOME", "carousel: failed to load EPUB cache for thumb generation: %s", book.path.c_str());
-              updateRecentBookCoverPath(book, "");
-              book.coverBmpPath = "";
+              LOG_ERR("HOME", "carousel: failed to load EPUB cache for thumb generation; keeping cover source: %s",
+                      book.path.c_str());
               coverRendered = false;
               requestUpdate();
               progress++;
@@ -619,9 +641,11 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
               success =
                   epub.generateThumbBmp(LyraCarouselTheme::kSideCoverW, LyraCarouselTheme::kSideCoverH) && success;
             if (!success) {
-              updateRecentBookCoverPath(book, "");
-              book.coverBmpPath = "";
+              LOG_ERR("HOME", "carousel: EPUB thumbnail generation failed; keeping cover source for retry: %s",
+                      book.path.c_str());
             } else {
+              book.coverBmpPath = epub.getThumbBmpPath();
+              updateRecentBookCoverPath(book, book.coverBmpPath);
               bookUpdated[bookIdx] = true;
             }
             coverRendered = false;
@@ -655,21 +679,22 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
       } else {
         // Non-carousel: generate the active theme's thumbnail size.
         const bool useMinimalThumb =
-            isMinimal && (FsHelpers::hasEpubExtension(book.path) || FsHelpers::hasXtcExtension(book.path));
+            isMinimal && (([&book]() { std::string p; return resolveRecentEpubPath(book, p); })() ||
+                          FsHelpers::hasXtcExtension(book.path));
         const std::string coverPath = useMinimalThumb ? minimalHomeCoverPath(book, coverHeight)
                                                       : UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight);
         if (coverPath.empty() || !Storage.exists(coverPath.c_str())) {
-          if (FsHelpers::hasEpubExtension(book.path)) {
-            Epub epub(book.path, "/.inkmod");
+          std::string epubPath;
+          if (resolveRecentEpubPath(book, epubPath)) {
+            Epub epub(epubPath, "/.inkmod");
             if (!showingLoading) {
               showingLoading = true;
               popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
             }
             GUI.fillPopupProgress(renderer, popupRect, 10 + progress * progressIncrement);
             if (!epub.load(false, true)) {
-              LOG_ERR("HOME", "failed to load EPUB cache for thumb generation: %s", book.path.c_str());
-              updateRecentBookCoverPath(book, "");
-              book.coverBmpPath = "";
+              LOG_ERR("HOME", "failed to load EPUB cache for thumb generation; keeping cover source: %s",
+                      book.path.c_str());
               coverRendered = false;
               requestUpdate();
               progress++;
@@ -679,9 +704,11 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
                                                                                  minimalHomeCoverHeight(coverHeight))
                                                  : epub.generateThumbBmp(0, coverHeight);
             if (!success) {
-              updateRecentBookCoverPath(book, "");
-              book.coverBmpPath = "";
+              LOG_ERR("HOME", "EPUB thumbnail generation failed; keeping cover source for retry: %s",
+                      book.path.c_str());
             } else {
+              book.coverBmpPath = epub.getThumbBmpPath();
+              updateRecentBookCoverPath(book, book.coverBmpPath);
               bookUpdated[bookIdx] = true;  // non-carousel path reuses same tracking
             }
             coverRendered = false;

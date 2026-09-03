@@ -45,6 +45,14 @@ class EpubReaderActivity final : public Activity {
   mutable int logicalStatusCacheLocalPageCount = -1;
   mutable int logicalStatusPagesBefore = 0;
   mutable int logicalStatusKnownPageCount = 0;
+  // Ordinary EPUB files can contain several TOC chapters inside one spine HTML file.
+  // Cache the currently visible TOC-anchor page window so chapter counters/titles
+  // follow nav anchors rather than the whole spine item.
+  mutable int epubTocWindowSpineIndex = -1;
+  mutable int epubTocWindowSectionPageCount = -1;
+  mutable int epubTocWindowTocIndex = -1;
+  mutable int epubTocWindowStartPage = 0;
+  mutable int epubTocWindowEndPage = -1;
   // FB2 logical chapters are pre-paginated before they are shown. Keep the
   // resulting denominator in RAM so the status bar cannot temporarily shrink
   // when one sibling cache was created under a different memory-mode suffix.
@@ -86,6 +94,9 @@ class EpubReaderActivity final : public Activity {
   // The long-press handlers arm these flags and execute sync on release.
   bool pendingLongMenuSyncOnRelease = false;
   bool pendingLongBackSyncOnRelease = false;
+  InkMODSettings::LONG_PRESS_MENU_ACTION pendingLongMenuSyncAction = InkMODSettings::LONG_MENU_SYNC_PROGRESS;
+  InkMODSettings::LONG_PRESS_MENU_ACTION pendingLongBackSyncAction = InkMODSettings::LONG_MENU_SYNC_PROGRESS;
+  uint8_t pendingKOReaderSyncMode = 0;  // 0=interactive, 1=automatic newest-position sync
   bool longPowerButtonHandled = false;
   bool sideButtonLongPressHandled = false;
   bool frontButtonLongPressHandled = false;
@@ -140,6 +151,8 @@ class EpubReaderActivity final : public Activity {
   void renderStatusBar() const;
   void rememberLogicalForwardCarry();
   void clearLogicalPageCarry();
+  bool resolveCurrentEpubTocPageWindow(int page, int& tocIndex, int& startPage, int& endPage) const;
+  void invalidateEpubTocPageWindow();
   bool saveProgress(int spineIndex, int currentPage, int pageCount);
   void pauseReadingPaceTimer(const char* reason = "unknown");
   void resumeReadingPaceTimer(const char* reason = "unknown");

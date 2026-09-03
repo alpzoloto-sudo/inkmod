@@ -417,7 +417,7 @@
 
   function toggleAdvancedOptions() {
     // Check if advanced options toggle is enabled (optimize EPUB must be checked)
-    const convertEnabled = document.getElementById('convertBeforeUpload').checked;
+    const convertEnabled = false; // Cache-only web upload: never modify the original file.
     if (!convertEnabled) {
       return; // Don't toggle if optimization is disabled
     }
@@ -1324,18 +1324,20 @@
       return n.endsWith('.epub') || isFb2Name(n) || n.endsWith('.zip');
     });
     const prepareBookRow = document.getElementById('prepareBookRow');
+    const prepareBookCheckbox = document.getElementById('prepareBookBeforeUpload');
     if (prepareBookRow) prepareBookRow.style.display = hasBook ? 'flex' : 'none';
+    // Browser preparation is the only book-side processing left. Default it
+    // on for books; the original upload bytes are never altered.
+    if (prepareBookCheckbox) prepareBookCheckbox.checked = hasBook;
     const fb2ToEpubRow = document.getElementById('fb2ToEpubRow');
-    if (files.length > 0 && hasFb2) {
-      fb2ToEpubRow.style.display = 'flex';
-    } else {
-      fb2ToEpubRow.style.display = 'none';
-      const fb2Cb = document.getElementById('fb2ToEpubCheckbox');
-      if (fb2Cb) fb2Cb.checked = false;
-      updateUploadBtnLabel();
-    }
+    if (fb2ToEpubRow) fb2ToEpubRow.style.display = 'none';
+    const fb2Cb = document.getElementById('fb2ToEpubCheckbox');
+    if (fb2Cb) fb2Cb.checked = false;
+    updateUploadBtnLabel();
     if (files.length > 0 && hasConvertible) {
       convertOptions.style.display = 'block';
+      const optRow = document.getElementById('convertBeforeUpload')?.closest('label');
+      if (optRow) optRow.style.display = 'none';
       // Conversion/preparation must always be explicit. A plain upload is a
       // byte-for-byte copy regardless of file size. Do NOT auto-enable either
       // option for large EPUB/FB2/ZIP files.
@@ -3281,7 +3283,7 @@ function serializeXhtmlDoc(doc) {
   return '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE html>\n' + xml;
 }
 
-const FB2_INLINE_TAG_MAP = { emphasis: 'em', strong: 'strong', strikethrough: 's', sub: 'sub', sup: 'sup', code: 'code' };
+const FB2_INLINE_TAG_MAP = { emphasis: 'em', i: 'em', strong: 'strong', b: 'strong', sub: 'sub', sup: 'sup' };
 
 /**
  * Render inline (character-level) FB2 markup found inside a <p>, <v>, heading, etc.
@@ -3322,9 +3324,16 @@ function renderFb2Inline(srcEl, doc, targetEl, ctx) {
       renderFb2Inline(child, doc, targetEl, ctx);
       continue;
     }
-    const mapped = FB2_INLINE_TAG_MAP[tag];
+    let mapped = FB2_INLINE_TAG_MAP[tag];
+    let mappedClass = '';
+    if (tag === 'underline' || tag === 'u') { mapped = 'span'; mappedClass = 'underline'; }
+    else if (tag === 'strikethrough') { mapped = 'span'; mappedClass = 'strike'; }
+    else if (tag === 'style' && /small[\s_-]*caps|smallcaps|\bsc\b/i.test(child.getAttribute('name') || '')) {
+      mapped = 'span'; mappedClass = 'smallcaps';
+    }
     if (mapped) {
       const e = doc.createElementNS(ctx.ns, mapped);
+      if (mappedClass) e.setAttribute('class', mappedClass);
       renderFb2Inline(child, doc, e, ctx);
       targetEl.appendChild(e);
     } else {
@@ -3344,11 +3353,15 @@ function renderFb2SingleBlock(child, doc, xhtmlParent, ctx) {
       xhtmlParent.appendChild(p);
       break;
     }
-    case 'empty-line':
-      xhtmlParent.appendChild(doc.createElementNS(ctx.ns, 'br'));
+    case 'empty-line': {
+      const p = doc.createElementNS(ctx.ns, 'p');
+      p.setAttribute('class', 'empty-line');
+      p.appendChild(doc.createElementNS(ctx.ns, 'br'));
+      xhtmlParent.appendChild(p);
       break;
+    }
     case 'subtitle': {
-      const h = doc.createElementNS(ctx.ns, 'p');
+      const h = doc.createElementNS(ctx.ns, 'h3');
       h.setAttribute('class', 'subtitle');
       renderFb2Inline(child, doc, h, ctx);
       xhtmlParent.appendChild(h);
@@ -3370,7 +3383,7 @@ function renderFb2SingleBlock(child, doc, xhtmlParent, ctx) {
     case 'poem':
     case 'cite':
     case 'epigraph': {
-      const div = doc.createElementNS(ctx.ns, 'div');
+      const div = doc.createElementNS(ctx.ns, tag === 'cite' ? 'blockquote' : 'div');
       div.setAttribute('class', tag);
       const t = fb2Child(child, 'title');
       if (t) {
@@ -3388,14 +3401,15 @@ function renderFb2SingleBlock(child, doc, xhtmlParent, ctx) {
     }
     case 'stanza': {
       const div = doc.createElementNS(ctx.ns, 'div');
-      div.setAttribute('class', 'stanza');
+      const siblings = child.parentElement ? Array.from(child.parentElement.children).filter(n => (n.localName || n.tagName) === 'stanza') : [child];
+      div.setAttribute('class', siblings.indexOf(child) > 0 ? 'stanza stanza-break' : 'stanza');
       for (const grandchild of child.children) renderFb2SingleBlock(grandchild, doc, div, ctx);
       xhtmlParent.appendChild(div);
       break;
     }
     case 'v': {
       const p = doc.createElementNS(ctx.ns, 'p');
-      p.setAttribute('class', 'verse');
+      p.setAttribute('class', 'v');
       renderFb2Inline(child, doc, p, ctx);
       xhtmlParent.appendChild(p);
       break;
@@ -3580,24 +3594,28 @@ function splitFb2ChildrenByHeadings(children) {
 const FB2_EPUB_STYLESHEET =
 `body { text-align: justify; }
 h1, h2, h3, h4, h5, h6 { text-align: center; font-weight: bold; margin: 1em 0 0.7em 0; }
-p.subtitle { text-align: center; }
+.subtitle { text-align: center; }
 p { margin: 0.25em 0; }
-div.epigraph, div.cite { margin: 0.7em 1.5em; text-indent: 0; }
-div.poem { margin: 0.7em 1em; }
-div.epigraph > div.poem { margin-bottom: 0; }
-div.stanza { margin: 0; padding: 0; }
-p.verse { text-indent: 0; text-align: left; margin: 0; }
-p.text-author { text-align: right; text-indent: 0; margin: 0.5em 0 0 0; }
-p.date, p.fb2-book-date { text-indent: 0; text-align: right; }
-h2.fb2-book-author, h2.fb2-book-title { text-align: center; }
-p.title-line { text-align: center; font-weight: bold; text-indent: 0; }
-div.illustration { text-align: center; margin: 0.5em auto; }
-div.illustration img, body.cover img, img { display: block; margin: 0.5em auto; max-width: 100%; height: auto; }
-body.cover { text-align: center; margin: 0; }
-a.note-ref { text-decoration: none; font-size: 0.75em; vertical-align: super; }
-div.note { margin: 0 0 0.8em 0; font-size: 0.95em; }
-p.note-label { font-weight: bold; text-indent: 0; margin: 0 0 0.2em 0; display: inline; }
-div.note p { display: inline; text-indent: 0; margin: 0 0 0 0.3em; }
+.epigraph, .cite { margin: 0.7em 1.5em; text-indent: 0; }
+.poem { margin: 0.7em 1em; }
+.epigraph > .poem { margin-bottom: 0; }
+.stanza { margin: 0; padding: 0; }
+.stanza-break { margin-top: 0.5em; }
+.v { text-indent: 0; text-align: left; margin: 0; }
+.text-author { text-align: right; text-indent: 0; margin: 0.5em 0 0 0; }
+.epigraph > .text-author { margin-top: 0.5em; }
+.fb2-book-author { text-align: center; margin: 0.6em 0 0 0; }
+.fb2-book-title { text-align: center; margin: 0.6em 0 0.6em 0; }
+.fb2-book-date { text-align: right; text-indent: 0; margin: 0.5em 0 0 0; }
+.empty-line { margin: 0; text-indent: 0; }
+.annotation { }
+.strike { text-decoration: line-through; }
+.underline { text-decoration: underline; }
+.smallcaps { font-variant: small-caps; }
+.code { font-family: monospace; }
+table { border-collapse: collapse; }
+td, th { border: 1px solid; padding: 0.2em 0.5em; }
+img { display: block; margin: 0.5em auto; max-width: 100%; }
 `;
 
 /**
@@ -4861,12 +4879,17 @@ function uploadInternalBookArtifact(endpoint, file, remoteBookPath, extraQuery =
   });
 }
 
-function uploadPreparedBookCache(file, remoteBookPath, fb2Mode = false) {
-  return uploadInternalBookArtifact('/api/books/cache', file, remoteBookPath, fb2Mode ? '&fb2=1' : '');
+function uploadPreparedBookCache(file, remoteBookPath, fb2Mode = false, wrappedMode = false) {
+  const modeQuery = fb2Mode ? '&fb2=1' : (wrappedMode ? '&wrapped=1' : '');
+  return uploadInternalBookArtifact('/api/books/cache', file, remoteBookPath, modeQuery);
 }
 
 function uploadPreparedFb2Package(file, remoteBookPath) {
   return uploadInternalBookArtifact('/api/books/fb2-package', file, remoteBookPath);
+}
+
+function uploadPreparedWrappedEpub(file, remoteBookPath) {
+  return uploadInternalBookArtifact('/api/books/wrapped-epub', file, remoteBookPath);
 }
 
 // Build the firmware's native BookMetadataCache in the browser. It is sent to
@@ -5053,12 +5076,12 @@ async function buildBrowserBookCache(epubFile, progressCallback) {
 function uploadFile() {
   const fileInput = document.getElementById('fileInput');
   const files = folderPickedFiles ? folderPickedFiles.slice() : Array.from(fileInput.files);
-  const convertEnabled = document.getElementById('convertBeforeUpload').checked;
+  const convertEnabled = false; // Cache-only web upload: never modify the original file.
   const prepareBookEl = document.getElementById('prepareBookBeforeUpload');
   const prepareBookEnabled = !!(prepareBookEl && prepareBookEl.checked);
   const fb2ToEpubEl = document.getElementById('fb2ToEpubCheckbox');
-  const fb2ToEpubEnabled = !!(fb2ToEpubEl && fb2ToEpubEl.checked);
-  const anyBookTransformEnabled = convertEnabled || prepareBookEnabled || fb2ToEpubEnabled;
+  const fb2ToEpubEnabled = false; // User-visible conversion removed; FB2 derivative is cache-only.
+  const anyBookTransformEnabled = prepareBookEnabled;
   folderExistsCache = new Set(); // fresh per batch — subfolders may have changed since the last upload
 
   if (files.length === 0) {
@@ -5167,20 +5190,33 @@ function uploadFile() {
     // large-file/folder uploads cheap and makes the bytes on SD identical to
     // the selected file. Content inspection is only needed when the user
     // explicitly enabled Optimize / Prepare / FB2→EPUB.
-    if (anyBookTransformEnabled) {
-      file = await extractEpubFromUpload(file);
-    }
+    // Never replace the selected upload with a derivative. The picked file is
+    // always what lands in the user's chosen directory. Generic wrapped-EPUB
+    // ZIPs therefore stay ZIPs; if they cannot be browser-prepared, the reader
+    // uses its normal first-open fallback later.
     const lowerFileName = file.name.toLowerCase();
     const isEpub = lowerFileName.endsWith('.epub');
+    const isZip = lowerFileName.endsWith('.zip');
     const isFb2 = anyBookTransformEnabled ? await isFb2UploadFile(file) : isFb2Name(lowerFileName);
     const isImage = isImageName(lowerFileName);
 
-    if (anyBookTransformEnabled && isFb2 && lowerFileName.endsWith('.zip') && !isFb2ZipName(lowerFileName)) {
-      const fb2ZipName = canonicalFb2ZipUploadName(file.name);
-      if (fb2ZipName !== file.name) {
-        file = new File([file], fb2ZipName, { type: file.type || 'application/zip' });
+    // A generic outer ZIP may contain a real EPUB. For web preparation only,
+    // extract that inner EPUB in the browser. The user's selected ZIP remains
+    // byte-for-byte unchanged and is still what gets uploaded to the chosen folder.
+    let wrappedEpubSource = null;
+    if (prepareBookEnabled && isZip && !isFb2) {
+      try {
+        const extracted = await extractEpubFromUpload(file);
+        if (extracted && extracted.name && extracted.name.toLowerCase().endsWith('.epub')) {
+          wrappedEpubSource = extracted;
+        }
+      } catch (wrappedError) {
+        console.warn('[Book cache] ZIP EPUB detection skipped:', wrappedError);
       }
     }
+
+    // Cache preparation must never rename or rewrite the user's original file.
+    // Generic .zip FB2 archives stay byte-for-byte and name-for-name identical.
     // Web uploads prepare FB2 completely in the browser. Converting it to a
     // normal EPUB lets the browser also build the final native metadata cache;
     // books copied directly to SD keep the original FB2 lazy-open path.
@@ -5196,11 +5232,12 @@ function uploadFile() {
     let conversionFailed = false;  // Track if conversion actually failed
     let preparedCompanion = null;
     let preparedFb2Package = null;
+    let preparedWrappedEpub = wrappedEpubSource;
     let convOriginalSize = 0;      // Picked-file size; 0 unless conversion succeeded
     let convNewSize = 0;           // Generated blob size; 0 unless conversion succeeded
 
     const methodText = useWebSocket ? ' [WS]' : ' [HTTP]';
-    const stageText = needsConversion ? 'Converting & uploading' : 'Copying';
+    const stageText = prepareBookEnabled ? 'Preparing cache & uploading' : 'Copying';
     progressText.style.color = '';
     progressText.textContent = `${stageText} ${file.name} (${currentIndex + 1}/${files.length})${methodText}`;
 
@@ -5209,7 +5246,7 @@ function uploadFile() {
       // If conversion succeeded, display goes from 50-100%, otherwise 0-100%
       const displayPercent = conversionSucceeded ? 50 + Math.round(uploadPercent / 2) : uploadPercent;
       progressFill.style.width = displayPercent + '%';
-      const prefix = conversionSucceeded ? 'Converting & uploading' : 'Copying';
+      const prefix = prepareBookEnabled ? 'Preparing cache & uploading' : 'Copying';
       progressText.textContent = `${prefix} ${file.name} (${currentIndex + 1}/${files.length})${methodText} — ${uploadPercent}%`;
     };
 
@@ -5268,7 +5305,7 @@ function uploadFile() {
       // Convert EPUB if needed
       if (needsConversion) {
         progressFill.style.backgroundColor = '#9b59b6'; // Purple for conversion
-        progressText.textContent = `Converting ${file.name} (${currentIndex + 1}/${files.length})...`;
+        progressText.textContent = `Preparing cache ${file.name} (${currentIndex + 1}/${files.length})...`;
 
         // Clear log for single file mode, or just add separator for batch mode
         if (!useBatchLog) {
@@ -5339,10 +5376,10 @@ function uploadFile() {
           convNewSize = converted.size;
         } catch (convError) {
           if (operationCancelled) { if (uploadGeneration === myGeneration) restoreAfterCancel(); return; }
-          console.error('Conversion error:', convError);
+          console.error('Cache preparation error:', convError);
           // Log the error
-          logError(`Conversion failed: ${convError.message}`);
-          log('Uploading original file instead...', 'warning', 'INFO');
+          logError(`Cache preparation failed: ${convError.message}`);
+          log('Uploading original file; device first-open fallback remains available.', 'warning', 'INFO');
           conversionFailed = true;
 
           // In single file mode, export error log
@@ -5353,7 +5390,7 @@ function uploadFile() {
           }
 
           // If conversion fails, try uploading original file
-          progressText.textContent = `Conversion failed, uploading original ${file.name}...`;
+          progressText.textContent = `Cache preparation failed, uploading original ${file.name}...`;
           progressFill.style.backgroundColor = '#e67e22'; // Orange for fallback
           // Reset progress bar to 0% for original file upload
           progressFill.style.width = '0%';
@@ -5368,7 +5405,7 @@ function uploadFile() {
       // Always prepare EPUB metadata, independently of image optimization.
       // Failure is non-fatal: upload the book and let the existing device-side
       // first-open path build its cache.
-      const cacheSourceFile = preparedFb2Package ||
+      const cacheSourceFile = preparedFb2Package || preparedWrappedEpub ||
         (file.name.toLowerCase().endsWith('.epub') ? file : null);
       if (prepareBookEnabled && cacheSourceFile) {
         try {
@@ -5394,8 +5431,12 @@ function uploadFile() {
         const remoteBookPath = joinRemotePath(targetPath, file.name);
         if (preparedFb2Package) {
           await uploadPreparedFb2Package(preparedFb2Package, remoteBookPath);
+        } else if (preparedWrappedEpub) {
+          // Install the browser-extracted inner EPUB into the exact protected
+          // WrappedEpub path the device would otherwise create on first open.
+          await uploadPreparedWrappedEpub(preparedWrappedEpub, remoteBookPath);
         }
-        await uploadPreparedBookCache(preparedCompanion, remoteBookPath, !!preparedFb2Package);
+        await uploadPreparedBookCache(preparedCompanion, remoteBookPath, !!preparedFb2Package, !!preparedWrappedEpub);
       }
 
       // Ensure progress bar shows 100% before moving to next file

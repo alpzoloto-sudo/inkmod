@@ -86,7 +86,11 @@ static constexpr const char* const BOLD_TAGS[] = {"b", "strong"};
 static constexpr const char* const ITALIC_TAGS[] = {"i", "em"};
 static constexpr const char* const UNDERLINE_TAGS[] = {"u", "ins"};
 static constexpr const char* const STRIKETHROUGH_TAGS[] = {"s", "strike", "del"};
-static constexpr const char* const IMAGE_TAGS[] = {"img"};
+// Treat SVG <image> as a raster image carrier too. Calibre commonly emits
+// EPUB cover pages as <svg><image xlink:href="cover.jpg"/></svg>. We do not
+// rasterize arbitrary SVG here; we simply feed the referenced PNG/JPEG into
+// the same low-memory image pipeline used by normal <img> elements.
+static constexpr const char* const IMAGE_TAGS[] = {"img", "image"};
 static constexpr const char* const SKIP_TAGS[] = {"head"};
 
 bool isWhitespace(const char c) { return c == ' ' || c == '\r' || c == '\n' || c == '\t'; }
@@ -1385,7 +1389,10 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     if (atts != nullptr) {
       bool amznM8Removed = false;
       for (int i = 0; atts[i]; i += 2) {
-        if (strcmp(atts[i], "src") == 0) {
+        if (strcmp(atts[i], "src") == 0 || strcmp(atts[i], "xlink:href") == 0 ||
+            (strcmp(name, "image") == 0 && strcmp(atts[i], "href") == 0)) {
+          // XHTML <img> uses src; SVG <image> normally uses xlink:href
+          // (SVG2 may use href). All three resolve relative to the XHTML file.
           src = atts[i + 1];
         } else if (strcmp(atts[i], "alt") == 0) {
           alt = atts[i + 1];
@@ -1685,7 +1692,14 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                     }
                   }
 
-                  // Create page for image - only break if image won't fit remaining space
+                  // Create page for image - only break if image won't fit remaining space.
+                  //
+                  // IMPORTANT: after the break we must fit the image against the *new*
+                  // page's real available height, including any leading <br>/container
+                  // spacing. Previously a tall image could be scaled to viewportHeight,
+                  // then receive imageMarginTop/currentPageNextY on top of that and extend
+                  // into the reader status-bar area. Books converted from FB2 commonly
+                  // have exactly this pattern: </h1><br/><div><img .../></div>.
                   if (self->currentPage && !self->currentPage->elements.empty() &&
                       (self->currentPageNextY + imageMarginTop + displayHeight + imageMarginBottom >
                        self->viewportHeight)) {
@@ -1699,6 +1713,37 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                     if (!self->startNewPage("image page")) {
                       return;
                     }
+                  }
+
+                  // A leading <br> on an otherwise empty image page is only
+                  // presentation whitespace. If keeping it would push a full-height
+                  // illustration outside the content viewport, drop that leading gap.
+                  // This does not affect pages that already contain real text/elements.
+                  if (self->currentPage && self->currentPage->elements.empty() &&
+                      self->currentPageNextY > 0 &&
+                      self->currentPageNextY + imageMarginTop + displayHeight + imageMarginBottom >
+                          self->viewportHeight) {
+                    LOG_DBG("EHP", "Dropping leading whitespace before tall image: y=%d img=%dx%d viewport=%u",
+                            self->currentPageNextY, displayWidth, displayHeight, self->viewportHeight);
+                    self->currentPageNextY = 0;
+                  }
+
+                  // Re-fit after the final page decision. The pixel cache may already
+                  // have been generated at the larger size; ImageBlock deliberately
+                  // supports scaling that cache to the final layout dimensions.
+                  const int availableImageHeight =
+                      std::max(1, static_cast<int>(self->viewportHeight) - self->currentPageNextY -
+                                      static_cast<int>(imageMarginTop) - static_cast<int>(imageMarginBottom));
+                  if (displayHeight > availableImageHeight && displayHeight > 0) {
+                    const int oldWidth = displayWidth;
+                    const int oldHeight = displayHeight;
+                    displayWidth = std::max(1, static_cast<int>(
+                                                   (static_cast<int64_t>(displayWidth) * availableImageHeight +
+                                                    displayHeight / 2) /
+                                                   displayHeight));
+                    displayHeight = availableImageHeight;
+                    LOG_DBG("EHP", "Re-fit tall image to remaining page height: %dx%d -> %dx%d (avail=%d)",
+                            oldWidth, oldHeight, displayWidth, displayHeight, availableImageHeight);
                   }
 
                   self->currentPageNextY += imageMarginTop;

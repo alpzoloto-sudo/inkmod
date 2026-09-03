@@ -634,7 +634,13 @@ function formatSize(bytes) {
         const blob = await entry.async('blob');
         // Flatten: Google Fonts zips nest files under e.g. static/, and
         // downstream code only ever looks at File.name, not any path.
-        const baseName = path.split('/').pop();
+        // ZIP entry names are *supposed* to use '/', but archives made by
+        // Windows tools may preserve '\' instead. Normalize both forms before
+        // flattening so the firmware receives a safe basename only. The server
+        // deliberately rejects path separators as a traversal safeguard.
+        const normalizedPath = path.replace(/\\/g, '/');
+        const baseName = normalizedPath.split('/').pop();
+        if (!baseName) continue;
         dt.items.add(new File([blob], baseName));
       }
       targetInput.files = dt.files;

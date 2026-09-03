@@ -32,6 +32,10 @@ class SecureClient : public Client {
   // Certificate / verification configuration (applied before connect()).
   void setCACert(const char* rootCA);
   void setInsecure();  // skip peer verification (testing only)
+  // Prefer TLS 1.2 first on very memory-constrained transfers. TLS 1.3 can
+  // require a larger record/handshake working set on ESP32-C3. If TLS 1.2 is
+  // unavailable, connect() automatically retries with normal auto-negotiation.
+  void setPreferTls12(bool prefer) { _preferTls12 = prefer; }
 
   // Connect and perform a TLS 1.3 handshake to host:port (uses the SNI host).
   int connect(IPAddress ip, uint16_t port) override;
@@ -57,6 +61,7 @@ class SecureClient : public Client {
   WiFiClient _transport;
   const char* _rootCA = nullptr;
   bool _insecure = false;
+  bool _preferTls12 = false;
   void* _ssl = nullptr;  // WOLFSSL* (opaque to keep wolfSSL headers out of here)
   void* _ctx = nullptr;  // WOLFSSL_CTX*
   bool _connected = false;

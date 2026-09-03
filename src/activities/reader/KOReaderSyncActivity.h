@@ -21,10 +21,16 @@
  */
 class KOReaderSyncActivity final : public Activity {
  public:
+  enum class Mode : uint8_t {
+    INTERACTIVE = 0,
+    AUTO = 1,
+  };
+
   explicit KOReaderSyncActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& epubPath,
                                 int currentSpineIndex, int currentPage, int totalPagesInSpine,
                                 KOReaderPosition localKoPos, std::string localChapterName,
-                                std::optional<uint16_t> currentParagraphIndex = std::nullopt)
+                                std::optional<uint16_t> currentParagraphIndex = std::nullopt,
+                                Mode mode = Mode::INTERACTIVE)
       : Activity("KOReaderSync", renderer, mappedInput),
         epubPath(epubPath),
         currentSpineIndex(currentSpineIndex),
@@ -32,6 +38,7 @@ class KOReaderSyncActivity final : public Activity {
         totalPagesInSpine(totalPagesInSpine),
         currentParagraphIndex(currentParagraphIndex),
         localChapterName(std::move(localChapterName)),
+        mode(mode),
         remoteProgress{},
         remotePosition{},
         localProgress(std::move(localKoPos)) {}
@@ -40,7 +47,7 @@ class KOReaderSyncActivity final : public Activity {
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
-  bool preventAutoSleep() override { return state == CONNECTING || state == SYNCING; }
+  bool preventAutoSleep() override { return state == CONNECTING || state == SYNCING || state == UPLOADING; }
   bool isReaderActivity() const override { return true; }
   bool allowPowerAsConfirmInReaderMode() const override { return true; }
 
@@ -64,6 +71,7 @@ class KOReaderSyncActivity final : public Activity {
   int currentPage;
   int totalPagesInSpine;
   std::optional<uint16_t> currentParagraphIndex;
+  Mode mode = Mode::INTERACTIVE;
 
   State state = WIFI_SELECTION;
   std::string statusMessage;
@@ -89,6 +97,7 @@ class KOReaderSyncActivity final : public Activity {
   void onWifiSelectionComplete(bool success);
   void performSync();
   void performUpload();
+  bool ensureDocumentHash();
   void ensureEpubLoaded();
   void saveProgressAndReturn(const InkMODPosition& position);
   void returnToReader();

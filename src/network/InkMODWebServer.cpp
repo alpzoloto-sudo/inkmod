@@ -11,8 +11,10 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <WiFi.h>
+#include <ZipFile.h>
 #include <esp_task_wdt.h>
 
+#include <cstdio>
 #include <algorithm>
 #include <iterator>
 
@@ -214,6 +216,8 @@ void InkMODWebServer::begin() {
              [this] { handleUpload(bookCacheUpload, true); });
   server->on("/api/books/fb2-package", HTTP_POST, [this] { handleUploadPost(fb2PackageUpload); },
              [this] { handleUpload(fb2PackageUpload, false, true); });
+  server->on("/api/books/wrapped-epub", HTTP_POST, [this] { handleUploadPost(wrappedEpubUpload); },
+             [this] { handleUpload(wrappedEpubUpload, false, false, true); });
 
   // Create folder endpoint
   server->on("/mkdir", HTTP_POST, [this] { handleCreateFolder(); });
@@ -744,7 +748,8 @@ static bool flushUploadBuffer(InkMODWebServer::UploadState& state) {
 }
 
 void InkMODWebServer::handleUpload(UploadState& state, const bool preparedBookCache,
-                                   const bool preparedFb2Package) const {
+                                   const bool preparedFb2Package,
+                                   const bool preparedWrappedEpub) const {
   static size_t lastLoggedSize = 0;
 
   // Reset watchdog at start of every upload callback - HTTP parsing can be slow
@@ -772,7 +777,8 @@ void InkMODWebServer::handleUpload(UploadState& state, const bool preparedBookCa
     if (multipartSlash >= 0) multipartName = multipartName.substring(multipartSlash + 1);
     state.fileName = preparedBookCache ? "book.bin.tmp"
                                        : preparedFb2Package ? "package.epub.tmp"
-                                                            : StringUtils::sanitizeFilename(multipartName.c_str()).c_str();
+                                       : preparedWrappedEpub ? "wrapped.epub.tmp"
+                                                             : StringUtils::sanitizeFilename(multipartName.c_str()).c_str();
     state.size = 0;
     state.success = false;
     state.error = "";
@@ -785,7 +791,7 @@ void InkMODWebServer::handleUpload(UploadState& state, const bool preparedBookCa
     // Get upload path from query parameter (defaults to root if not specified)
     // Note: We use query parameter instead of form data because multipart form
     // fields aren't available until after file upload completes
-    if (preparedBookCache || preparedFb2Package) {
+    if (preparedBookCache || preparedFb2Package || preparedWrappedEpub) {
       if (!server->hasArg("bookPath")) {
         state.error = "Missing bookPath";
         return;
@@ -793,14 +799,45 @@ void InkMODWebServer::handleUpload(UploadState& state, const bool preparedBookCa
       const String bookPath = normalizeWebPath(server->arg("bookPath"));
       String lowerBookPath = bookPath;
       lowerBookPath.toLowerCase();
+      const bool wrappedMode = preparedWrappedEpub || (preparedBookCache && server->arg("wrapped") == "1");
       const bool fb2Mode = preparedFb2Package || (preparedBookCache && server->arg("fb2") == "1");
-      const bool extensionOk = fb2Mode ? (lowerBookPath.endsWith(".fb2") || lowerBookPath.endsWith(".zip"))
-                                       : lowerBookPath.endsWith(".epub");
+      const bool extensionOk = wrappedMode ? lowerBookPath.endsWith(".zip")
+                               : fb2Mode ? (lowerBookPath.endsWith(".fb2") || lowerBookPath.endsWith(".zip"))
+                                         : lowerBookPath.endsWith(".epub");
       if (isProtectedPath(bookPath) || !extensionOk || !Storage.exists(bookPath.c_str())) {
         state.error = "Invalid or missing book path";
         return;
       }
-      if (fb2Mode) {
+
+      if (wrappedMode) {
+        HalFile outer;
+        if (!Storage.openFileForRead("WEB", bookPath, outer)) {
+          state.error = "Failed to inspect wrapped EPUB";
+          return;
+        }
+        const uint64_t outerSize = outer.fileSize64();
+        outer.close();
+        uint32_t h = 2166136261u;
+        for (size_t i = 0; i < bookPath.length(); ++i) {
+          h ^= static_cast<uint8_t>(bookPath[i]);
+          h *= 16777619u;
+        }
+        for (int i = 0; i < 8; ++i) {
+          h ^= static_cast<uint8_t>(outerSize >> (i * 8));
+          h *= 16777619u;
+        }
+        char wrappedPath[64];
+        std::snprintf(wrappedPath, sizeof(wrappedPath), "/.inkmod/wrapped_epub/%08lx.epub",
+                      static_cast<unsigned long>(h));
+        if (preparedWrappedEpub) {
+          state.path = "/.inkmod/wrapped_epub";
+          char wrappedName[32];
+          std::snprintf(wrappedName, sizeof(wrappedName), "%08lx.epub.tmp", static_cast<unsigned long>(h));
+          state.fileName = wrappedName;
+        } else {
+          state.path = Epub::cachePathForFilePath(wrappedPath, "/.inkmod").c_str();
+        }
+      } else if (fb2Mode) {
         Fb2 fb2(bookPath.c_str(), "/.inkmod");
         state.path = fb2.getCachePath().c_str();
       } else {
@@ -821,7 +858,7 @@ void InkMODWebServer::handleUpload(UploadState& state, const bool preparedBookCa
     if (!filePath.endsWith("/")) filePath += "/";
     filePath += state.fileName;
 
-    if (!preparedBookCache && !preparedFb2Package && isProtectedPath(filePath)) {
+    if (!preparedBookCache && !preparedFb2Package && !preparedWrappedEpub && isProtectedPath(filePath)) {
       state.error = "Access denied to protected path";
       LOG_DBG("WEB", "[UPLOAD] FAILED: Access denied to protected path: %s", filePath.c_str());
       return;
@@ -937,6 +974,20 @@ void InkMODWebServer::handleUpload(UploadState& state, const bool preparedBookCa
             state.error = "Prepared FB2 package install failed";
           } else {
             LOG_INF("WEB", "Installed browser-prepared FB2 package: %s", finalPath.c_str());
+          }
+        } else if (preparedWrappedEpub) {
+          String finalPath = filePath;
+          if (finalPath.endsWith(".tmp")) finalPath.remove(finalPath.length() - 4);
+          size_t containerSize = 0;
+          const bool valid = ZipFile(filePath.c_str()).getInflatedFileSize("META-INF/container.xml", &containerSize) &&
+                             containerSize > 0;
+          if (!valid || (Storage.exists(finalPath.c_str()) && !Storage.remove(finalPath.c_str())) ||
+              !Storage.rename(filePath.c_str(), finalPath.c_str())) {
+            Storage.remove(filePath.c_str());
+            state.success = false;
+            state.error = "Prepared wrapped EPUB install failed";
+          } else {
+            LOG_INF("WEB", "Installed browser-prepared wrapped EPUB: %s", finalPath.c_str());
           }
         } else {
           // Clear epub cache to prevent stale metadata issues when overwriting files
@@ -1193,6 +1244,40 @@ void InkMODWebServer::handleMove() const {
   }
 }
 
+namespace {
+void clearBookCachesRecursively(const String& itemPath) {
+  HalFile node = Storage.open(itemPath.c_str());
+  if (!node) return;
+
+  if (!node.isDirectory()) {
+    node.close();
+    clearBookCache(itemPath.c_str());
+    return;
+  }
+
+  HalFile child = node.openNextFile();
+  char name[500];
+  while (child) {
+    child.getName(name, sizeof(name));
+    const bool isDir = child.isDirectory();
+    child.close();
+
+    String childPath = itemPath;
+    if (!childPath.endsWith("/")) childPath += "/";
+    childPath += name;
+    if (isDir)
+      clearBookCachesRecursively(childPath);
+    else
+      clearBookCache(childPath.c_str());
+
+    esp_task_wdt_reset();
+    yield();
+    child = node.openNextFile();
+  }
+  node.close();
+}
+}  // namespace
+
 void InkMODWebServer::handleDelete() const {
   // To ensure backwards compatibility, plain `path` is mapped
   // to a single element JSON array.
@@ -1268,13 +1353,18 @@ void InkMODWebServer::handleDelete() const {
     HalFile f = Storage.open(itemPath.c_str());
     if (f && f.isDirectory()) {
       f.close();
-      // Recursively removes the directory and everything inside it.
+      // Clear every book cache while the directory tree still exists, then
+      // remove the selected directory. This prevents web deletions from
+      // leaving orphaned /.inkmod/fb2_* / epub_* cache directories behind.
+      clearBookCachesRecursively(itemPath);
       success = Storage.removeDir(itemPath.c_str());
     } else {
-      // It's a file (or couldn't open as dir) — remove file
+      // Clear by original path before deletion; cache keys are path-based and
+      // do not require the book file to remain present, but doing it first is
+      // safer for format-specific cache implementations.
       if (f) f.close();
-      success = Storage.remove(itemPath.c_str());
       clearBookCache(itemPath.c_str());
+      success = Storage.remove(itemPath.c_str());
     }
 
     if (!success) {

@@ -46,7 +46,7 @@ class InkMODWebServer {
     size_t bufferPos = 0;
 
     UploadState() { buffer.resize(UPLOAD_BUFFER_SIZE); }
-  } upload, bookCacheUpload, fb2PackageUpload;
+  } upload, bookCacheUpload, fb2PackageUpload, wrappedEpubUpload;
 
   InkMODWebServer();
   ~InkMODWebServer();
@@ -101,7 +101,8 @@ class InkMODWebServer {
   void handleWallpapersPage() const;
   void handleFileListData() const;
   void handleDownload() const;
-  void handleUpload(UploadState& state, bool preparedBookCache = false, bool preparedFb2Package = false) const;
+  void handleUpload(UploadState& state, bool preparedBookCache = false, bool preparedFb2Package = false,
+                    bool preparedWrappedEpub = false) const;
   void handleUploadPost(UploadState& state) const;
   void handleCreateFolder() const;
   void handleRename() const;

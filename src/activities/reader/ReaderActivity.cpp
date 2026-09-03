@@ -32,15 +32,29 @@ static bool isImagePreviewFile(const std::string& path) {
 }
 
 bool ReaderActivity::shouldShowLoadingPopup(const std::string& path) {
-  // Only first-open EPUBs are slow enough to need the popup (they build the
-  // spine/TOC cache). A cached EPUB opens in ~ms, so showing the popup would
-  // just add an extra full e-ink refresh (~3s on X3) before the reader paints
-  // its first page; that page's own refresh is the visible "working" feedback.
-  // Other formats, and EPUBs without a metadata cache yet, keep the popup.
   if (isXtcFile(path) || isTxtFile(path) || isImagePreviewFile(path)) {
     return true;
   }
-  return !Epub::hasCache(path, "/.inkmod");
+
+  // A browser-prepared EPUB/FB2 package already has book.bin before it has
+  // ever been opened on the device. The old fast-cache shortcut therefore
+  // suppressed the loading popup, even though the reader still had first-open
+  // work to do (section/layout/cache validation). On e-ink that looked exactly
+  // like a freeze.
+  //
+  // Keep the no-extra-refresh behaviour for books that have genuinely been
+  // opened before, but show feedback whenever there is no saved reader
+  // progress yet. Web preparation intentionally does not create progress.bin.
+  Epub epub(path, "/.inkmod");
+  const bool hasMetadataCache = Epub::hasCache(path, "/.inkmod");
+  if (!hasMetadataCache) {
+    return true;
+  }
+
+  const std::string progressPath = epub.getCachePath() + "/progress.bin";
+  const std::string progressBackupPath = progressPath + ".bak";
+  const bool hasReaderProgress = Storage.exists(progressPath.c_str()) || Storage.exists(progressBackupPath.c_str());
+  return !hasReaderProgress;
 }
 
 std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path, const std::function<void(uint8_t)>& onProgress) {

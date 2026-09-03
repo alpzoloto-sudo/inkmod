@@ -107,6 +107,8 @@ class SecureHttpClient {
   // seconds of latency plus the ECC/RSA heap spike on PSRAM-less boards.
   // setReuse(false) restores connection-per-request behavior.
   void setReuse(bool reuse) { _reuse = reuse; }
+  // Prefer the smaller TLS 1.2 working set for large downloads on ESP32-C3.
+  void setPreferTls12(bool prefer) { _preferTls12 = prefer; _secure.setPreferTls12(prefer); }
 
   // Parse the URL and reset per-request state. Returns false on a malformed
   // URL.
@@ -577,6 +579,7 @@ class SecureHttpClient {
   uint16_t _connPort = 0;
   bool _connHttps = false;
   bool _reuse = true;
+  bool _preferTls12 = false;
 
   std::string _scheme;
   std::string _host;

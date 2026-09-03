@@ -1050,7 +1050,11 @@ void SettingsActivity::render(RenderLock&&) {
   const Rect headerRect{safeArea.x, metrics.topPadding, safeArea.width, metrics.headerHeight};
   GUI.drawHeader(renderer, headerRect, tr(STR_SETTINGS_TITLE));
 
-  if (SETTINGS.uiTheme == InkMODSettings::CLASSIC || SETTINGS.uiTheme == InkMODSettings::DASHBOARD) {
+  // X3 has a compact header across every theme. Keep the date in the same
+  // status row as the clock for all X3 themes so switching themes inside
+  // Settings cannot move the date into a second line and overlap the header.
+  if (gpio.deviceIsX3() || SETTINGS.uiTheme == InkMODSettings::CLASSIC ||
+      SETTINGS.uiTheme == InkMODSettings::DASHBOARD) {
     drawHeaderDateBeforeClock(renderer, headerRect, metrics);
   } else {
     int headerDateLineBottom = headerDateLineBottomY(renderer, metrics);

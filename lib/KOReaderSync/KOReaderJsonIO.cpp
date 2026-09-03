@@ -15,6 +15,8 @@ bool save(const KOReaderCredentialStore& store, const char* path) {
   doc["password_obf"] = obfuscation::obfuscateToBase64(store.getPassword());
   doc["serverUrl"] = store.getServerUrl();
   doc["matchMethod"] = static_cast<uint8_t>(store.getMatchMethod());
+  doc["sendMetadata"] = store.getSendMetadata();
+  doc["syncBehavior"] = static_cast<uint8_t>(store.getSyncBehavior());
 
   FsFile file;
   if (!Storage.openFileForWrite("KRS", path, file)) {
@@ -55,10 +57,35 @@ bool load(KOReaderCredentialStore& store, const char* json, bool* needsResave) {
   }
 
   store.setCredentials(user, pass);
-  store.setServerUrl(doc["serverUrl"] | std::string(""));
+
+  // CrossPoint now uses sync.crosspointreader.com as the default server.
+  // Old inkMOD files used an empty URL to mean sync.koreader.rocks, so pin
+  // those legacy files explicitly instead of silently moving an existing
+  // account to another server.
+  const bool hasSyncBehavior = !doc["syncBehavior"].isNull();
+  const bool hasSendMetadata = !doc["sendMetadata"].isNull();
+  const bool legacyInkmodFile = !hasSyncBehavior && !hasSendMetadata;
+  std::string server = doc["serverUrl"] | std::string("");
+  if (legacyInkmodFile && server.empty() && !user.empty()) {
+    server = "https://sync.koreader.rocks";
+    if (needsResave) *needsResave = true;
+  }
+  store.setServerUrl(server);
 
   uint8_t method = doc["matchMethod"] | (uint8_t)0;
   store.setMatchMethod(static_cast<DocumentMatchMethod>(method));
+  store.setSendMetadata(doc["sendMetadata"] | false);
+
+  if (hasSyncBehavior) {
+    const uint8_t behavior = doc["syncBehavior"] | static_cast<uint8_t>(KOReaderSyncBehavior::SMART);
+    store.setSyncBehavior(behavior == static_cast<uint8_t>(KOReaderSyncBehavior::ASK_EVERY_TIME)
+                              ? KOReaderSyncBehavior::ASK_EVERY_TIME
+                              : KOReaderSyncBehavior::SMART);
+  } else {
+    // Preserve the old interactive flow for migrated users.
+    store.setSyncBehavior(KOReaderSyncBehavior::ASK_EVERY_TIME);
+    if (needsResave) *needsResave = true;
+  }
 
   return true;
 }

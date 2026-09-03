@@ -150,15 +150,20 @@ int SecureClient::connectWithMethod(const char* host, uint16_t port, void* metho
 }
 
 int SecureClient::connect(const char* host, uint16_t port) {
-  // Negotiate the highest mutually supported version rather than pinning TLS 1.3:
-  // self-hosted / Let's Encrypt nginx often tops out at TLS 1.2, and a 1.3-only
-  // client fails those handshakes outright. v23 still selects 1.3 when the peer
-  // offers it (WOLFSSL_TLS13 is enabled) and falls back to 1.2 otherwise.
+  // For large file transfers on PSRAM-less ESP32-C3, TLS 1.3 can complete its
+  // handshake and then fail allocating the first record buffer (wolfSSL
+  // MEMORY_E). In low-memory mode try TLS 1.2 first; its working set is smaller
+  // with the servers used by ordinary OPDS endpoints. Fall back to auto mode so
+  // TLS-1.3-only servers still work.
+  if (_preferTls12) {
+    if (connectWithMethod(host, port, wolfTLSv1_2_client_method(), "tls1.2-lowmem")) return 1;
+    if (Serial) Serial.println("[SecureClient] TLS 1.2 low-memory handshake failed; retrying auto");
+    return connectWithMethod(host, port, wolfSSLv23_client_method(), "auto");
+  }
+
+  // Normal mode negotiates the highest mutually supported version.
   if (connectWithMethod(host, port, wolfSSLv23_client_method(), "auto")) return 1;
 
-  // Some TLS 1.2-only servers are intolerant of a TLS 1.3-capable ClientHello
-  // and abort with a fatal handshake_failure alert. Retry with an explicit
-  // TLS 1.2 ClientHello before giving up.
   if (Serial) Serial.println("[SecureClient] retrying with TLS 1.2-only handshake");
   return connectWithMethod(host, port, wolfTLSv1_2_client_method(), "tls1.2");
 }

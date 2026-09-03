@@ -227,15 +227,38 @@ uint64_t SDCardManager::sdUsedBytes() {
 }
 
 bool SDCardManager::removeDir(const char* path) {
-  auto dir = vol().open(path); if (!dir || !dir.isDirectory()) return false;
-  auto file = dir.openNextFile(); char name[128];
-  while (file) {
-    String filePath = path; if (!filePath.endsWith("/")) filePath += "/";
-    file.getName(name, sizeof(name)); filePath += name;
-    if (file.isDirectory()) { if (!removeDir(filePath.c_str())) return false; }
-    else { if (!vol().remove(filePath.c_str())) return false; }
-    file = dir.openNextFile();
+  FsFile dir = vol().open(path);
+  if (!dir) return false;
+  if (!dir.isDirectory()) {
+    dir.close();
+    return false;
   }
+
+  char name[128];
+  while (true) {
+    FsFile file = dir.openNextFile();
+    if (!file) break;
+
+    String filePath = path;
+    if (!filePath.endsWith("/")) filePath += "/";
+    file.getName(name, sizeof(name));
+    filePath += name;
+    const bool isDirectory = file.isDirectory();
+
+    // Close the child before deleting/re-entering the directory.  The build also
+    // enables destructor-close, but deterministic closure here avoids carrying
+    // an extra descriptor through recursive deletion and makes error paths safe
+    // even if that SdFat option changes later.
+    file.close();
+
+    const bool ok = isDirectory ? removeDir(filePath.c_str()) : vol().remove(filePath.c_str());
+    if (!ok) {
+      dir.close();
+      return false;
+    }
+  }
+
+  dir.close();
   return vol().rmdir(path);
 }
 

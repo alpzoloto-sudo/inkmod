@@ -1,6 +1,7 @@
 #include "JpegToBmpConverter.h"
 
 #include <HalDisplay.h>
+#include <HalGPIO.h>
 #include <HalStorage.h>
 #include <JPEGDEC.h>
 #include <Logging.h>
@@ -614,10 +615,19 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(FsFile& jpegFile, Print& bm
       static_cast<float>(std::max(1, targetHeight)) / std::max(1, legacyHeight));
   const bool legacyWouldUpscale = legacyFitScale > 1.0f;
 
+  // X3 has the same ESP32-C3 class of memory, but its home themes request
+  // taller/wider derived cover thumbs.  Reconstructing a full progressive JPEG
+  // just to make a small 1-bit Home thumbnail can fragment enough heap to make
+  // the thumbnail generation disappear midway through the progress popup.
+  // For these *derived* X3 assets prefer the old streaming 1/8 decoder even
+  // when a modest upscale is needed.  Reader images, sleep covers and X4 keep
+  // the full-quality route unchanged.
+  const bool x3SmallOneBitThumb =
+      oneBit && gpio.deviceIsX3() && requestedOutputPixels < FULL_PROGRESSIVE_MIN_OUTPUT_PIXELS;
   const bool smallDerivedProgressive =
       JpegTypeDetector::shouldUseFullProgressive(jpegHeader) &&
       requestedOutputPixels < FULL_PROGRESSIVE_MIN_OUTPUT_PIXELS &&
-      !legacyWouldUpscale;
+      (!legacyWouldUpscale || x3SmallOneBitThumb);
 
   if (JpegTypeDetector::shouldUseFullProgressive(jpegHeader) && !smallDerivedProgressive) {
     const int64_t pixels = static_cast<int64_t>(jpegHeader.width) * jpegHeader.height;
@@ -629,8 +639,8 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(FsFile& jpegFile, Print& bm
   }
   if (smallDerivedProgressive) {
     LOG_INF("PJPG",
-            "SOF2 small-output BMP route: %dx%d -> %dx%d (%lld output px, legacy=%dx%d) -> legacy JPEGDEC 1/8",
-            jpegHeader.width, jpegHeader.height, targetWidth, targetHeight,
+            "SOF2 small-output BMP route%s: %dx%d -> %dx%d (%lld output px, legacy=%dx%d) -> legacy JPEGDEC 1/8",
+            x3SmallOneBitThumb ? " [X3-safe]" : "", jpegHeader.width, jpegHeader.height, targetWidth, targetHeight,
             static_cast<long long>(requestedOutputPixels), legacyWidth, legacyHeight);
   } else if (JpegTypeDetector::shouldUseFullProgressive(jpegHeader) &&
              requestedOutputPixels < FULL_PROGRESSIVE_MIN_OUTPUT_PIXELS && legacyWouldUpscale) {
@@ -706,13 +716,26 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(FsFile& jpegFile, Print& bm
     const float scaleY = static_cast<float>(targetHeight) / std::max(1, srcHeight);
     float requestedScale = crop ? std::max(scaleX, scaleY) : std::min(scaleX, scaleY);
     if (requestedScale > 1.0f) requestedScale = 1.0f;
-    if (requestedScale <= 0.125f) {
+
+    // Small 1-bit Home thumbnails on X3 may safely accept a modest upscale
+    // after JPEGDEC's coarse decoder.  The important part is avoiding a full
+    // source decode for borderline cases such as 570x900 -> 296x468, whose
+    // requested crop scale (~0.52) narrowly missed the old 1/2 threshold.
+    // Keep all original thresholds everywhere else, especially X4 and reader
+    // illustrations, so their image quality is byte-for-byte policy-compatible.
+    const bool x3SmallOneBitBaselineThumb =
+        oneBit && gpio.deviceIsX3() && requestedOutputPixels < FULL_PROGRESSIVE_MIN_OUTPUT_PIXELS;
+    const float eighthThreshold = x3SmallOneBitBaselineThumb ? 0.16f : 0.125f;
+    const float quarterThreshold = x3SmallOneBitBaselineThumb ? 0.30f : 0.25f;
+    const float halfThreshold = x3SmallOneBitBaselineThumb ? 0.60f : 0.50f;
+
+    if (requestedScale <= eighthThreshold) {
       decodeDenom = 8;
       decodeFlags = JPEG_SCALE_EIGHTH;
-    } else if (requestedScale <= 0.25f) {
+    } else if (requestedScale <= quarterThreshold) {
       decodeDenom = 4;
       decodeFlags = JPEG_SCALE_QUARTER;
-    } else if (requestedScale <= 0.5f) {
+    } else if (requestedScale <= halfThreshold) {
       decodeDenom = 2;
       decodeFlags = JPEG_SCALE_HALF;
     }

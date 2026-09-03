@@ -527,7 +527,8 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
              StrId::STR_TOGGLE_BIONIC_READING, StrId::STR_CYCLE_PAGE_TURN,
              StrId::STR_FILE_TRANSFER, StrId::STR_CALIBRE_WIRELESS, StrId::STR_JOIN_NETWORK, StrId::STR_CREATE_HOTSPOT,
              StrId::STR_SCREENSHOT_BUTTON, StrId::STR_READER_DARK_MODE, StrId::STR_FOOTNOTES, StrId::STR_BROWSE_FILES,
-             StrId::STR_SYNC_PROGRESS, StrId::STR_DICTIONARY, StrId::STR_CREATE_CLIPPING},
+             StrId::STR_SYNC_PROGRESS, StrId::STR_QUICK_SYNC,
+             StrId::STR_DICTIONARY, StrId::STR_CREATE_CLIPPING},
             "longPressMenuAction", StrId::STR_CAT_CONTROLS)
             .withEnumRawValues(
                 {InkMODSettings::LONG_MENU_OFF, InkMODSettings::LONG_MENU_SLEEP,
@@ -540,6 +541,7 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                  InkMODSettings::LONG_MENU_CREATE_HOTSPOT, InkMODSettings::LONG_MENU_SCREENSHOT,
                  InkMODSettings::LONG_MENU_TOGGLE_DARK_MODE, InkMODSettings::LONG_MENU_FOOTNOTES,
                  InkMODSettings::LONG_MENU_FILE_BROWSER, InkMODSettings::LONG_MENU_SYNC_PROGRESS,
+                 InkMODSettings::LONG_MENU_QUICK_SYNC,
                  InkMODSettings::LONG_MENU_DICTIONARY_LOOKUP, InkMODSettings::LONG_MENU_CREATE_CLIPPING}));
     add(SettingInfo::Enum(
             StrId::STR_LONG_PRESS_BACK_ACTION, &InkMODSettings::longPressBackAction,
@@ -548,7 +550,8 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
              StrId::STR_TOGGLE_BIONIC_READING, StrId::STR_CYCLE_PAGE_TURN,
              StrId::STR_FILE_TRANSFER, StrId::STR_CALIBRE_WIRELESS, StrId::STR_JOIN_NETWORK, StrId::STR_CREATE_HOTSPOT,
              StrId::STR_SCREENSHOT_BUTTON, StrId::STR_READER_DARK_MODE, StrId::STR_FOOTNOTES, StrId::STR_BROWSE_FILES,
-             StrId::STR_SYNC_PROGRESS, StrId::STR_DICTIONARY, StrId::STR_CREATE_CLIPPING},
+             StrId::STR_SYNC_PROGRESS, StrId::STR_QUICK_SYNC,
+             StrId::STR_DICTIONARY, StrId::STR_CREATE_CLIPPING},
             "longPressBackAction", StrId::STR_CAT_CONTROLS)
             .withEnumRawValues(
                 {InkMODSettings::LONG_MENU_OFF, InkMODSettings::LONG_MENU_SLEEP,
@@ -561,6 +564,7 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                  InkMODSettings::LONG_MENU_CREATE_HOTSPOT, InkMODSettings::LONG_MENU_SCREENSHOT,
                  InkMODSettings::LONG_MENU_TOGGLE_DARK_MODE, InkMODSettings::LONG_MENU_FOOTNOTES,
                  InkMODSettings::LONG_MENU_FILE_BROWSER, InkMODSettings::LONG_MENU_SYNC_PROGRESS,
+                 InkMODSettings::LONG_MENU_QUICK_SYNC,
                  InkMODSettings::LONG_MENU_DICTIONARY_LOOKUP, InkMODSettings::LONG_MENU_CREATE_CLIPPING}));
     add(SettingInfo::Toggle(StrId::STR_PWR_BTN_FOOTNOTE_BACK, &InkMODSettings::pwrBtnFootnoteBack,
                             "pwrBtnFootnoteBack", StrId::STR_CAT_CONTROLS));

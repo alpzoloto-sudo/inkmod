@@ -205,15 +205,58 @@ void drawCenteredStatsRow(const GfxRenderer& renderer, const uint8_t* icon, cons
   }
 }
 
+struct ProgressBlockLayout {
+  int fontId = UI_10_FONT_ID;
+  int lineHeight = 0;
+  bool compactHeaderRow = false;
+  int compactHeaderY = 0;
+  int durationY = 0;
+  int barY = 0;
+  int labelY = 0;
+};
+
+ProgressBlockLayout computeProgressBlockLayout(const GfxRenderer& renderer, const Rect& coverRect,
+                                               const char* durationLabel, const char* progressLabel) {
+  ProgressBlockLayout layout;
+  layout.fontId = UI_10_FONT_ID;
+  layout.lineHeight = renderer.getLineHeight(layout.fontId);
+
+  const bool hasDuration = durationLabel != nullptr && durationLabel[0] != '\0';
+  const bool hasProgress = progressLabel != nullptr && progressLabel[0] != '\0';
+  const int compactGap = gpio.deviceIsX3() ? 8 : 12;
+  const int durationWidth = hasDuration ? renderer.getTextWidth(layout.fontId, durationLabel) : 0;
+  const int progressWidth = hasProgress ? renderer.getTextWidth(layout.fontId, progressLabel) : 0;
+  const bool largeSystemFont = layout.lineHeight >= 18;
+
+  layout.compactHeaderRow = hasDuration && hasProgress &&
+                            (largeSystemFont || gpio.deviceIsX3()) &&
+                            (durationWidth + compactGap + progressWidth <= coverRect.width);
+
+  if (layout.compactHeaderRow) {
+    layout.compactHeaderY = coverRect.y + coverRect.height + kProgressBlockGap;
+    layout.durationY = layout.compactHeaderY;
+    layout.barY = layout.compactHeaderY + layout.lineHeight + std::max(3, kProgressBarGap - 2);
+    layout.labelY = layout.compactHeaderY;
+  } else {
+    layout.durationY = coverRect.y + coverRect.height + kProgressBlockGap;
+    layout.barY = layout.durationY + layout.lineHeight + kProgressBarGap;
+    layout.labelY = layout.barY + kProgressBarHeight + kProgressLabelGap;
+  }
+
+  return layout;
+}
+
+
 int progressLabelBottomY(const GfxRenderer& renderer, const Rect& coverRect, const float progressPercent) {
   if (progressPercent < 0.0f) {
     return coverRect.y + coverRect.height;
   }
 
-  const int durationY = coverRect.y + coverRect.height + kProgressBlockGap;
-  const int barY = durationY + renderer.getLineHeight(UI_10_FONT_ID) + kProgressBarGap;
-  const int labelY = barY + kProgressBarHeight + kProgressLabelGap;
-  return labelY + renderer.getLineHeight(UI_10_FONT_ID);
+  char progressLabel[12];
+  snprintf(progressLabel, sizeof(progressLabel), "%d%%",
+           std::clamp(static_cast<int>(progressPercent + 0.5f), 0, 100));
+  ProgressBlockLayout layout = computeProgressBlockLayout(renderer, coverRect, nullptr, progressLabel);
+  return layout.compactHeaderRow ? (layout.barY + kProgressBarHeight) : (layout.labelY + layout.lineHeight);
 }
 
 void drawStatsOverlay(const GfxRenderer& renderer, const GlobalReadingStats& globalStats, const Rect& coverRect,
@@ -275,12 +318,40 @@ std::string coverPathForImageRect(const RecentBook& book, const Rect& imageRect)
   }
 
   if (FsHelpers::hasEpubExtension(book.path)) {
-    return Epub(book.path, "/.inkmod").getAdaptiveThumbBmpPath(imageRect.width, imageRect.height);
+    Epub epub(book.path, "/.inkmod");
+    const std::string adaptive = epub.getAdaptiveThumbBmpPath(imageRect.width, imageRect.height);
+    if (!adaptive.empty() && Storage.exists(adaptive.c_str())) {
+      return adaptive;
+    }
+
+    const std::string readyThumb = epub.getThumbBmpPath();
+    if (!readyThumb.empty() && Storage.exists(readyThumb.c_str())) {
+      return readyThumb;
+    }
+
+    if (Storage.exists(book.coverBmpPath.c_str())) {
+      return book.coverBmpPath;
+    }
+
+    std::string themed = UITheme::getCoverThumbPath(book.coverBmpPath, imageRect.width, imageRect.height);
+    if (!themed.empty() && Storage.exists(themed.c_str())) {
+      return themed;
+    }
+
+    themed = UITheme::getCoverThumbPath(book.coverBmpPath, imageRect.height);
+    if (!themed.empty() && Storage.exists(themed.c_str())) {
+      return themed;
+    }
+
+    return {};
   }
 
   std::string coverBmpPath = UITheme::getCoverThumbPath(book.coverBmpPath, imageRect.width, imageRect.height);
   if (coverBmpPath.empty() || !Storage.exists(coverBmpPath.c_str())) {
     coverBmpPath = UITheme::getCoverThumbPath(book.coverBmpPath, imageRect.height);
+  }
+  if ((coverBmpPath.empty() || !Storage.exists(coverBmpPath.c_str())) && Storage.exists(book.coverBmpPath.c_str())) {
+    coverBmpPath = book.coverBmpPath;
   }
   return coverBmpPath;
 }
@@ -321,14 +392,30 @@ void drawProgressBlock(const GfxRenderer& renderer, const Rect& coverRect, const
 
   const int barW = coverRect.width;
   const int barX = coverRect.x;
-  const int durationY = coverRect.y + coverRect.height + kProgressBlockGap;
-  const int barY = durationY + renderer.getLineHeight(UI_10_FONT_ID) + kProgressBarGap;
   const bool textBlack = !inverted;
 
+  char duration[32] = {0};
   if (stats != nullptr && stats->totalReadingSeconds > 0) {
-    char duration[32];
     BookReadingStats::formatDuration(stats->totalReadingSeconds, duration, sizeof(duration));
-    renderer.drawText(UI_10_FONT_ID, barX, durationY, duration, textBlack);
+  }
+
+  char progressLabel[12] = {0};
+  if (progressPercent >= 0.0f) {
+    const int progress = std::clamp(static_cast<int>(progressPercent + 0.5f), 0, 100);
+    snprintf(progressLabel, sizeof(progressLabel), "%d%%", progress);
+  }
+
+  ProgressBlockLayout layout = computeProgressBlockLayout(renderer, coverRect,
+                                                          duration[0] ? duration : nullptr,
+                                                          progressLabel[0] ? progressLabel : nullptr);
+
+  if (duration[0]) {
+    if (layout.compactHeaderRow) {
+      renderer.drawText(layout.fontId, barX, layout.durationY, duration, textBlack);
+    } else {
+      const std::string safeDuration = renderer.truncatedText(layout.fontId, duration, barW);
+      renderer.drawText(layout.fontId, barX, layout.durationY, safeDuration.c_str(), textBlack);
+    }
   }
 
   if (progressPercent < 0.0f) {
@@ -337,26 +424,26 @@ void drawProgressBlock(const GfxRenderer& renderer, const Rect& coverRect, const
 
   const int progress = std::clamp(static_cast<int>(progressPercent + 0.5f), 0, 100);
   const int fillW = (barW * progress) / 100;
-  
+
   if (inverted) {
-    // Инвертированный режим для экрана сна
-    renderer.drawRect(barX, barY, barW, kProgressBarHeight, false);
+    renderer.drawRect(barX, layout.barY, barW, kProgressBarHeight, false);
     if (fillW > 0) {
-      renderer.fillRect(barX, barY, fillW, kProgressBarHeight, false);
+      renderer.fillRect(barX, layout.barY, fillW, kProgressBarHeight, false);
     }
   } else {
-    // Обычный режим - используем dithering для эффекта градиента
-    renderer.fillRectDither(barX, barY, barW, kProgressBarHeight, Color::LightGray);
+    renderer.fillRectDither(barX, layout.barY, barW, kProgressBarHeight, Color::LightGray);
     if (fillW > 0) {
-      renderer.fillRectDither(barX, barY, fillW, kProgressBarHeight, Color::DarkGray);
+      renderer.fillRectDither(barX, layout.barY, fillW, kProgressBarHeight, Color::DarkGray);
     }
   }
 
-  char progressLabel[12];
-  snprintf(progressLabel, sizeof(progressLabel), "%d%%", progress);
-  const int labelW = renderer.getTextWidth(UI_10_FONT_ID, progressLabel);
-  renderer.drawText(UI_10_FONT_ID, barX + barW - labelW, barY + kProgressBarHeight + kProgressLabelGap, progressLabel,
-                    textBlack);
+  const int labelW = renderer.getTextWidth(layout.fontId, progressLabel);
+  const int labelX = barX + std::max(0, barW - labelW);
+  if (layout.compactHeaderRow) {
+    renderer.drawText(layout.fontId, labelX, layout.labelY, progressLabel, textBlack);
+  } else {
+    renderer.drawText(layout.fontId, labelX, layout.labelY, progressLabel, textBlack);
+  }
 }
 
 // ============================================================================

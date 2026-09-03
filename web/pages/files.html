@@ -49,10 +49,10 @@
         <div class="convert-options" id="convertOptions" style="display:none;">
           <div class="convert-row">
             <label class="convert-checkbox" id="prepareBookRow">
-              <input type="checkbox" id="prepareBookBeforeUpload" onchange="updateUploadBtnLabel()">
-              <span data-i18n="files.prepare_book_checkbox">⚡ Prepare for fast opening</span>
+              <input type="checkbox" id="prepareBookBeforeUpload" onchange="updateUploadBtnLabel()" checked>
+              <span data-i18n="files.prepare_book_checkbox">⚡ Prepare cache in browser (original stays unchanged)</span>
             </label>
-            <label class="convert-checkbox">
+            <label class="convert-checkbox" style="display:none;">
               <input type="checkbox" id="convertBeforeUpload" onchange="toggleConvertOptions()">
               <span data-i18n="files.optimize_checkbox">Optimize EPUB/FB2/Images</span>
             </label>
@@ -60,8 +60,8 @@
               <input type="checkbox" id="fb2ToEpubCheckbox" onchange="updateUploadBtnLabel()">
               <span data-i18n="files.fb2_to_epub">📗 Convert FB2 → EPUB</span>
             </label>
-            <span class="convert-separator">—</span>
-            <span class="advanced-options-toggle" id="advancedOptionsToggle" onclick="toggleAdvancedOptions()">
+            <span class="convert-separator" style="display:none;">—</span>
+            <span class="advanced-options-toggle" id="advancedOptionsToggle" onclick="toggleAdvancedOptions()" style="display:none;">
               <span class="advanced-options-arrow" id="advancedOptionsArrow">▶</span>
               <span class="advanced-options-text" data-i18n="files.advanced_mode">Advanced Mode</span>
             </span>
@@ -70,14 +70,14 @@
           <div id="convertInfo" style="display:none; margin-bottom: 10px; font-size: 0.9em;">
           </div>
 
-          <div class="convert-settings" id="convertSettings" style="display:block;">
+          <div class="convert-settings" id="convertSettings" style="display:none;">
             <span>⚫ True-Grayscale</span>
           <span id="convertSizeSummary">📏 Max 480×800px</span>
           <span>📦 85% JPEG</span>
           <span>🔧 Fix SVG</span>
         </div>
         <!-- Advanced Settings Content -->
-        <div class="advanced-settings-content" id="advancedSettingsContent">
+        <div class="advanced-settings-content" id="advancedSettingsContent" style="display:none;">
           <!-- JPEG Quality -->
           <div class="advanced-setting-row quality-row">
             <div class="setting-title" data-i18n="files.jpeg_quality">📦 JPEG Quality</div>

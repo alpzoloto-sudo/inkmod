@@ -215,7 +215,7 @@ inkMOD is a fork of [Crosspoint](https://github.com/crosspoint-reader/crosspoint
 
 * 📢 **Telegram Channel:** [t.me/inkmodx4](https://t.me/inkmodx4)
 * 💸 **Donate via Crypto Bot:** [Send Tip](https://t.me/send?start=IVwqEXbSLhTR)
-* [☕ Buy me a Coffee]([https://secure.wayforpay.com/tips/t76dfc3462ce1](https://send.monobank.ua/jar/9p1oM8v2sa]))
+* ☕ **Buy me a Coffee:** (https://send.monobank.ua/jar/9p1oM8v2sa]))
 
 Support is completely optional and does not unlock or restrict any firmware functionality.
 

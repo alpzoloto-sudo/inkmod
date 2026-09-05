@@ -1,687 +1,721 @@
-# inkMOD User Guide
+# 📖 inkMOD User Guide
 
-Welcome to the **inkMOD** firmware. This guide outlines the hardware controls, navigation, and reading features of the device.
+**inkMOD** is an open-source custom firmware for the **Xteink X4 / X3**, focused on comfortable everyday reading, native book-format support, improved typography and useful reader features while remaining lightweight enough for the limited hardware of the device.
 
-- [inkMOD User Guide](#inkMOD-user-guide)
-  - [1. Hardware Overview](#1-hardware-overview)
-    - [Button Layout](#button-layout)
-  - [2. Power \& Startup](#2-power--startup)
-    - [Power On / Off](#power-on--off)
-    - [First Launch](#first-launch)
-  - [3. Screens](#3-screens)
-    - [3.1 Home Screen](#31-home-screen)
-    - [3.2 Reading Mode](#32-reading-mode)
-    - [3.3 Browse Files Screen](#33-browse-files-screen)
-    - [3.4 Recent Books Screen](#34-recent-books-screen)
-    - [3.5 File Transfer Screen](#35-file-transfer-screen)
-      - [3.5.1 Calibre Wireless Transfers](#351-calibre-wireless-transfers)
-    - [3.6 Settings](#36-settings)
-      - [3.6.1 Display](#361-display)
-      - [3.6.2 Reader](#362-reader)
-      - [3.6.3 Controls](#363-controls)
-      - [3.6.4 System](#364-system)
-      - [3.6.5 OPDS Servers (Multiple Libraries)](#365-opds-servers-multiple-libraries)
-      - [3.6.6 Web Settings (Wi-Fi + OPDS)](#366-web-settings-wi-fi--opds)
-      - [3.6.7 KOReader Sync Quick Setup](#367-koreader-sync-quick-setup)
-    - [3.7 Sleep Screen](#37-sleep-screen)
-    - [3.8 Custom Fonts (SD Card)](#38-custom-fonts-sd-card)
-  - [4. Reading Mode](#4-reading-mode)
-      - [Page Turning](#page-turning)
-      - [Chapter Navigation](#chapter-navigation)
-      - [Auto Page Turn](#auto-page-turn)
-      - [Tilt Page Turn (X3 only)](#tilt-page-turn-x3-only)
-      - [Footnote Navigation](#footnote-navigation)
-      - [System Navigation](#system-navigation)
-      - [Supported Languages](#supported-languages)
-  - [5. Reader Menu](#5-reader-menu)
-      - [5.1 Chapter Selection](#51-chapter-selection)
-      - [5.2 Bookmarks](#52-bookmarks)
-  - [6. Current Limitations & Roadmap](#6-current-limitations--roadmap)
-  - [7. Troubleshooting Issues & Escaping Bootloop](#7-troubleshooting-issues--escaping-bootloop)
-
-## 1. Hardware Overview
-
-The device utilises the standard buttons on the Xteink X4 (in the same layout as the manufacturer firmware, by default):
-
-### Button Layout
-
-| Location        | Buttons                                              |
-| --------------- | ---------------------------------------------------- |
-| **Bottom Edge** | **Back**, **Confirm**, **Left**, **Right**           |
-| **Right Side**  | **Power**, **Volume Up**, **Volume Down**, **Reset** |
-
-Button layout can be customized in the **[Controls Settings](#363-controls)**.
-
-### Taking a Screenshot
-
-When the Power Button and Volume Down button are pressed at the same time, it will take a screenshot and save it in the folder `screenshots/`.
-
-Alternatively, while reading a book, press the **Confirm** button to open the reader menu and select **Take screenshot**.
+> **Installation and flashing instructions are intentionally not duplicated here.**
+> Use the current installation guide published with inkMOD / on 4PDA for flashing and recovery procedures.
 
 ---
 
-## 2. Power & Startup
+## 1. What inkMOD can read
 
-### Power On / Off
+inkMOD supports:
 
-To turn the device on or off, **press and hold the Power button for approximately half a second**.
-In the **[Controls Settings](#363-controls)** you can configure the power button to turn the device off with a short press instead of a long one.
+* **EPUB**
+* **FB2**
+* **FB2.ZIP**
+* **TXT**
+* **XTC**
+* **XTCH**
+* supported book archives detected by their actual contents
 
-To reboot the device (for example after a firmware update or if it's frozen), press and release the Reset button, and then quickly press and hold the Power button for a few seconds.
+### No mandatory book conversion
 
-### First Launch
+You do **not** need to convert FB2 to EPUB or prepare every book on a computer before copying it to the reader.
 
-Upon turning the device on for the first time, you will be placed on the **[Home](#31-home-screen)** screen.
+inkMOD is designed to open normal book files directly.
 
-> [!NOTE]
-> On subsequent restarts, the firmware will automatically reopen the last book you were reading.
+Large books, large chapters and FB2.ZIP archives are processed using memory-conscious streaming specifically because the Xteink hardware has very little available RAM.
+
+For particularly large or image-heavy EPUB files, the web interface also provides **EPUBKIT** browser-side optimization. This is an optional tool rather than a requirement for reading books.
 
 ---
 
-## 3. Screens
+# 2. Controls
 
-### 3.1 Home Screen
+The standard Xteink physical controls are used.
 
-The Home screen is the main entry point to the firmware. From here you can navigate to **[Reading Mode](#4-reading-mode)** with the most recently read book, the **[Browse Files](#33-browse-files-screen)** screen, the **[Recent Books](#34-recent-books-screen)** screen, the **[File Transfer](#35-file-transfer-screen)** screen, or **[Settings](#36-settings)**.
+## Front buttons
 
-### 3.2 Reading Mode
+* **Back**
+* **Confirm / Menu**
+* **Left**
+* **Right**
 
-See [Reading Mode](#4-reading-mode) below for more information.
+## Side controls
 
-### 3.3 Browse Files Screen
+* **Power**
+* **Volume Up**
+* **Volume Down**
+* **Reset**
 
-The Browse Files screen acts as a file and folder browser. The full path to the current directory is shown at the top of the screen. File extensions are displayed alongside each filename, and directories are shown with brackets (e.g. `[folder-name]`). Hidden directories can be shown from settings.
+The exact actions of many buttons can be changed in:
 
-* **Navigate List:** Use **Left** (or **Volume Up**), or **Right** (or **Volume Down**) to move the selection cursor up and down through folders and books. You can also long-press these buttons to scroll a full page up or down.
-* **Open Selection:** Press **Confirm** to open a folder or start reading a selected book. Selecting a `.bmp` file will open the image viewer.
-* **Delete Files or Folders:** Hold and release **Confirm** to open the selected file or folder action menu, then choose **Delete**. You will be given an option to either confirm or cancel. Folder deletion is limited to empty folders.
-* **Book Actions:** EPUB and XTC files can also show options such as **Delete Cache** or **Mark Finished** from the same action menu.
+**Settings → Controls**
 
-### 3.4 Recent Books Screen
-
-The Recent Books screen lists the most recently opened books in a chronological view, displaying title and author.
-
-### 3.5 File Transfer Screen
-
-The File Transfer screen allows you to upload and manage files on the device. When you enter the screen, choose **Join a Network**, **Calibre Wireless**, or **Create Hotspot**. The reader then starts the web server for the selected mode.
-
-See the [web server docs](./docs/webserver.md) for more information on how to connect to the web server and upload files.
-
-The web file manager can upload, download, rename, move, and delete files on the device.
-
-The web interface also supports **WebDAV**, allowing you to mount the device as a network drive and manage files directly from your computer's file manager.
-
-Download links for files already on the device are available in the web interface, so you can retrieve books or screenshots over Wi-Fi without connecting a cable.
-
-A **Wi-Fi signal strength indicator** (dBm) is displayed on-screen during joined-network web server sessions.
-
-> [!TIP]
-> Advanced users can also manage files programmatically or via the command line using `curl`. See the [web server docs](./docs/webserver.md) for details.
-
-### 3.5.1 Calibre Wireless Transfers
-
-inkMOD supports sending books from Calibre using the InkMOD Reader device plugin.
-
-1. Install the plugin in Calibre:
-
-   - Head to https://github.com/inkmod-reader/calibre-plugins/releases to download the latest version of the inkmod_reader plugin.
-
-   - Download the zip file.
-
-   - Open Calibre → Preferences → Plugins → Load plugin from file → Select the zip file.
-
-2. On the device: File Transfer -> Calibre Wireless, then join a network.
-
-3. Make sure your computer is on the same Wi-Fi network.
-
-4. In Calibre, click "Send to device" to transfer books.
-
-### 3.6 Settings
-
-The Settings screen allows you to configure the device's behavior. There are a few settings you can adjust:
-
-#### 3.6.1 Display
-
-- **Sleep Screen**: Which sleep screen to display when the device sleeps:
-
-  - "Dark" (default) - The default dark inkMOD logo sleep screen
-  - "Light" - The same default sleep screen, on a white background
-  - "Custom" - Custom images from the SD card; see [Sleep Screen](#37-sleep-screen) below for more information
-  - "Cover" - The book cover image (Note: this is experimental and may not work as expected)
-  - "None" - A blank screen
-  - "Cover + Custom" - The book cover image while actively reading, falls back to "Custom" behavior otherwise
-  - "Page Overlay" - A sleep overlay on top of the current page
-  - "Reading Stats" - Recent reading stats on the sleep screen
-  - "Minimal" - A minimal sleep screen
-  - "Minimal Stats" - A minimal stats sleep screen on supported devices
-  - "Quick Resume" - Keeps the current content visible while sleeping
-
-- **Sleep Screen Cover Mode**: How to display the book cover when "Cover" sleep screen is selected:
-
-  - "Fit" (default) - Scale the image down to fit centered on the screen, padding with white borders as necessary
-  - "Crop" - Scale the image down and crop as necessary to try to fill the screen (Note: this is experimental and may not work as expected)
-
-- **Sleep Screen Cover Filter**: What filter will be applied to the book cover when "Cover" sleep screen is selected:
-
-  - "None" (default) - The cover image will be converted to a grayscale image and displayed as it is
-  - "Contrast" - The image will be displayed as a black & white image without grayscale conversion
-  - "Inverted" - The image will be inverted as in white & black and will be displayed without grayscale conversion
-
-- **Hide Battery %**: Configure where to suppress the battery percentage display in the status bar; the battery icon will still be shown:
-
-  - "Never" (default) - Always show battery percentage
-  - "In Reader" - Show battery percentage everywhere except in reading mode
-  - "Always" - Always hide battery percentage
-
-- **Refresh Frequency**: Set how often the screen does a full refresh while reading to reduce ghosting; options are every 1, 5, 10, 15, or 30 pages.
-
-- **UI Theme**: Set which UI theme to use:
-
-  - "Classic" - The original InkMOD theme
-  - "Minimal" - A minimal theme with a large book cover
-  - "Lyra" - A theme with simple icons featuring your current book
-  - "Lyra Extended" - Lyra, but displays 3 books instead of 1 on the **[Home Screen](#31-home-screen)**
-  - "Lyra Carousel" - A carousel-based Lyra home layout
-  - "RoundedRaff" - A rounded theme with additional visual styling
-
-- **Recent Books View**: Choose whether the Recent Books screen uses a list or grid layout.
-
-- **Sunlight Fading Fix**: Configure whether to enable a software-fix for the issue where white X4 models may fade when used in direct sunlight:
-
-  - "OFF" (default) - Disable the fix
-  - "ON" - Enable the fix
-
-> [!NOTE]
-> A battery charging indicator is shown on the battery icon whenever the device is actively charging.
-
-#### 3.6.2 Reader
-
-- **Reader Font Family**: Choose the font used for reading:
-
-  - "Lexend Deca" (default)
-  - "Bitter"
-  - "ChareInk"
-
-- **Reader Font Size**: Adjust the text size for reading. Available sizes depend on the firmware variant and can include sizes ranging from 8pt to 20pt.
-
-- **Reader Line Spacing**: Adjust the line height as a percentage.
-
-- **Reader Screen Margin**: Controls the screen margins in Reading Mode between 5 and 40 pixels in 5-pixel increments.
-
-- **Reader Paragraph Alignment**: Set the alignment of paragraphs; options are "Justified" (default), "Left", "Center", "Right", or "Book's Style".
-
-- **Embedded Style**: Whether to use the EPUB file's embedded HTML and CSS stylisation and formatting; options are "ON" or "OFF".
-
-- **Hyphenation**: Whether to hyphenate text in Reading Mode; options are "ON" or "OFF".
-
-- **Reading Orientation**: Set the screen orientation for reading EPUB files:
-
-  - "Portrait" (default) - Standard portrait orientation
-  - "Landscape CW" - Landscape, rotated clockwise
-  - "Inverted" - Portrait, upside down
-  - "Landscape CCW" - Landscape, rotated counter-clockwise
-
-- **Extra Paragraph Spacing**: Set how to handle paragraph breaks:
-
-  - "ON" - Vertical space will be added between paragraphs in Reading Mode
-  - "OFF" - Paragraphs will not have vertical space added, but will have first-line indentation
-
-- **Text Anti-Aliasing**: Whether to show smooth grey edges (anti-aliasing) on text in reading mode. Note this slows down page turns slightly.
-
-- **Images**: Whether to display embedded images found in EPUB files; options are "Display" (default), "Placeholder", or "Suppress".
-
-- **Bionic Reading**: Bolds the first part of each word to create visual fixation points. This can help improve reading speed and focus; options are "ON" or "OFF" (default).
-
-- **Guide Dots**: Adds guide dots between words; options are "ON" or "OFF" (default).
-
-#### 3.6.3 Controls
-
-- **Power Button**: Configure short-press and long-press power button actions.
-
-- **Front Buttons**: Configure front-button remapping, orientation awareness, front-button long-press behavior, and the long-press menu action.
-
-- **Side Buttons**: Configure side-button layout, orientation awareness, and side-button long-press behavior.
-
-- **Side Button Layout (reader)**: Swap the order of the up and down volume buttons from "Prev/Next" (default) to "Next/Prev". You can also disable them entirely. This change is only in effect when reading.
-
-- **Long-press Behavior**: Set whether long-pressing front page-turn buttons does nothing, skips to the next/previous chapter, or changes reader orientation.
-
-- **Side Button Long-press Action**: Set whether long-pressing side buttons does nothing, skips chapters, changes font size, or changes orientation.
-
-- **Short-press Action / Long-press Action**: Controls the effect of a short or long press of the power button:
-
-  - "Ignore" (default) - Require a long press to turn off the device
-  - "Sleep" - A short press puts the device into sleep mode
-  - "Page Turn" - A short press in reading mode turns to the next page; a long press turns the device off
-  - "Toggle Bookmark", "Reading Stats", "Mark Finished", "Refresh", "Change Font", "Guide Dots", "Bionic Reading", "Auto Page Turn", "Sync Progress", "File Transfer", "Screenshot", or "Dark Mode" - Run the matching reader action
-  - "Footnotes" - A short press in reading mode opens the footnotes submenu; if only one footnote is present on the page, the referenced page is opened directly. The short press on the power button can be used to select the footnote in the submenu, and to go back to the original page after finish reading the footnote (like the back button).
-
-- **Quick-return from footnotes**: Toggles on and off the quick return functionality from the footnotes. When the functionality it's active, a short press of the power button will act as the back button from the footnotes page.
-
-#### 3.6.4 System
-
-- **Time to Sleep**: Set the duration of inactivity before the device automatically goes to sleep. Values are in minutes, with a "Never" option at the end of the range.
-
-- **Wi-Fi Networks**: Connect to Wi-Fi networks for file transfers and firmware updates.
-
-- **KOReader Sync**: Options for setting up KOReader for syncing book progress.
-
-- **OPDS Servers**: Manage one or more OPDS [(Open Publication Distribution System)](https://en.wikipedia.org/wiki/Open_Publication_Distribution_System) libraries for browsing and downloading books. See [OPDS Servers (Multiple Libraries)](#365-opds-servers-multiple-libraries) below.
-
-- **Clear Reading Cache**: Clear the internal SD card cache.
-
-- **Check for updates**: Check for inkMOD firmware updates over Wi-Fi. Firmware can also be updated without a USB connection by placing a `firmware.bin` file on the SD card.
-
-- **Language**: Set the UI language. inkMOD supports 24 languages: English, Spanish, French, German, Czech, Brazilian Portuguese, Russian, Swedish, Romanian, Catalan, Ukrainian, Belarusian, Italian, Polish, Finnish, Danish, Dutch, Turkish, Kazakh, Hungarian, Lithuanian, Slovenian, Valencian, and Hebrew.
-
-#### 3.6.5 OPDS Servers (Multiple Libraries)
-
-inkMOD supports saving multiple OPDS servers and switching between them when browsing catalogs.
-
-1. Open **Settings -> System -> OPDS Servers**.
-
-2. Select **Add Server** to create a new entry, or select an existing server to edit it.
-
-3. Configure these fields:
-
-   - **Server Name**: Optional display name (for example, "Home Calibre" or "Public Catalog").
-
-   - **OPDS Server URL**: Full catalog root URL (for Calibre Content Server, usually ends with `/opds`).
-
-   - **Username / Password**: Optional credentials for authenticated servers.
-
-4. Use **Delete Server** inside a server entry to remove it.
-
-Behavior notes:
-
-- You can store up to 8 OPDS servers.
-- OPDS authentication supports HTTP Basic auth. If you use Calibre Content Server with authentication enabled, set it to Basic (not Digest).
-
-You can also manage OPDS servers from the web interface while in File Transfer mode:
-
-1. Connect to the device web UI.
-2. Open `http://<device-ip>/settings`.
-3. Use the **OPDS Servers** card to add, edit, or delete entries.
-
-For web-based Wi-Fi network management, see [Web Settings (Wi-Fi + OPDS)](#366-web-settings-wi-fi--opds).
-
-#### 3.6.6 Web Settings (Wi-Fi + OPDS)
-
-While in **File Transfer** mode, the web settings page includes management cards for both **Wi-Fi Networks** and **OPDS Servers**.
-
-1. On device: open **File Transfer** and connect through **Join a Network** or **Create Hotspot**.
-2. In a browser, open `http://<device-ip>/settings` or `http://inkmod.local`.
-3. In **Wi-Fi Networks**, add, edit, or delete saved network entries (SSID + optional password).
-4. In **OPDS Servers**, add, edit, or delete OPDS catalogs.
-
-Behavior notes:
-
-- Passwords are never shown back in the web UI after saving.
-- Leaving Password blank while editing keeps the existing saved password unchanged.
-- The web UI can save hidden-network SSIDs, but connecting to hidden networks still depends on the device-side Wi-Fi connection flow.
-
-#### 3.6.7 KOReader Sync Quick Setup
-
-inkMOD can sync reading progress with KOReader-compatible sync servers.
-It also interoperates with KOReader apps/devices when they use the same server and credentials.
-
-##### Option A: Free Public Server (`sync.koreader.rocks`)
-
-1. Register a user once (only if needed):
-
-```bash
-USERNAME="user"
-PASSWORD="pass"
-PASSWORD_MD5="$(printf '%s' "$PASSWORD" | openssl md5 | awk '{print $2}')"
-
-curl -i "https://sync.koreader.rocks/users/create" \
-  -H "Accept: application/vnd.koreader.v1+json" \
-  -H "Content-Type: application/json" \
-  --data "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD_MD5\"}"
-```
-
-Already have KOReader Sync credentials? Skip registration; basic sync only requires using the same existing username/password on all devices.
-
-When this returns `HTTP 402` with `{"code":2002,"message":"Username is already registered."}`, pick a different username or use that existing account.
-
-2. On each device:
-
-   - Go to **Settings -> System -> KOReader Sync**.
-
-   - Set **Username** and **Password** (enter the plain password; inkMOD computes MD5 internally, and use the same values on all devices).
-
-   - Set **Sync Server URL** to `https://sync.koreader.rocks`, or leave it empty (both use the same default KOReader sync server).
-
-   - Run **Authenticate**.
-
-3. While reading, press **Confirm** to open the reader menu, then select **Sync Progress**.
-
-   - Choose **Apply Remote** to jump to remote progress.
-
-   - Choose **Upload Local** to push current progress.
-
-##### Option B: Self-Hosted Server (Docker Compose)
-
-1. Start a sync server:
-
-```bash
-mkdir -p kosync-quickstart
-cd kosync-quickstart
-
-cat > compose.yaml <<'YAML'
-services:
-  kosync:
-    image: koreader/kosync:latest
-    ports:
-      - "7200:7200"
-      - "17200:17200"
-    volumes:
-      - ./data/redis:/var/lib/redis
-    environment:
-      - ENABLE_USER_REGISTRATION=true
-    restart: unless-stopped
-YAML
-
-# Docker
-docker compose up -d
-
-# Podman (alternative)
-podman compose up -d
-```
-
-> [!NOTE]
-> `ENABLE_USER_REGISTRATION=true` is convenient for first setup. After creating your users, set it to `false` (or remove it) to avoid unexpected registrations.
-
-2. Verify the server:
-
-```bash
-curl -H "Accept: application/vnd.koreader.v1+json" "http://<server-ip>:17200/healthcheck"
-# Expected: {"state":"OK"}
-```
-
-3. Register a user once.
-   inkMOD authenticates against KOReader Sync (`koreader/kosync`) using an MD5 key, so register using the MD5 of your password:
-
-> [!WARNING]
-> Sending a reusable MD5-derived password over plain HTTP is insecure.
-> Create unique sync-only credentials and do not reuse main account passwords.
-> Prefer `https://<server-ip>:7200` whenever traffic leaves a fully trusted LAN or when using untrusted networks.
-> Use `curl -k` only for self-signed certificate testing.
-
-```bash
-USERNAME="user"
-PASSWORD="pass"
-PASSWORD_MD5="$(printf '%s' "$PASSWORD" | openssl md5 | awk '{print $2}')"
-
-curl -i "http://<server-ip>:17200/users/create" \
-  -H "Accept: application/vnd.koreader.v1+json" \
-  -H "Content-Type: application/json" \
-  --data "{\"username\":\"$USERNAME\",\"password\":\"$PASSWORD_MD5\"}"
-```
-
-If this returns `HTTP 402` with `{"code":2002,"message":"Username is already registered."}`, the account already exists.
-
-4. On each device:
-
-   - Go to **Settings -> System -> KOReader Sync**.
-
-   - Set **Username** and **Password** (enter the plain password; inkMOD computes MD5 internally, and use the same values on all devices).
-
-   - Set **Sync Server URL** to `http://<server-ip>:17200`.
-
-   - Run **Authenticate**.
-
-If you use the HTTPS listener, use `https://<server-ip>:7200` (`curl -k` only for self-signed certificate testing).
-
-5. While reading, press **Confirm** to open the reader menu, then select **Sync Progress**.
-
-   - Choose **Apply Remote** to jump to remote progress.
-
-   - Choose **Upload Local** to push current progress.
-
-### 3.7 Sleep Screen
-
-The **Sleep Screen** setting controls what is displayed when the device goes to sleep:
-
-| Mode               | Behavior                                                                                                                     |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| **Dark** (default) | The inkMOD logo on a dark background.                                                                                    |
-| **Light**          | The inkMOD logo on a white background.                                                                                   |
-| **Custom**         | A custom image from the SD card (see below). Falls back to **Dark** if no custom image is found.                             |
-| **Cover**          | The cover of the currently open book. Falls back to **Dark** if no book is open.                                             |
-| **Cover + Custom** | The cover of the currently open book, shown only while actively reading. Falls back to **Custom** behavior when not reading. |
-| **Minimal**        | A compact sleep screen based on the Minimal home layout.                                                                     |
-| **Minimal Stats**  | A compact sleep screen with recent reading stats, on supported devices.                                                      |
-| **None**           | A blank screen.                                                                                                              |
-
-#### Cover settings
-
-When using **Cover** or **Cover + Custom**, two additional settings apply:
-
-- **Sleep Screen Cover Mode**: **Fit** (scale to fit, white borders) or **Crop** (scale and crop to fill the screen).
-- **Sleep Screen Cover Filter**: **None** (grayscale), **Contrast** (black & white), or **Inverted** (inverted black & white).
-
-#### Custom images
-
-To use custom sleep images, set the sleep screen mode to **Custom** or **Cover + Custom**, then place images on the SD card:
-
-- **Multiple Images (recommended):** Create a `.sleep` directory in the root of the SD card and place any number of `.bmp` images inside. One will be randomly selected each time the device sleeps. (A directory named `sleep` is also accepted as a fallback.)
-- **Single Image:** Place a file named `sleep.bmp` in the root directory. This is used as a fallback if no valid images are found in the `.sleep`/`sleep` directory.
-
-> [!TIP]
-> For best results:
->
-> - Use uncompressed BMP files with 24-bit color depth
-> - X4: Use a resolution of 480x800 pixels to match the device's screen resolution.
-> - X3: Use a resolution of 528x792 pixels to match the device's screen resolution.
-
-> [!TIP]
-> You can set an image as the sleep screen cover directly from the BMP image viewer in the **[Browse Files](#33-browse-files-screen)** screen.
+Page-turn buttons and their long-press actions can also be customized.
 
 ---
 
-### 3.8 Custom Fonts (SD Card)
+# 3. Basic navigation
 
-inkMOD supports loading additional fonts from the SD card, extending beyond the built-in Lexend Deca, Bitter, and ChareInk families. Custom fonts can include extended Unicode coverage, enabling CJK (Chinese, Japanese, Korean) and other scripts.
+## Menus and lists
 
-There are three ways to install fonts:
+Use:
 
-1. **Download from device (recommended):** Go to **Settings -> Reader -> Font Options -> Manage Fonts**, browse the available font families, and select one to download over Wi-Fi.
-2. **Upload via web interface:** While in **File Transfer** mode, open the web UI in a browser and navigate to the **Fonts** tab to upload `.cpfont` files.
-3. **Manual SD card copy:** Download font files from the [inkMOD-fonts repository](https://github.com/uxjulia/inkmod-fonts/releases) and copy them to `/.fonts/` (preferred) or `/fonts/` on your SD card.
+* **Left / Volume Up** — move upward
+* **Right / Volume Down** — move downward
+* **Confirm** — select
+* **Back** — return
 
-Once installed, custom fonts appear in **Settings -> Reader -> Font Options -> Font Family** alongside the built-in fonts.
-
-See [docs/sd-card-fonts.md](./docs/sd-card-fonts.md) for full installation details and SD card folder structure.
-
----
-
-## 4. Reading Mode
-
-Once you have opened a book, the button layout changes to facilitate reading.
-
-### Page Turning
-
-| Action            | Buttons                              |
-| ----------------- | ------------------------------------ |
-| **Previous Page** | Press **Left** _or_ **Volume Up**    |
-| **Next Page**     | Press **Right** _or_ **Volume Down** |
-
-The role of the volume (side) buttons can be swapped in the **[Controls Settings](#363-controls)**.
-
-If the **Short-press Action** setting is set to "Page Turn", you can also turn to the next page by briefly pressing the Power button.
-
-### Chapter Navigation
-
-* **Next Chapter:** Press and **hold** the **Right** (or **Volume Down**) button briefly, then release.
-* **Previous Chapter:** Press and **hold** the **Left** (or **Volume Up**) button briefly, then release.
-
-This feature can be disabled in the **[Controls Settings](#363-controls)** to help avoid changing chapters by mistake.
-
-### Auto Page Turn
-
-Auto Page Turn automatically advances pages at a set interval, useful for hands-free reading. This feature can be enabled and configured from the **[Reader Menu](#5-reader-menu)** while reading an EPUB.
-
-### Tilt Page Turn (X3 only)
-
-On the **Xteink X3**, the gyroscope can be used to turn pages by tilting the device. This feature is available in **Settings -> Controls**.
-
-### Footnote Navigation
-
-When reading an EPUB that contains footnotes, you can navigate to the footnote text by selecting the footnote reference in the book. From the footnote, you can return to your original reading position.
-
-### System Navigation
-
-* **Return to Home:** Press the **Back** button to close the book and return to the **[Home](#31-home-screen)** screen.
-* **Return to Browse Files:** Press and hold the **Back** button to close the book and return to the **[Browse Files](#33-browse-files-screen)** screen.
-* **Reader Menu:** Press **Confirm** to open the **[Reader Menu](#5-reader-menu)**, which includes chapter navigation, reading options, and more.
-
-### Supported Languages
-
-inkMOD renders text using the following Unicode character blocks, enabling support for a wide range of languages:
-
-* **Latin Script (Basic, Supplement, Extended-A/B):** Covers English, German, French, Spanish, Portuguese, Italian, Dutch, Swedish, Norwegian, Danish, Finnish, Polish, Czech, Hungarian, Romanian, Slovak, Slovenian, Turkish, Catalan, and others.
-* **Cyrillic Script (Standard and Extended):** Covers Russian, Ukrainian, Belarusian, Bulgarian, Serbian, Macedonian, Kazakh, Kyrgyz, Mongolian, and others.
-* **Vietnamese:** Supported via extended Latin glyph coverage in the built-in reader fonts.
-
-What is not supported with built-in reader fonts: Chinese, Japanese, Korean, Arabic, Greek, Hebrew, and Farsi. However, **CJK, Hebrew, Greek, and other extended scripts can be enabled by installing custom SD card fonts** — see [Custom Fonts (SD Card)](#38-custom-fonts-sd-card).
+Holding a navigation button automatically repeats the action, which makes long lists much faster to navigate.
 
 ---
 
-## 5. Reader Menu
+# 4. Home screen
 
-Press **Confirm** while reading to open the Reader Menu. From here you can access reading utilities and navigation options without leaving the book.
+The Home screen provides quick access to the main reader functions.
 
-Available options include:
+Depending on the selected theme, it can display:
 
-- **Select Chapter** – Open the table of contents to jump to a specific chapter (see [Chapter Selection](#51-chapter-selection) below).
-- **Footnotes** – Navigate to the footnotes for the current section *(only shown in books that contain footnotes)*.
-- **Reader Options** – Open reader-specific options without leaving the book.
-- **Controls** – Open reader control options without leaving the book.
-- **Reading Orientation** – Cycle through screen orientations without leaving the reader.
-- **Auto Turn Interval** – Configure automatic page turns for hands-free reading.
-- **Go to %** – Jump to a specific position in the book by percentage.
-- **Add Bookmark / Remove Bookmark** – Toggle a bookmark on the current page.
-- **View Bookmarks / Delete Bookmarks** – Manage existing bookmarks when the book has bookmarks.
-- **Take screenshot** – Save a screenshot of the current page to the `screenshots/` folder.
-- **Show page as QR** – Display a QR code encoding the current reading position.
-- **Delete Book Cache** – Clear the cached layout data for the current book, forcing a re-index on next open.
-- **Sync Progress** – Push or pull reading progress with a KOReader sync server (see [KOReader Sync Quick Setup](#367-koreader-sync-quick-setup)).
-- **Reading Stats** – Open the current book's reading stats.
-- **Mark Finished / Mark Unfinished** – Toggle whether the current book is marked as finished.
+* the currently opened book;
+* recent books;
+* reading progress;
+* covers;
+* shortcuts to files;
+* file transfer;
+* settings and other reader functions.
 
-Press **Back** at any time to close the menu and return to your current page.
+Several home-screen layouts are available, including:
 
-### 5.1 Chapter Selection
+* **Lyra**
+* **Lyra Carousel**
+* **RoundedRaff**
+* **Minimal**
+* **Dashboard**
 
-Accessible by selecting **Chapters** from the Reader Menu.
-
-1. Use **Left** (or **Volume Up**), or **Right** (or **Volume Down**) to highlight the desired chapter.
-2. Press **Confirm** to jump to that chapter.
-3. *Alternatively, press **Back** to cancel and return to your current page.*
+The exact appearance and available shortcuts depend on the selected theme.
 
 ---
 
-### 5.2 Bookmarks
+# 5. File Browser
 
-Bookmarks can be created to quickly save and restore your place in a book.
+The built-in File Browser is used for books, folders, images and other files stored on the SD card.
 
-To create a bookmark, hold **Confirm** for 1 second while inside a book. A popup will appear letting you know a bookmark was created. The popup message will automatically disappear in a couple of seconds.
+You can:
 
-To open bookmarks, press **Confirm** while inside a book. Then navigate to the **Bookmarks** menu. Bookmarks can be opened by navigating to them and pressing **Confirm**, which will redirect you to that place in the book. You can delete bookmarks by holding **Confirm** for 1 second, and then pressing **Confirm** again to confirm deletion, or **Back** to cancel.
+* browse folders;
+* open books;
+* open supported images;
+* rename files;
+* delete files;
+* view book information;
+* clear a book cache;
+* mark a book as finished or unfinished;
+* use supported PNG/BMP images as sleep screens.
 
-Bookmarks are stored as per-book `.bin` files in the `.inkmod/bookmarks` folder.
+Long filenames are displayed using multi-line wrapping instead of simply being cut off.
 
-## 6. Current Limitations & Roadmap
+## Long press on a book
 
-Please note that this firmware is currently in active development. The following features are **not yet supported** but are planned for future updates:
+Holding **Confirm / Open** on a book opens additional actions.
 
-* **Cover Images:** Large cover images embedded into EPUB require several seconds (~10s for ~2000 pixel tall image) to convert for sleep screen and home screen thumbnail. Consider optimizing the EPUB with e.g. https://github.com/bigbag/epub-to-xtc-converter to speed this up.
-* **Unsupported Image Formats:** Most JPG and PNG images in EPUBs render correctly. GIFs and progressive JPEGs are not supported and will fall back to an `[Image]` placeholder.
-* **Dictionary Lookup:** Inline word lookup is not yet implemented.
+Depending on the file, these can include:
+
+* **Book information**
+* **Rename**
+* **Delete**
+* **Delete book cache**
+* **Mark finished / unfinished**
+
+### Book information
+
+The information screen can show:
+
+* book/file format;
+* source file size;
+* cache/preparation status;
+* basic loading information.
+
+This check is intentionally lightweight and does not fully parse the book.
 
 ---
 
-## 7. Troubleshooting Issues & Escaping Bootloop
+# 6. Reading
 
-If an issue or crash is encountered while using inkMOD, feel free to raise an issue ticket and attach the logs.
+Open a supported book from the File Browser, Recent Books or Home screen.
 
-**Crash reports on SD card:** After a crash, inkMOD automatically saves a crash report to the SD card (no USB connection needed). Check the root of the SD card for a crash log file and include it with any bug report.
+## Page turning
 
-**Serial monitor logs:** For more detailed debugging, connect the device to a computer and run the custom debugging monitor script (requires Python 3 with `pyserial`, `colorama`, and `matplotlib`; install via `pip3 install pyserial colorama matplotlib`):
+By default:
 
-```
-python3 scripts/debugging_monitor.py
-```
+* **Left / Volume Up** — previous page
+* **Right / Volume Down** — next page
 
-The script auto-detects the serial port. You can also specify one explicitly:
+The side-button direction can be reversed in settings.
 
-```
-python3 scripts/debugging_monitor.py /dev/ttyACM0        # Linux
-python3 scripts/debugging_monitor.py /dev/tty.usbmodem1  # macOS
-python3 scripts/debugging_monitor.py COM7                # Windows
-```
+Long-press actions are configurable and can be assigned to actions such as:
 
-**Features:**
+* next/previous chapter;
+* jump several pages;
+* change font size;
+* change orientation;
+* create a clipping;
+* other reader commands.
 
-- Color-coded log output by category (errors, memory, display, EPUB parsing, etc.)
-- Live memory usage graph (free RAM, total RAM, max contiguous allocation) updated every second
-- Interactive command prompt — type a command and press Enter to send it to the device
-- Screenshot capture — saves the current display to `screenshot.bmp` when triggered by the device
+---
 
-**Options:**
+# 7. EPUB and FB2 rendering
 
-| Option               | Description                                               |
-| -------------------- | --------------------------------------------------------- |
-| `--baud RATE`        | Baud rate (default: 115200)                               |
-| `--filter KEYWORD`   | Show only lines containing the keyword (case-insensitive) |
-| `--suppress KEYWORD` | Hide lines containing the keyword (case-insensitive)      |
+inkMOD contains extensive changes to the original reader engine.
 
-**Examples:**
+## EPUB
 
-```
-# Show only memory-related log lines
-python3 scripts/debugging_monitor.py --filter MEM
+The reader supports:
 
-# Hide noisy SD card log lines
-python3 scripts/debugging_monitor.py --suppress "[SD]"
-```
+* EPUB text and chapters;
+* embedded book formatting;
+* images;
+* CSS-based layout where supported;
+* footnotes;
+* chapter navigation;
+* large EPUB files using low-memory processing.
 
-Press **Ctrl-C** or close the graph window to exit.
+## FB2 / FB2.ZIP
 
-If the device is stuck in a bootloop, press and release the Reset button. Then, press and hold on to the configured Back button and the Power Button to boot to the Home Screen.
+FB2 does not need to be converted to EPUB.
 
-There can be issues with broken cache or config. In this case, delete the `.inkmod` directory on your SD card (or consider deleting only `settings.json`, `state.json`, or `epub_*` cache directories in the `.inkmod/` folder).
+inkMOD understands FB2 document structure and provides dedicated formatting for elements such as:
 
-## Diagnostics and crash reports (v1.1.4+)
+* headings;
+* subtitles;
+* annotations;
+* epigraphs;
+* quotations;
+* poems;
+* stanzas;
+* authors/signatures;
+* emphasis.
 
-Open **Settings → System → Device → Diagnostics** to see the firmware variant,
-device model, current free heap, largest allocatable heap block, SD capacity,
-reset reason and whether `/crash_report.txt` exists.
+Poetry and other structured text are kept visually distinct from ordinary paragraphs.
 
-Release builds keep a tiny allocation-free breadcrumb trail in RTC memory. If a
-guarded out-of-memory restart happens, the next boot writes the last reader
-steps into `/crash_report.txt`. This allows useful crash reports even though
-verbose serial logging is disabled in release firmware.
+Large logical chapters may internally be divided into smaller pieces to stay within the Xteink memory limit, but inkMOD presents them to the reader as one logical chapter and maintains normal chapter page numbering.
 
-## Book information
+---
 
-In File Browser, hold **Open** on a book and choose **Book information**. The
-screen shows the file format, source size, whether an EPUB metadata cache is
-already prepared, and a lightweight load-profile hint. It intentionally avoids
-deeply parsing a book so inspecting a problematic file cannot itself become a
-large memory operation.
+# 8. Reader appearance
 
-## Separate timeout sleep screen
+Reading appearance can be customized from:
 
-**Settings → Display → Sleep screen on timeout** controls automatic sleep
-independently from manual power-button sleep. Available modes are:
+**Settings → Reader**
 
-- Same as normal sleep
-- Quick Resume
-- Custom overlay + Quick Resume
-- Custom image
+Available options include settings for:
 
-To pick a separate timeout overlay, hold **Open** on a PNG/BMP in File Browser
-and choose **Set as timeout overlay**. PNG transparency is recommended for the
-overlay mode.
+* font family;
+* font size;
+* line spacing;
+* screen margins;
+* paragraph alignment;
+* paragraph spacing;
+* embedded book styles;
+* hyphenation;
+* text anti-aliasing;
+* images;
+* reading orientation.
+
+## Embedded book styles
+
+When embedded styles are enabled, inkMOD attempts to preserve the formatting intended by the book author instead of forcing everything into plain paragraphs.
+
+For FB2 this includes dedicated semantic styling implemented by inkMOD.
+
+## Hyphenation
+
+Word hyphenation can be enabled to improve text justification and line layout.
+
+## Anti-aliasing
+
+Text anti-aliasing adds grayscale edges to glyphs for smoother-looking fonts.
+
+It can be disabled if maximum page-turn speed is preferred.
+
+---
+
+# 9. Custom fonts
+
+inkMOD supports custom reader fonts in **`.cpfont`** format.
+
+Fonts can be installed in several ways.
+
+## From the web interface
+
+The easiest method is:
+
+1. Open **File Transfer** on the reader.
+2. Open the inkMOD web interface.
+3. Go to **Fonts**.
+4. Upload a prepared `.cpfont` font or select a `.ttf` / `.otf` font for conversion.
+5. inkMOD's web tools prepare and upload the resulting font.
+
+## From the SD card
+
+Prepared fonts can also be placed in the font directory on the SD card.
+
+After installation they appear in the reader font list.
+
+The available font sizes depend on the sizes contained in that particular font package.
+
+---
+
+# 10. Dictionary
+
+inkMOD includes built-in dictionary lookup while reading.
+
+It supports:
+
+* word selection directly on a book page;
+* multiple installed dictionaries;
+* **StarDict** dictionaries;
+* StarDict synonym tables;
+* long dictionary articles;
+* multi-page dictionary entries;
+* punctuation-aware lookup;
+* words split by line-end hyphenation.
+
+Dictionary articles are paginated directly on the reader.
+
+## Installing dictionaries
+
+The inkMOD web interface can prepare dictionary source files in the browser and upload the optimized dictionary to the device.
+
+This prevents the Xteink itself from having to perform expensive dictionary indexing.
+
+---
+
+# 11. Clippings / saved text
+
+inkMOD can save text excerpts from **EPUB and FB2** books.
+
+Selected passages can be stored as clippings and managed later.
+
+The **Create Clipping** action can also be assigned to a physical-button action or long press.
+
+This makes it possible to save interesting passages without leaving the book.
+
+---
+
+# 12. Bookmarks
+
+Bookmarks can be created for individual books.
+
+They allow you to save a position and later return to it.
+
+Bookmarks can be viewed and removed from the Reader Menu.
+
+---
+
+# 13. Reader Menu
+
+Press **Confirm** while reading to open the Reader Menu.
+
+Depending on the current book and enabled features, the menu can provide actions such as:
+
+* chapter selection;
+* bookmarks;
+* dictionary;
+* clippings;
+* reader options;
+* controls;
+* orientation;
+* automatic page turning;
+* jump to position;
+* reading statistics;
+* screenshot;
+* book cache removal;
+* mark finished / unfinished;
+* other configured reader actions.
+
+### Custom menu
+
+inkMOD allows reader-menu entries to be reordered or hidden.
+
+This means frequently used commands can be placed near the top and unwanted entries can be removed from the menu.
+
+---
+
+# 14. Reading statistics
+
+inkMOD tracks reading activity.
+
+Available information can include:
+
+* reading time;
+* current session;
+* reading progress;
+* finished-book status;
+* book statistics.
+
+Completed books can be marked as **Finished**, either automatically where applicable or manually from the book menu.
+
+---
+
+# 15. Screenshots
+
+Screenshots can be saved directly on the reader.
+
+A screenshot can be created using the configured physical-button shortcut or from the Reader Menu.
+
+Screenshots are saved to the SD card and can later be downloaded through the web interface.
+
+---
+
+# 16. Sleep screens
+
+inkMOD provides several sleep-screen styles.
+
+Depending on the firmware version and selected mode, these can include:
+
+* inkMOD screen;
+* current book cover;
+* custom image;
+* custom overlay;
+* calendar;
+* reading information;
+* Quick Resume;
+* separate screen for automatic timeout sleep.
+
+## Book cover
+
+The current book cover can be displayed while the device is sleeping.
+
+inkMOD contains dedicated handling for EPUB and FB2 covers and avoids unnecessarily enlarging very small images when that would result in poor quality.
+
+## Custom image
+
+Supported PNG/BMP images can be selected directly from the File Browser.
+
+## Sleep-screen generator
+
+The web interface contains a dedicated sleep-screen preparation tool.
+
+It can:
+
+* prepare an image for the Xteink display;
+* handle PNG transparency;
+* remove edge-connected backgrounds;
+* upload the finished image;
+* apply it directly to the reader.
+
+---
+
+# 17. Separate timeout sleep screen
+
+Automatic sleep after inactivity can use a different screen from manually activated sleep.
+
+The available timeout behavior includes options such as:
+
+* same as normal sleep;
+* Quick Resume;
+* custom overlay with Quick Resume;
+* custom image.
+
+This makes it possible, for example, to keep the current page visible during short automatic sleeps while using a book cover or custom image for normal sleep.
+
+---
+
+# 18. Web interface
+
+One of inkMOD's major features is its browser-based management interface.
+
+Open **File Transfer** on the device and connect the reader to Wi-Fi.
+
+The screen displays the address needed to access the web interface.
+
+Depending on the network, `inkmod.local` may also be available.
+
+## Files
+
+The web interface can be used to:
+
+* upload books;
+* upload several files;
+* upload directory trees;
+* create and manage folders;
+* rename files;
+* delete files;
+* download files from the reader.
+
+Books can normally be uploaded **as they are**.
+
+No mandatory computer-side conversion step is required.
+
+---
+
+# 19. EPUBKIT
+
+EPUBKIT is an optional browser-side EPUB preparation tool included with inkMOD.
+
+Processing takes place in the browser instead of consuming the reader's limited RAM.
+
+It can be useful for:
+
+* very large EPUB files;
+* books containing many large images;
+* badly prepared EPUB files;
+* preparing images specifically for the Xteink E-Ink display.
+
+For ordinary books you can simply upload the original EPUB and read it.
+
+---
+
+# 20. Browser-side processing
+
+Several heavy tasks are deliberately performed by your computer or phone browser instead of by the Xteink.
+
+This includes tools for:
+
+* EPUB optimization;
+* dictionary preparation;
+* font conversion;
+* sleep-screen preparation.
+
+The finished data is then uploaded to the reader.
+
+This architecture lets inkMOD provide features that would otherwise be difficult to perform directly on the memory-constrained ESP32-C3.
+
+---
+
+# 21. Wi-Fi and time
+
+## Xteink X4
+
+The X4 does not contain a normal hardware real-time clock.
+
+inkMOD therefore synchronizes the current time through Wi-Fi and preserves the last synchronized time for offline use.
+
+The clock can also be disabled if it is not needed.
+
+## Xteink X3
+
+Supported X3 hardware can use its hardware RTC.
+
+---
+
+# 22. Firmware updates
+
+inkMOD can check GitHub for new stable releases through Wi-Fi.
+
+Use the firmware update function in:
+
+**Settings → System**
+
+Stable release builds are separated from developer/debug builds.
+
+For normal everyday use, use the regular **release firmware** unless you specifically need a diagnostic build.
+
+---
+
+# 23. Diagnostics
+
+Open:
+
+**Settings → System → Device → Diagnostics**
+
+The diagnostics screen provides useful information such as:
+
+* detected device/display variant;
+* available RAM;
+* largest available memory block;
+* SD card/storage information;
+* reset reason;
+* crash-report status.
+
+This information is especially useful when reporting problems with very large books.
+
+---
+
+# 24. Crash reports
+
+If inkMOD detects certain memory-related or guarded crashes, diagnostic information can be stored on the SD card.
+
+Check for:
+
+`/crash_report.txt`
+
+If you report a reproducible crash, attach this file together with:
+
+* the firmware version;
+* device model/revision;
+* what you were doing before the problem occurred;
+* the problematic book if it can legally be shared.
+
+Release firmware keeps lightweight diagnostic breadcrumbs without requiring permanent verbose serial logging.
+
+---
+
+# 25. Cache
+
+inkMOD stores generated reader data on the SD card so books do not have to be completely analyzed every time they are opened.
+
+If one specific book behaves incorrectly after an update:
+
+1. Open the File Browser.
+2. Hold **Confirm / Open** on that book.
+3. Select **Delete Book Cache**.
+4. Open the book again.
+
+The cache will be rebuilt.
+
+There is normally no reason to delete the entire inkMOD data directory.
+
+---
+
+# 26. Recovery
+
+inkMOD includes an SD-card recovery mechanism for cases where the normal firmware cannot start correctly.
+
+Recent releases support recovery using:
+
+`inkmod-recovery.bin`
+
+The recovery image is checked before the normal interface starts.
+
+For the exact recovery procedure and firmware installation instructions, use the current recovery/install guide supplied with the firmware or the inkMOD instructions on 4PDA.
+
+Do not use recovery files intended for a different device or hardware revision.
+
+---
+
+# 27. E-Ink refresh and ghosting
+
+E-Ink displays work differently from LCD/OLED screens.
+
+A small amount of residual content after page turns is normal.
+
+inkMOD allows periodic full refreshes to reduce ghosting.
+
+The refresh interval can be adjusted in Display/Reader settings.
+
+More frequent full refreshes:
+
+* reduce ghosting;
+* cause more visible black/white flashing.
+
+Less frequent full refreshes:
+
+* reduce flashing;
+* can allow more residual image buildup.
+
+Choose whichever behavior is more comfortable for you.
+
+---
+
+# 28. Large books
+
+The Xteink X4 is based on an ESP32-C3 with very limited RAM.
+
+inkMOD contains several systems specifically designed around this limitation:
+
+* streaming book processing;
+* compact FB2 indexing;
+* low-memory FB2.ZIP handling;
+* logical chapter splitting;
+* on-demand pagination;
+* browser-side processing for heavy preparation work.
+
+Because of this, very large FB2, FB2.ZIP and EPUB books can be opened without loading the complete document into RAM.
+
+An unusually large or malformed book can still take longer to open for the first time.
+
+Subsequent opens are usually faster once the necessary cache has been created.
+
+---
+
+# 29. Supported interface languages
+
+inkMOD includes complete **Russian** and **Ukrainian** localization together with the other languages inherited and maintained by the project.
+
+The on-screen keyboard includes dedicated layouts for:
+
+* English;
+* Russian;
+* Ukrainian.
+
+Custom fonts can be used when a book requires characters that are missing from the currently selected reader font.
+
+---
+
+# 30. Recommended everyday setup
+
+There is no single required configuration, but a simple starting setup is:
+
+* choose the interface language you prefer;
+* select a comfortable reader font;
+* enable hyphenation if you use justified text;
+* enable embedded book styles if you want to preserve the author's formatting;
+* set the desired full-refresh interval;
+* choose a sleep screen;
+* configure side buttons the way you prefer;
+* connect Wi-Fi for OTA updates, time synchronization and web tools.
+
+After that, simply copy your books to the SD card or upload them through the web interface.
+
+**No mandatory book optimization or conversion is required.**
+
+---
+
+# 31. If something goes wrong
+
+For a problem with one book:
+
+1. Delete only that book's cache.
+2. Open the book again.
+3. If the problem remains, check **Diagnostics**.
+4. Check whether `/crash_report.txt` was created.
+5. Report the problem with the firmware version and book format.
+
+For a firmware/startup problem, use the current inkMOD recovery instructions.
+
+Avoid deleting all settings or reflashing the device before checking whether the problem is only a damaged book cache.
+
+---
+
+# 32. Project and support
+
+inkMOD is free and open source.
+
+The project is developed primarily for the Xteink X4 while maintaining compatible X3 support.
+
+Project development focuses on:
+
+* native book-format support;
+* reliable reading;
+* low-memory operation;
+* good FB2/EPUB typography;
+* useful reader tools;
+* Russian and Ukrainian localization;
+* extending the Xteink without requiring users to preprocess their entire library.
+
+Project repository:
+
+**GitHub: alpzoloto-sudo/inkmod**
+
+Community, releases, discussion and support:
+
+**Telegram: @inkmodx4**
+
+Installation instructions, community experience and device-specific guides are also available in the inkMOD / Xteink discussion on **4PDA**.
+
+---
+
+## Important
+
+inkMOD is custom firmware.
+
+Installation and use are performed at the device owner's own risk.
+
+Use firmware and recovery files intended for your exact supported Xteink model/revision and follow the current installation instructions.
+
+---
+
+**Enjoy reading with inkMOD. 📚**

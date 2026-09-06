@@ -389,7 +389,7 @@ void InkMODWebServer::handleClient() {
           if (hostname.isEmpty()) {
             hostname = "inkmod";
           }
-          String message = "inkmod (on " + hostname + ");" + String(wsPort);
+          String message = "crosspoint (on " + hostname + ");" + String(wsPort);
           udp.beginPacket(udp.remoteIP(), udp.remotePort());
           udp.write(reinterpret_cast<const uint8_t*>(message.c_str()), message.length());
           udp.endPacket();
@@ -1423,7 +1423,7 @@ void InkMODWebServer::handleSettingsPage() const {
 
 void InkMODWebServer::handleGetSettings() const {
   // Pass the SD font registry so the fontFamily setting's enumStringValues
-  // includes SD-resident families — otherwise the web API only exposes the
+  // includes SD-resident families вЂ” otherwise the web API only exposes the
   // three built-in fonts.
   // SoftAP + DNS + HTTP + WebSocket leave substantially less heap than STA.
   // Expanding every SD font family into the web settings enum in AP mode can
@@ -1685,7 +1685,7 @@ void InkMODWebServer::handleGetOpdsServers() const {
     doc["url"] = servers[i].url;
     doc["username"] = servers[i].username;
     doc["filenameFormat"] = opdsFilenameFormatToJson(servers[i].filenameFormat);
-    // Never expose passwords over the API — only indicate whether one is set
+    // Never expose passwords over the API вЂ” only indicate whether one is set
     doc["hasPassword"] = !servers[i].password.empty();
 
     const size_t written = serializeJson(doc, output, outputSize);
@@ -1721,7 +1721,7 @@ void InkMODWebServer::handlePostOpdsServer() {
   opdsServer.filenameFormat = opdsFilenameFormatFromJson(doc["filenameFormat"] | "");
 
   // The password field is optional in the JSON payload. When absent (vs. present but empty),
-  // we preserve the existing password — the web UI omits it when the user hasn't changed it.
+  // we preserve the existing password вЂ” the web UI omits it when the user hasn't changed it.
   bool hasPasswordField = doc["password"].is<const char*>() || doc["password"].is<std::string>();
   std::string password = doc["password"] | std::string("");
   const bool hasFilenameFormatField =
@@ -1806,7 +1806,7 @@ void InkMODWebServer::handleGetWifiNetworks() const {
     doc.clear();
     doc["index"] = i;
     doc["ssid"] = credentials[i].ssid;
-    // Never expose Wi-Fi passwords over the API — only indicate whether one is set
+    // Never expose Wi-Fi passwords over the API вЂ” only indicate whether one is set
     doc["hasPassword"] = !credentials[i].password.empty();
     doc["isLastConnected"] = credentials[i].ssid == lastConnectedSsid;
 

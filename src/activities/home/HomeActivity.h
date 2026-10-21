@@ -35,6 +35,7 @@ class HomeActivity final : public Activity {
   bool recentsLoading = false;
   bool recentsLoaded = false;
   bool firstRenderDone = false;
+  bool firstHomePaintPending = true;
   bool hasReadingStats = false;
   bool hasBookmarks = false;
   bool hasOpdsServers = false;

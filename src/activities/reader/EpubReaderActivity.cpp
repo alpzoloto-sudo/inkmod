@@ -4794,10 +4794,18 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
       renderer.preconditionGrayscale();
     } else if (gpio.deviceIsX3() && ReaderUtils::isBwReinforcementForced(pagesUntilFullRefresh)) {
       // A manual no-flash request must also work on pages containing images.
-      // The grayscale overlay follows the completed four-pass base.
       ReaderUtils::displayX3MaximumNoFlash(renderer, true);
+    } else if (gpio.deviceIsX3() &&
+               SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_MAXIMUM) {
+      ReaderUtils::displayX3MaximumNoFlash(renderer, true);
+    } else if (gpio.deviceIsX3() &&
+               SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_BW_REINFORCEMENT) {
+      ReaderUtils::displayX3DoubleNoFlash(renderer, true);
+    } else if (gpio.deviceIsX3() &&
+               SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_ECO) {
+      renderer.displayGrayscaleBaseIntermediate(HalDisplay::FAST_REFRESH);
     } else {
-    // Image pages keep the existing double-fast cleanup technique. Both passes
+    // Image pages with scheduled flash retain the existing optimized path. Both passes
     // are intermediate because the grayscale overlay follows immediately.
     int16_t imgX, imgY, imgW, imgH;
     if (page->getImageBoundingBox(imgX, imgY, imgW, imgH)) {

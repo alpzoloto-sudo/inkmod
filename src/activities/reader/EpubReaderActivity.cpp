@@ -4784,6 +4784,11 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
   };
 
   if (pageHasImages && !BoardConfig::isX4Pro()) {
+    if (gpio.deviceIsX3() && ReaderUtils::isBwReinforcementForced(pagesUntilFullRefresh)) {
+      // A manual no-flash request must also work on pages containing images.
+      // The grayscale overlay follows the completed four-pass base.
+      ReaderUtils::displayX3MaximumNoFlash(renderer, true);
+    } else {
     // Image pages keep the existing double-fast cleanup technique. Both passes
     // are intermediate because the grayscale overlay follows immediately.
     int16_t imgX, imgY, imgW, imgH;
@@ -4808,9 +4813,15 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
         renderer.preconditionGrayscale();
       }
     }
-    // Grayscale image pages keep their conservative cleanup rule; the
-    // no-flash double pass is reserved for text-only X3 pages.
-    ReaderUtils::forceFullRefresh(pagesUntilFullRefresh);
+    }
+    // Preserve the conservative forced refresh on other devices and on X3
+    // With flash. In X3 no-flash modes, a forced flash on the next page would
+    // violate the user's cleanup selection.
+    if (gpio.deviceIsX3() && SETTINGS.refreshAction != InkMODSettings::REFRESH_ACTION_FULL) {
+      pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
+    } else {
+      ReaderUtils::forceFullRefresh(pagesUntilFullRefresh);
+    }
   } else if (needsAnyGrayscale) {
     if (ReaderUtils::shouldRefreshOnPage(pagesUntilFullRefresh)) {
       const bool textOnlyNoFlashReinforcement =

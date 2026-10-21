@@ -4819,7 +4819,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
       if (textOnlyNoFlashReinforcement) {
         ReaderUtils::displayX3ConfiguredNoFlash(renderer, pagesUntilFullRefresh, true);
       } else {
-        renderer.displayBufferIntermediate(HalDisplay::HALF_REFRESH);
+        renderer.displayBufferIntermediate(gpio.deviceIsX3() ? HalDisplay::FULL_REFRESH : HalDisplay::HALF_REFRESH);
         renderer.preconditionGrayscale();
       }
       pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();

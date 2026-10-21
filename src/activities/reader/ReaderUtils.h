@@ -217,11 +217,15 @@ inline void displayX3DoubleNoFlash(const GfxRenderer& renderer, const bool anoth
 // Explicit user-requested maximum no-flash cleanup on X3.
 // Keep the panel powered between passes and finish with a final base pass.
 // This action is intentionally independent of the automatic cleanup setting.
-inline void displayX3MaximumNoFlash(const GfxRenderer& renderer) {
+inline void displayX3MaximumNoFlash(const GfxRenderer& renderer, const bool anotherPassFollows = false) {
   renderer.displayGrayscaleBaseIntermediate(HalDisplay::FAST_REFRESH);
   renderer.displayGrayscaleBaseIntermediate(HalDisplay::FAST_REFRESH);
   renderer.displayGrayscaleBaseIntermediate(HalDisplay::FAST_REFRESH);
-  renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
+  if (anotherPassFollows) {
+    renderer.displayGrayscaleBaseIntermediate(HalDisplay::FAST_REFRESH);
+  } else {
+    renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
+  }
 }
 
 inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilRefreshAction,
@@ -230,7 +234,11 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
     if (shouldUseNoFlashReinforcement(pagesUntilRefreshAction, pageSupportsNoFlashReinforcement)) {
       // The X3 no-flash cleanup is deliberately stronger than an ordinary
       // page turn: two consecutive OEM AA-pre-BW(mid) reinforcement passes.
-      displayX3DoubleNoFlash(renderer);
+      if (isBwReinforcementForced(pagesUntilRefreshAction)) {
+        displayX3MaximumNoFlash(renderer);
+      } else {
+        displayX3DoubleNoFlash(renderer);
+      }
     } else {
       renderer.displayBuffer(HalDisplay::HALF_REFRESH);
     }

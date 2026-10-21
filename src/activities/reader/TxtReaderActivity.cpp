@@ -141,6 +141,18 @@ void TxtReaderActivity::onExit() {
 }
 
 void TxtReaderActivity::loop() {
+  // A rotation selected from the X4 Pro quick panel changes SETTINGS while
+  // this activity is suspended. Reapply it and rebuild line/page geometry
+  // when the reader resumes.
+  if (renderer.getOrientation() != ReaderUtils::toRendererOrientation(SETTINGS.orientation)) {
+    RenderLock lock(*this);
+    ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+    pageOffsets.clear();
+    currentPageLines.clear();
+    initialized = false;
+    requestUpdate();
+    return;
+  }
   if (consumeLongPowerButtonRelease()) {
     return;
   }

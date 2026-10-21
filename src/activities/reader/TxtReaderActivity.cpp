@@ -654,7 +654,7 @@ void TxtReaderActivity::renderPage() {
       if (ReaderUtils::shouldUseNoFlashReinforcement(pagesUntilFullRefresh)) {
         ReaderUtils::displayX3ConfiguredNoFlash(renderer, pagesUntilFullRefresh, true);
       } else {
-        renderer.displayBufferIntermediate(HalDisplay::HALF_REFRESH);
+        renderer.displayBufferIntermediate(gpio.deviceIsX3() ? HalDisplay::FULL_REFRESH : HalDisplay::HALF_REFRESH);
         renderer.preconditionGrayscale();
       }
       pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();

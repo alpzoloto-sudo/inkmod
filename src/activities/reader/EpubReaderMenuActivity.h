@@ -77,4 +77,5 @@ class EpubReaderMenuActivity final : public Activity {
   bool autoPageTurnActive = false;
   uint16_t autoPageTurnIntervalSeconds = 0;
   bool settingsChanged = false;
+  bool firstMenuRender = true;
 };

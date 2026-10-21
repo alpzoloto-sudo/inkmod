@@ -328,15 +328,23 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
       add(SettingInfo::Toggle(StrId::STR_CLOCK_DISABLED, &InkMODSettings::clockDisabled, "clockDisabled",
                               StrId::STR_CAT_DISPLAY, /*invertedToggleDisplay=*/true));
     }
-    add(SettingInfo::Enum(
-        StrId::STR_REFRESH_FREQ, &InkMODSettings::refreshFrequency,
-        {StrId::STR_PAGES_1, StrId::STR_PAGES_5, StrId::STR_PAGES_10, StrId::STR_PAGES_15, StrId::STR_PAGES_30},
-        "refreshFrequency", StrId::STR_CAT_DISPLAY));
+    if (!gpio.deviceIsX3() || SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_FULL) {
+      add(SettingInfo::Enum(
+          StrId::STR_REFRESH_FREQ, &InkMODSettings::refreshFrequency,
+          {StrId::STR_PAGES_1, StrId::STR_PAGES_5, StrId::STR_PAGES_10, StrId::STR_PAGES_15,
+           StrId::STR_PAGES_30, StrId::STR_NEVER},
+          "refreshFrequency", StrId::STR_CAT_DISPLAY));
+    }
     if (gpio.deviceIsX3()) {
       add(SettingInfo::Enum(
-          StrId::STR_REFRESH_ACTION, &InkMODSettings::refreshAction,
-          {StrId::STR_REFRESH_ACTION_FULL, StrId::STR_REFRESH_ACTION_BW_REINFORCEMENT},
-          "refreshAction", StrId::STR_CAT_DISPLAY));
+              StrId::STR_REFRESH_ACTION, &InkMODSettings::refreshAction,
+              {StrId::STR_REFRESH_ACTION_ECO, StrId::STR_REFRESH_ACTION_BW_REINFORCEMENT,
+               StrId::STR_REFRESH_ACTION_MAXIMUM, StrId::STR_REFRESH_ACTION_FULL},
+              "refreshAction", StrId::STR_CAT_DISPLAY)
+              .withEnumRawValues({InkMODSettings::REFRESH_ACTION_ECO,
+                                  InkMODSettings::REFRESH_ACTION_BW_REINFORCEMENT,
+                                  InkMODSettings::REFRESH_ACTION_MAXIMUM,
+                                  InkMODSettings::REFRESH_ACTION_FULL}));
     }
     add(SettingInfo::Enum(
             StrId::STR_UI_THEME, &InkMODSettings::uiTheme,
@@ -1103,7 +1111,12 @@ inline std::vector<SettingInfo> buildGroupedDisplaySettingsList(const std::vecto
     addDisplaySetting(StrId::STR_CLOCK_DISABLED);
   }
 
-  addDisplaySetting(StrId::STR_REFRESH_FREQ);
+  if (gpio.deviceIsX3()) {
+    addDisplaySetting(StrId::STR_REFRESH_ACTION);
+  }
+  if (!gpio.deviceIsX3() || SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_FULL) {
+    addDisplaySetting(StrId::STR_REFRESH_FREQ);
+  }
   addDisplaySetting(StrId::STR_UI_THEME);
   addDisplaySetting(StrId::STR_UI_TEXT_SIZE);
   addDisplaySetting(StrId::STR_RECENT_BOOKS_VIEW);

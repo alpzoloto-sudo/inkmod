@@ -564,7 +564,7 @@ bool handleGlobalShortcutAction(const InkMODSettings::SHORT_PWRBTN action) {
       LOG_DBG("MAIN", "Manual X3 no-flash screen reinforcement triggered");
       RenderLock lock;
       if (gpio.deviceIsX3()) {
-        ReaderUtils::displayX3DoubleNoFlash(renderer);
+        ReaderUtils::displayX3MaximumNoFlash(renderer);
       } else {
         renderer.displayBuffer(HalDisplay::HALF_REFRESH);
       }

@@ -4784,7 +4784,15 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
   };
 
   if (pageHasImages && !BoardConfig::isX4Pro()) {
-    if (gpio.deviceIsX3() && ReaderUtils::isBwReinforcementForced(pagesUntilFullRefresh)) {
+    if (gpio.deviceIsX3() &&
+        (ReaderUtils::isFullRefreshForced(pagesUntilFullRefresh) ||
+         (SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_FULL &&
+          ReaderUtils::isRefreshActionDue(pagesUntilFullRefresh)))) {
+      // Force a visible flash on the exact image page where full refresh is
+      // requested, rather than delaying it until the following page.
+      renderer.displayBufferIntermediate(HalDisplay::FULL_REFRESH);
+      renderer.preconditionGrayscale();
+    } else if (gpio.deviceIsX3() && ReaderUtils::isBwReinforcementForced(pagesUntilFullRefresh)) {
       // A manual no-flash request must also work on pages containing images.
       // The grayscale overlay follows the completed four-pass base.
       ReaderUtils::displayX3MaximumNoFlash(renderer, true);
@@ -4817,7 +4825,9 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
     // Preserve the conservative forced refresh on other devices and on X3
     // With flash. In X3 no-flash modes, a forced flash on the next page would
     // violate the user's cleanup selection.
-    if (gpio.deviceIsX3() && SETTINGS.refreshAction != InkMODSettings::REFRESH_ACTION_FULL) {
+    if (gpio.deviceIsX3()) {
+      // Both flashing and non-flashing X3 modes are already applied to the
+      // current page; do not leak a forced next-page flash from this branch.
       pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
     } else {
       ReaderUtils::forceFullRefresh(pagesUntilFullRefresh);

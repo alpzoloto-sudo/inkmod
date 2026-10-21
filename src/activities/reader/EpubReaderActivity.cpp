@@ -4438,9 +4438,11 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       }
     }
 
+    bool navigatedToAnchor = false;
     if (!pendingAnchor.empty()) {
       if (const auto page = section->getPageForAnchor(pendingAnchor)) {
         section->currentPage = *page;
+        navigatedToAnchor = true;
         LOG_DBG("ERS", "Resolved anchor '%s' to page %d", pendingAnchor.c_str(), *page);
       } else {
         LOG_DBG("ERS", "Anchor '%s' not found in section %d", pendingAnchor.c_str(), currentSpineIndex);
@@ -4451,7 +4453,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // handles changes in reader settings and reset to approximate position based on cached progress
     if (cachedChapterTotalPageCount > 0) {
       // only goes to relative position if spine index matches cached value
-      if (currentSpineIndex == cachedSpineIndex && section->pageCount != cachedChapterTotalPageCount) {
+      if (!navigatedToAnchor && currentSpineIndex == cachedSpineIndex &&
+          section->pageCount != cachedChapterTotalPageCount) {
         float progress = static_cast<float>(section->currentPage) / static_cast<float>(cachedChapterTotalPageCount);
         int newPage = static_cast<int>(progress * section->pageCount);
         section->currentPage = newPage;

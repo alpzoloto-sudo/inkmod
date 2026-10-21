@@ -214,6 +214,16 @@ inline void displayX3DoubleNoFlash(const GfxRenderer& renderer, const bool anoth
   }
 }
 
+// Explicit user-requested maximum no-flash cleanup on X3.
+// Keep the panel powered between passes and finish with a final base pass.
+// This action is intentionally independent of the automatic cleanup setting.
+inline void displayX3MaximumNoFlash(const GfxRenderer& renderer) {
+  renderer.displayGrayscaleBaseIntermediate(HalDisplay::FAST_REFRESH);
+  renderer.displayGrayscaleBaseIntermediate(HalDisplay::FAST_REFRESH);
+  renderer.displayGrayscaleBaseIntermediate(HalDisplay::FAST_REFRESH);
+  renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
+}
+
 inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilRefreshAction,
                                     const bool pageSupportsNoFlashReinforcement = true) {
   if (isRefreshActionDue(pagesUntilRefreshAction)) {

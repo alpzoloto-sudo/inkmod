@@ -1112,9 +1112,8 @@ inline std::vector<SettingInfo> buildGroupedDisplaySettingsList(const std::vecto
   }
 
   if (gpio.deviceIsX3()) {
-    addDisplaySetting(StrId::STR_REFRESH_ACTION);
-  }
-  if (!gpio.deviceIsX3() || SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_FULL) {
+    displaySettings.push_back(SettingInfo::Submenu(StrId::STR_REFRESH_ACTION, SettingAction::DisplayScreenCleanup));
+  } else {
     addDisplaySetting(StrId::STR_REFRESH_FREQ);
   }
   addDisplaySetting(StrId::STR_UI_THEME);
@@ -1124,6 +1123,22 @@ inline std::vector<SettingInfo> buildGroupedDisplaySettingsList(const std::vecto
   addDisplaySetting(StrId::STR_SUNLIGHT_FADING_FIX);
 
   return displaySettings;
+}
+
+// The X3 frequency belongs to Screen Cleanup and is meaningful only when
+// automatic full flashing is selected. Non-X3 devices retain their direct
+// frequency setting in the Display category.
+inline std::vector<SettingInfo> buildDisplayScreenCleanupSettingsList(
+    const std::vector<SettingInfo>& allSettings) {
+  std::vector<SettingInfo> settings;
+  for (const auto& setting : allSettings) {
+    if (setting.nameId == StrId::STR_REFRESH_ACTION ||
+        (setting.nameId == StrId::STR_REFRESH_FREQ &&
+         SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_FULL)) {
+      settings.push_back(setting);
+    }
+  }
+  return settings;
 }
 
 inline std::vector<SettingInfo> buildDisplaySleepSettingsList(const std::vector<SettingInfo>& allSettings) {

@@ -650,9 +650,9 @@ void TxtReaderActivity::renderPage() {
 
   const bool needsTextGrayscale = SETTINGS.textAntiAliasing && ReaderUtils::readerForegroundBlack();
   if (needsTextGrayscale) {
-    if (ReaderUtils::isRefreshActionDue(pagesUntilFullRefresh)) {
+    if (ReaderUtils::shouldRefreshOnPage(pagesUntilFullRefresh)) {
       if (ReaderUtils::shouldUseNoFlashReinforcement(pagesUntilFullRefresh)) {
-        ReaderUtils::displayX3DoubleNoFlash(renderer, true);
+        ReaderUtils::displayX3ConfiguredNoFlash(renderer, pagesUntilFullRefresh, true);
       } else {
         renderer.displayBufferIntermediate(HalDisplay::HALF_REFRESH);
         renderer.preconditionGrayscale();

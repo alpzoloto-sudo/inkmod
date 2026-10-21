@@ -207,6 +207,7 @@ std::string trimAsciiSpaces(const std::string& value) {
 void SettingsActivity::rebuildSettingsLists() {
   displaySettings.clear();
   displaySleepSettings.clear();
+  displayScreenCleanupSettings.clear();
   readerSettings.clear();
   readerFontSettings.clear();
   readerPageLayoutSettings.clear();
@@ -227,6 +228,7 @@ void SettingsActivity::rebuildSettingsLists() {
   const auto allSettings = getSettingsList(&sdFontSystem.registry());
   displaySettings = buildGroupedDisplaySettingsList(allSettings);
   displaySleepSettings = buildDisplaySleepSettingsList(allSettings);
+  displayScreenCleanupSettings = buildDisplayScreenCleanupSettingsList(allSettings);
   readerSettings = buildReaderSettingsParentList(allSettings);
   readerFontSettings = buildReaderFontSettingsList(allSettings);
   readerPageLayoutSettings = buildReaderPageLayoutSettingsList(allSettings);
@@ -257,7 +259,11 @@ void SettingsActivity::rebuildSettingsLists() {
 void SettingsActivity::setCurrentSettingsForCategory() {
   switch (selectedCategoryIndex) {
     case 0:
-      currentSettings = activeSubmenu == SettingAction::DisplaySleepScreen ? &displaySleepSettings : &displaySettings;
+      currentSettings = activeSubmenu == SettingAction::DisplaySleepScreen
+                            ? &displaySleepSettings
+                            : activeSubmenu == SettingAction::DisplayScreenCleanup
+                                  ? &displayScreenCleanupSettings
+                                  : &displaySettings;
       break;
     case 1:
       switch (activeSubmenu) {
@@ -328,6 +334,8 @@ StrId SettingsActivity::activeSubmenuTitleId() const {
   switch (activeSubmenu) {
     case SettingAction::DisplaySleepScreen:
       return StrId::STR_DISPLAY_SLEEP_SCREEN;
+    case SettingAction::DisplayScreenCleanup:
+      return StrId::STR_REFRESH_ACTION;
     case SettingAction::ReaderFontOptions:
       return StrId::STR_READER_FONT_OPTIONS;
     case SettingAction::ReaderPageLayout:

@@ -600,6 +600,8 @@ int InkMODSettings::getRefreshFrequency() const {
       return 15;
     case REFRESH_30:
       return 30;
+    case REFRESH_NEVER:
+      return REFRESH_COUNTDOWN_DISABLED;
   }
 }
 

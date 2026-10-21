@@ -4799,7 +4799,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
       logImagePageProfile(imageBlankDisplayMs, imageRestoreRenderMs, imageFinalDisplayMs);
     } else {
       if (ReaderUtils::x3DoubleNoFlashEnabled()) {
-        ReaderUtils::displayX3DoubleNoFlash(renderer, true);
+        ReaderUtils::displayX3ConfiguredNoFlash(renderer, pagesUntilFullRefresh, true);
       } else {
         renderer.displayBufferIntermediate(HalDisplay::HALF_REFRESH);
         renderer.preconditionGrayscale();
@@ -4809,18 +4809,12 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
     // no-flash double pass is reserved for text-only X3 pages.
     ReaderUtils::forceFullRefresh(pagesUntilFullRefresh);
   } else if (needsAnyGrayscale) {
-    if (ReaderUtils::isRefreshActionDue(pagesUntilFullRefresh)) {
+    if (ReaderUtils::shouldRefreshOnPage(pagesUntilFullRefresh)) {
       const bool textOnlyNoFlashReinforcement =
           needsTextGrayscale && !needsImageGrayscale &&
           ReaderUtils::shouldUseNoFlashReinforcement(pagesUntilFullRefresh);
       if (textOnlyNoFlashReinforcement) {
-        // Explicit manual reinforcement uses four passes. Automatic X3
-        // reinforcement keeps its original two-pass waveform.
-        if (ReaderUtils::isBwReinforcementForced(pagesUntilFullRefresh)) {
-          ReaderUtils::displayX3MaximumNoFlash(renderer, true);
-        } else {
-          ReaderUtils::displayX3DoubleNoFlash(renderer, true);
-        }
+        ReaderUtils::displayX3ConfiguredNoFlash(renderer, pagesUntilFullRefresh, true);
       } else {
         renderer.displayBufferIntermediate(HalDisplay::HALF_REFRESH);
         renderer.preconditionGrayscale();

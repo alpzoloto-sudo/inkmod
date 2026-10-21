@@ -328,13 +328,13 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
       add(SettingInfo::Toggle(StrId::STR_CLOCK_DISABLED, &InkMODSettings::clockDisabled, "clockDisabled",
                               StrId::STR_CAT_DISPLAY, /*invertedToggleDisplay=*/true));
     }
-    if (!gpio.deviceIsX3() || SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_FULL) {
-      add(SettingInfo::Enum(
-          StrId::STR_REFRESH_FREQ, &InkMODSettings::refreshFrequency,
-          {StrId::STR_PAGES_1, StrId::STR_PAGES_5, StrId::STR_PAGES_10, StrId::STR_PAGES_15,
-           StrId::STR_PAGES_30, StrId::STR_NEVER},
-          "refreshFrequency", StrId::STR_CAT_DISPLAY));
-    }
+    // Keep this entry in the shared list for JSON save/load regardless of the
+    // active X3 cleanup mode. Only the visible display submenu filters it.
+    add(SettingInfo::Enum(
+        StrId::STR_REFRESH_FREQ, &InkMODSettings::refreshFrequency,
+        {StrId::STR_PAGES_1, StrId::STR_PAGES_5, StrId::STR_PAGES_10, StrId::STR_PAGES_15,
+         StrId::STR_PAGES_30, StrId::STR_NEVER},
+        "refreshFrequency", StrId::STR_CAT_DISPLAY));
     if (gpio.deviceIsX3()) {
       add(SettingInfo::Enum(
               StrId::STR_REFRESH_ACTION, &InkMODSettings::refreshAction,

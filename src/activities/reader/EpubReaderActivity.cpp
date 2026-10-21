@@ -1390,6 +1390,16 @@ void EpubReaderActivity::loop() {
     return;
   }
 
+  // The quick settings panel stores the new reading orientation without
+  // changing the renderer (the panel itself stays portrait). Apply the
+  // pending orientation as soon as the reader resumes, including re-layout.
+  if (BoardConfig::isX4Pro() &&
+      renderer.getOrientation() != ReaderUtils::toRendererOrientation(SETTINGS.orientation)) {
+    applyOrientation(SETTINGS.orientation);
+    requestUpdate();
+    return;
+  }
+
   if (coalesceNavigationWhileLoading()) {
     return;
   }

@@ -254,7 +254,7 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
     if (shouldUseNoFlashReinforcement(pagesUntilRefreshAction, pageSupportsNoFlashReinforcement)) {
       displayX3ConfiguredNoFlash(renderer, pagesUntilRefreshAction);
     } else {
-      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+      renderer.displayBuffer(gpio.deviceIsX3() ? HalDisplay::FULL_REFRESH : HalDisplay::HALF_REFRESH);
     }
     pagesUntilRefreshAction = SETTINGS.getRefreshFrequency();
   } else {

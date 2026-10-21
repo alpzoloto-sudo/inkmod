@@ -551,7 +551,7 @@ bool handleGlobalShortcutAction(const InkMODSettings::SHORT_PWRBTN action) {
     case InkMODSettings::SHORT_PWRBTN::FORCE_REFRESH: {
       LOG_DBG("MAIN", "Manual full screen refresh triggered");
       RenderLock lock;
-      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+      renderer.displayBuffer(HalDisplay::FULL_REFRESH);
       return true;
     }
     case InkMODSettings::SHORT_PWRBTN::REINFORCE_SCREEN: {

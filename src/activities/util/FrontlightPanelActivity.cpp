@@ -167,9 +167,10 @@ void FrontlightPanelActivity::runTile(const int idx) {
     case 2:  // Cycle the reading orientation
       SETTINGS.orientation = static_cast<uint8_t>((SETTINGS.orientation + 1) % 4);
       SETTINGS.saveToFile();
-      // Only the setting changes: turning the renderer cropped the portrait-only
-      // screens the panel opens over. The reader reflows on its next loop().
-      requestUpdate();
+      // Return to the reader immediately. The resumed reader applies this
+      // setting and reflows the page; rotating the portrait-only sheet itself
+      // would crop the controls and leave the page unchanged.
+      close();
       break;
     case 3:  // Touch reader controls (for reading with the palm on the glass)
       // Toggles the existing Settings -> Controls option, nothing lower-level:

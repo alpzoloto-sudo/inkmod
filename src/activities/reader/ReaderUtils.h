@@ -245,6 +245,11 @@ inline bool x3NoFlashEveryPage(const int pagesUntilRefreshAction) {
 }
 
 inline bool shouldRefreshOnPage(const int pagesUntilRefreshAction) {
+  if (isFullRefreshForced(pagesUntilRefreshAction) ||
+      isBwReinforcementForced(pagesUntilRefreshAction)) return true;
+  // Eco must not turn into a full flash merely because a countdown saved
+  // under the previous mode reached zero.
+  if (gpio.deviceIsX3() && SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_ECO) return false;
   return isRefreshActionDue(pagesUntilRefreshAction) || x3NoFlashEveryPage(pagesUntilRefreshAction);
 }
 

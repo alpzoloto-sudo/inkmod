@@ -97,7 +97,7 @@ void ScreenshotUtil::takeScreenshot(GfxRenderer& renderer) {
     renderer.displayBuffer();
     delay(1000);
     renderer.restoreBwBuffer();
-    renderer.displayBuffer(HalDisplay::RefreshMode::HALF_REFRESH);
+    renderer.displayBuffer(HalDisplay::RefreshMode::FULL_REFRESH);
   }
 }
 

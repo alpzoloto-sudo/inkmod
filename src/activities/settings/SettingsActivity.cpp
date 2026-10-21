@@ -32,6 +32,7 @@
 #include "UiTextSize.h"
 #include "SdFirmwareUpdateActivity.h"
 #include "SettingsList.h"
+#include "activities/reader/ReaderUtils.h"
 #include "StatusBarSettingsActivity.h"
 #include "SupportInkMODActivity.h"
 #include "SystemDiagnosticsActivity.h"
@@ -314,6 +315,9 @@ void SettingsActivity::setCurrentSettingsForCategory() {
 }
 
 void SettingsActivity::enterCategory(int categoryIndex) {
+  if (gpio.deviceIsX3() && SETTINGS.refreshAction != InkMODSettings::REFRESH_ACTION_FULL) {
+    cleanupOnNextRender = true;
+  }
   selectedCategoryIndex = categoryIndex;
   activeSubmenu = SettingAction::None;
   parentSubmenu = SettingAction::None;
@@ -521,6 +525,7 @@ void SettingsActivity::openStringEditor(const SettingInfo& setting) {
 
 void SettingsActivity::onEnter() {
   Activity::onEnter();
+  cleanupOnNextRender = true;
 
   // Reset selection to first category
   selectedCategoryIndex = 0;
@@ -1283,5 +1288,24 @@ void SettingsActivity::render(RenderLock&&) {
 
   // A plain up/down move changes only the list selection and, potentially,
   // the footer action label. Send only that lower region to the panel.
-  renderer.displayBuffer();
+  if (cleanupOnNextRender && gpio.deviceIsX3()) {
+    cleanupOnNextRender = false;
+    switch (SETTINGS.refreshAction) {
+      case InkMODSettings::REFRESH_ACTION_FULL:
+        renderer.displayBuffer(HalDisplay::FULL_REFRESH);
+        break;
+      case InkMODSettings::REFRESH_ACTION_BW_REINFORCEMENT:
+        ReaderUtils::displayX3DoubleNoFlash(renderer);
+        break;
+      case InkMODSettings::REFRESH_ACTION_MAXIMUM:
+        ReaderUtils::displayX3MaximumNoFlash(renderer);
+        break;
+      default:
+        renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+        break;
+    }
+  } else {
+    cleanupOnNextRender = false;
+    renderer.displayBuffer();
+  }
 }

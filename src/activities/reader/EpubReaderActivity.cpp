@@ -4814,9 +4814,13 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
           needsTextGrayscale && !needsImageGrayscale &&
           ReaderUtils::shouldUseNoFlashReinforcement(pagesUntilFullRefresh);
       if (textOnlyNoFlashReinforcement) {
-        // Cleanup due: two no-flash X3 reinforcement passes, then the AA
-        // overlay. With refresh frequency = 1 this happens on every page.
-        ReaderUtils::displayX3DoubleNoFlash(renderer, true);
+        // Explicit manual reinforcement uses four passes. Automatic X3
+        // reinforcement keeps its original two-pass waveform.
+        if (ReaderUtils::isBwReinforcementForced(pagesUntilFullRefresh)) {
+          ReaderUtils::displayX3MaximumNoFlash(renderer, true);
+        } else {
+          ReaderUtils::displayX3DoubleNoFlash(renderer, true);
+        }
       } else {
         renderer.displayBufferIntermediate(HalDisplay::HALF_REFRESH);
         renderer.preconditionGrayscale();

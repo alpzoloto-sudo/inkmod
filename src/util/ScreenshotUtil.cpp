@@ -100,6 +100,12 @@ void ScreenshotUtil::takeScreenshot(GfxRenderer& renderer) {
     delay(450);
     renderer.restoreBwBuffer();
     renderer.displayBuffer(HalDisplay::RefreshMode::FAST_REFRESH);
+  } else {
+    // Memory-heavy activities (dictionary / note editor) can exhaust the
+    // temporary framebuffer backup. Still acknowledge a saved screenshot
+    // with an unmistakable flash, without modifying the screen buffer.
+    LOG_WRN("SCR", "Screenshot border skipped: no framebuffer backup memory");
+    renderer.displayBuffer(HalDisplay::RefreshMode::FULL_REFRESH);
   }
 }
 

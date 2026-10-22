@@ -4791,7 +4791,8 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
       // Force a visible flash on the exact image page where full refresh is
       // requested, rather than delaying it until the following page.
       renderer.displayBufferIntermediate(HalDisplay::FULL_REFRESH);
-      renderer.preconditionGrayscale();
+      // A single FULL flash is sufficient on X3 before the grayscale plane.
+      // Do not append a redundant visible AA-pre-BW(mid) settle here.
     } else if (gpio.deviceIsX3() && ReaderUtils::isBwReinforcementForced(pagesUntilFullRefresh)) {
       // A manual no-flash request must also work on pages containing images.
       ReaderUtils::displayX3MaximumNoFlash(renderer, true);
@@ -4842,14 +4843,15 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
     }
   } else if (needsAnyGrayscale) {
     if (ReaderUtils::shouldRefreshOnPage(pagesUntilFullRefresh)) {
-      const bool textOnlyNoFlashReinforcement =
-          needsTextGrayscale && !needsImageGrayscale &&
-          ReaderUtils::shouldUseNoFlashReinforcement(pagesUntilFullRefresh);
-      if (textOnlyNoFlashReinforcement) {
+      if (ReaderUtils::shouldUseNoFlashReinforcement(pagesUntilFullRefresh)) {
+        // Grayscale/image pages must honor X3 no-flash too, including the
+        // first frame after opening a book.
         ReaderUtils::displayX3ConfiguredNoFlash(renderer, pagesUntilFullRefresh, true);
       } else {
         renderer.displayBufferIntermediate(gpio.deviceIsX3() ? HalDisplay::FULL_REFRESH : HalDisplay::HALF_REFRESH);
-        renderer.preconditionGrayscale();
+        // On X3 a second settle after FULL is a redundant visible pass.
+        // Other panel families retain their grayscale preconditioning.
+        if (!gpio.deviceIsX3()) renderer.preconditionGrayscale();
       }
       pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
     } else {

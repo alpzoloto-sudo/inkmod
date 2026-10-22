@@ -263,7 +263,8 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
     firstMenuRender = false;
     switch (SETTINGS.refreshAction) {
       case InkMODSettings::REFRESH_ACTION_FULL:
-        renderer.displayBuffer(HalDisplay::FULL_REFRESH);
+        // Entering the reader menu must not trigger a flash.
+        renderer.displayBuffer(HalDisplay::FAST_REFRESH);
         break;
       case InkMODSettings::REFRESH_ACTION_BW_REINFORCEMENT:
         ReaderUtils::displayX3DoubleNoFlash(renderer);

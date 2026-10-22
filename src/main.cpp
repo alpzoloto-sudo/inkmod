@@ -571,9 +571,9 @@ bool handleGlobalShortcutAction(const InkMODSettings::SHORT_PWRBTN action) {
       return true;
     }
     case InkMODSettings::SHORT_PWRBTN::SCREENSHOT: {
-      if (activityManager.canSnapshotForSleepOverlay()) {
-        return false;
-      }
+      // Screenshot feedback must also work on Home, dictionary and note editor.
+      // canSnapshotForSleepOverlay() is a sleep-overlay capability check, not
+      // a reason to suppress explicit user-requested screenshots.
       RenderLock lock;
       ScreenshotUtil::takeScreenshot(renderer);
       return true;

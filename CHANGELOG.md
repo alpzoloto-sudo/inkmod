@@ -12,6 +12,8 @@
 - X3 page rendering routes grayscale/image pages through the selected no-flash mode; screen-update behavior is better aligned across reader and menus.
 - Screenshot confirmation now flashes the border while it is visible, with a fallback flash when a framebuffer backup cannot be allocated.
 - Firmware CI now publishes a separate X4 Classic test artifact.
+- X4 Pro reader no longer treats a bottom-edge upward swipe as a menu gesture when touch reading is off.
+- X4 Pro quick-panel rotation closes the sheet and updates EPUB/FB2 reader orientation; TXT re-paginates on return.
 
 ### Fixed
 - Blank selected Screen Cleanup row after changing away from With flash.

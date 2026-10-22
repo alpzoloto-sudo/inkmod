@@ -1,5 +1,30 @@
 # Changelog
 
+## [v1.1.10] - 2026-10-22
+
+### Added
+- X3 Screen Cleanup modes: Eco (no cleanup), Standard (two no-flash passes), Maximum (four no-flash passes), and With flash.
+- Refresh Frequency is available inside Screen Cleanup when With flash is selected.
+- Dedicated four-pass No-Flash Refresh action for X3.
+
+### Changed
+- Faster X3 settings navigation: changing tabs does not start full cleanup; UI transitions cap Maximum cleanup at two passes.
+- X3 page rendering routes grayscale/image pages through the selected no-flash mode; screen-update behavior is better aligned across reader and menus.
+- Screenshot confirmation now flashes the border while it is visible, with a fallback flash when a framebuffer backup cannot be allocated.
+- Firmware CI now publishes a separate X4 Classic test artifact.
+
+### Fixed
+- Blank selected Screen Cleanup row after changing away from With flash.
+- X3 Screen Cleanup / Refresh Frequency setting order.
+- Redundant explicit X3 grayscale preconditioning after a requested full refresh.
+- Screenshot shortcut being suppressed on Home and certain utility screens.
+- FB2 anchor selection guard in the reader.
+
+### Notes
+- X3 UC8253 controller startup can still require an initial hardware full synchronization; it is not overridden for safety.
+- X4 Pro issues #38, #39 and #40 remain open pending hardware/emulator verification.
+
+
 ## [v1.1.9] - 2026-09-24
 
 ### Fixed

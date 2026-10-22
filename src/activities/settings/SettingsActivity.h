@@ -21,6 +21,7 @@ enum class SettingAction {
   KOReaderSync,
   OPDSBrowser,
   DisplaySleepScreen,
+  DisplayScreenCleanup,
   ReaderFontOptions,
   ReaderPageLayout,
   ControlsPowerButton,
@@ -256,10 +257,12 @@ class SettingsActivity final : public Activity {
   int selectedCategoryIndex = 0;  // Currently selected category
   int selectedSettingIndex = 0;
   int settingsCount = 0;
+  bool cleanupOnNextRender = false;
 
   // Per-category settings derived from shared list + device-only actions
   std::vector<SettingInfo> displaySettings;
   std::vector<SettingInfo> displaySleepSettings;
+  std::vector<SettingInfo> displayScreenCleanupSettings;
   std::vector<SettingInfo> readerSettings;
   std::vector<SettingInfo> readerFontSettings;
   std::vector<SettingInfo> readerPageLayoutSettings;

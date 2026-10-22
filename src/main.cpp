@@ -551,7 +551,7 @@ bool handleGlobalShortcutAction(const InkMODSettings::SHORT_PWRBTN action) {
     case InkMODSettings::SHORT_PWRBTN::FORCE_REFRESH: {
       LOG_DBG("MAIN", "Manual full screen refresh triggered");
       RenderLock lock;
-      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+      renderer.displayBuffer(HalDisplay::FULL_REFRESH);
       return true;
     }
     case InkMODSettings::SHORT_PWRBTN::REINFORCE_SCREEN: {
@@ -564,16 +564,16 @@ bool handleGlobalShortcutAction(const InkMODSettings::SHORT_PWRBTN action) {
       LOG_DBG("MAIN", "Manual X3 no-flash screen reinforcement triggered");
       RenderLock lock;
       if (gpio.deviceIsX3()) {
-        ReaderUtils::displayX3DoubleNoFlash(renderer);
+        ReaderUtils::displayX3MaximumNoFlash(renderer);
       } else {
         renderer.displayBuffer(HalDisplay::HALF_REFRESH);
       }
       return true;
     }
     case InkMODSettings::SHORT_PWRBTN::SCREENSHOT: {
-      if (activityManager.canSnapshotForSleepOverlay()) {
-        return false;
-      }
+      // Screenshot feedback must also work on Home, dictionary and note editor.
+      // canSnapshotForSleepOverlay() is a sleep-overlay capability check, not
+      // a reason to suppress explicit user-requested screenshots.
       RenderLock lock;
       ScreenshotUtil::takeScreenshot(renderer);
       return true;

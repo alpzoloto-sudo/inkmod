@@ -650,12 +650,16 @@ void TxtReaderActivity::renderPage() {
 
   const bool needsTextGrayscale = SETTINGS.textAntiAliasing && ReaderUtils::readerForegroundBlack();
   if (needsTextGrayscale) {
-    if (ReaderUtils::isRefreshActionDue(pagesUntilFullRefresh)) {
+    if (ReaderUtils::shouldRefreshOnPage(pagesUntilFullRefresh)) {
       if (ReaderUtils::shouldUseNoFlashReinforcement(pagesUntilFullRefresh)) {
-        ReaderUtils::displayX3DoubleNoFlash(renderer, true);
+        // Grayscale/image pages must honor X3 no-flash too, including the
+        // first frame after opening a book.
+        ReaderUtils::displayX3ConfiguredNoFlash(renderer, pagesUntilFullRefresh, true);
       } else {
-        renderer.displayBufferIntermediate(HalDisplay::HALF_REFRESH);
-        renderer.preconditionGrayscale();
+        renderer.displayBufferIntermediate(gpio.deviceIsX3() ? HalDisplay::FULL_REFRESH : HalDisplay::HALF_REFRESH);
+        // On X3 a second settle after FULL is a redundant visible pass.
+        // Other panel families retain their grayscale preconditioning.
+        if (!gpio.deviceIsX3()) renderer.preconditionGrayscale();
       }
       pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
     } else {

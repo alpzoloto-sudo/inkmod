@@ -32,6 +32,7 @@
 #include "UiTextSize.h"
 #include "SdFirmwareUpdateActivity.h"
 #include "SettingsList.h"
+#include "activities/reader/ReaderUtils.h"
 #include "StatusBarSettingsActivity.h"
 #include "SupportInkMODActivity.h"
 #include "SystemDiagnosticsActivity.h"
@@ -206,6 +207,7 @@ std::string trimAsciiSpaces(const std::string& value) {
 void SettingsActivity::rebuildSettingsLists() {
   displaySettings.clear();
   displaySleepSettings.clear();
+  displayScreenCleanupSettings.clear();
   readerSettings.clear();
   readerFontSettings.clear();
   readerPageLayoutSettings.clear();
@@ -226,6 +228,7 @@ void SettingsActivity::rebuildSettingsLists() {
   const auto allSettings = getSettingsList(&sdFontSystem.registry());
   displaySettings = buildGroupedDisplaySettingsList(allSettings);
   displaySleepSettings = buildDisplaySleepSettingsList(allSettings);
+  displayScreenCleanupSettings = buildDisplayScreenCleanupSettingsList(allSettings);
   readerSettings = buildReaderSettingsParentList(allSettings);
   readerFontSettings = buildReaderFontSettingsList(allSettings);
   readerPageLayoutSettings = buildReaderPageLayoutSettingsList(allSettings);
@@ -256,7 +259,11 @@ void SettingsActivity::rebuildSettingsLists() {
 void SettingsActivity::setCurrentSettingsForCategory() {
   switch (selectedCategoryIndex) {
     case 0:
-      currentSettings = activeSubmenu == SettingAction::DisplaySleepScreen ? &displaySleepSettings : &displaySettings;
+      currentSettings = activeSubmenu == SettingAction::DisplaySleepScreen
+                            ? &displaySleepSettings
+                            : activeSubmenu == SettingAction::DisplayScreenCleanup
+                                  ? &displayScreenCleanupSettings
+                                  : &displaySettings;
       break;
     case 1:
       switch (activeSubmenu) {
@@ -314,6 +321,8 @@ void SettingsActivity::setCurrentSettingsForCategory() {
 }
 
 void SettingsActivity::enterCategory(int categoryIndex) {
+  // Switching settings tabs must stay FAST, without even two cleanup passes.
+  cleanupOnNextRender = false;
   selectedCategoryIndex = categoryIndex;
   activeSubmenu = SettingAction::None;
   parentSubmenu = SettingAction::None;
@@ -324,6 +333,8 @@ StrId SettingsActivity::activeSubmenuTitleId() const {
   switch (activeSubmenu) {
     case SettingAction::DisplaySleepScreen:
       return StrId::STR_DISPLAY_SLEEP_SCREEN;
+    case SettingAction::DisplayScreenCleanup:
+      return StrId::STR_REFRESH_ACTION;
     case SettingAction::ReaderFontOptions:
       return StrId::STR_READER_FONT_OPTIONS;
     case SettingAction::ReaderPageLayout:
@@ -435,6 +446,13 @@ void SettingsActivity::openEnumOptionPicker(const SettingInfo& setting) {
         applyUiTextSize(renderer);
         SETTINGS.saveToFile();
         rebuildSettingsLists();
+        // Changing With flash alters the number and order of rows in this
+        // submenu. Rebind the active list and clamp the selection immediately,
+        // otherwise the stale index draws an empty selected row.
+        if (selectedCategoryIndex == 0 && activeSubmenu == SettingAction::DisplayScreenCleanup) {
+          setCurrentSettingsForCategory();
+          selectedSettingIndex = std::clamp(selectedSettingIndex, 1, std::max(1, settingsCount));
+        }
         requestUpdate();
       });
 }
@@ -521,6 +539,8 @@ void SettingsActivity::openStringEditor(const SettingInfo& setting) {
 
 void SettingsActivity::onEnter() {
   Activity::onEnter();
+  cleanupOnNextRender = gpio.deviceIsX3() &&
+      SETTINGS.refreshAction != InkMODSettings::REFRESH_ACTION_FULL;
 
   // Reset selection to first category
   selectedCategoryIndex = 0;
@@ -1283,5 +1303,25 @@ void SettingsActivity::render(RenderLock&&) {
 
   // A plain up/down move changes only the list selection and, potentially,
   // the footer action label. Send only that lower region to the panel.
-  renderer.displayBuffer();
+  if (cleanupOnNextRender && gpio.deviceIsX3()) {
+    cleanupOnNextRender = false;
+    switch (SETTINGS.refreshAction) {
+      case InkMODSettings::REFRESH_ACTION_FULL:
+        renderer.displayBuffer(HalDisplay::FULL_REFRESH);
+        break;
+      case InkMODSettings::REFRESH_ACTION_BW_REINFORCEMENT:
+        ReaderUtils::displayX3DoubleNoFlash(renderer);
+        break;
+      case InkMODSettings::REFRESH_ACTION_MAXIMUM:
+        // UI transitions are latency-sensitive: cap Maximum at two passes.
+        ReaderUtils::displayX3DoubleNoFlash(renderer);
+        break;
+      default:
+        renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+        break;
+    }
+  } else {
+    cleanupOnNextRender = false;
+    renderer.displayBuffer();
+  }
 }

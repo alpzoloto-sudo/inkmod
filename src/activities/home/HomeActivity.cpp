@@ -29,6 +29,7 @@
 #include "BookmarkStore.h"
 #include "BookmarksHomeActivity.h"
 #include "InkMODSettings.h"
+#include "activities/reader/ReaderUtils.h"
 #include "InkMODState.h"
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
@@ -788,6 +789,7 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
 
 void HomeActivity::onEnter() {
   Activity::onEnter();
+  firstHomePaintPending = true;
 
   hasOpdsServers = OPDS_STORE.hasServers();
   const bool isCarouselTheme =
@@ -1874,6 +1876,29 @@ void HomeActivity::loop() {
 }
 
 void HomeActivity::render(RenderLock&&) {
+  // Apply the selected cleanup once when returning from Settings/reader
+  // to Home. Ordinary Home selections remain fast.
+  const auto displayHomeFrame = [this]() {
+    if (firstHomePaintPending && gpio.deviceIsX3()) {
+      firstHomePaintPending = false;
+      switch (SETTINGS.refreshAction) {
+        case InkMODSettings::REFRESH_ACTION_FULL:
+          renderer.displayBuffer(HalDisplay::FULL_REFRESH);
+          return;
+        case InkMODSettings::REFRESH_ACTION_BW_REINFORCEMENT:
+          ReaderUtils::displayX3DoubleNoFlash(renderer);
+          return;
+        case InkMODSettings::REFRESH_ACTION_MAXIMUM:
+          // UI transitions are latency-sensitive: cap Maximum at two passes.
+        ReaderUtils::displayX3DoubleNoFlash(renderer);
+          return;
+        default:
+          break;
+      }
+    }
+    firstHomePaintPending = false;
+    renderer.displayBuffer();
+  };
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
@@ -1891,7 +1916,7 @@ void HomeActivity::render(RenderLock&&) {
           [&menuItems](int index) { return menuItems[index].icon; });
       const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
       GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-      renderer.displayBuffer();
+      displayHomeFrame();
       return;
     }
 
@@ -1914,7 +1939,7 @@ void HomeActivity::render(RenderLock&&) {
     GUI.drawButtonHints(renderer, tr(STR_MENU), tr(STR_BROWSE), tr(STR_SETTINGS_SHORT),
                         recentBooks.empty() ? "" : tr(STR_READ), false, BoardConfig::isX4Pro());
 
-    renderer.displayBuffer();
+    displayHomeFrame();
 
     if (!firstRenderDone) {
       firstRenderDone = true;
@@ -1970,7 +1995,7 @@ void HomeActivity::render(RenderLock&&) {
         }
       }
 
-      renderer.displayBuffer();
+      displayHomeFrame();
       // E-ink refresh complete — pre-render the missing adjacent frame while idle.
       updateSlidingWindowCache(centerIdx, bookCount);
       // Mirror the slow-path trigger: generate missing thumbnails on the second
@@ -2038,7 +2063,7 @@ void HomeActivity::render(RenderLock&&) {
                                       : mappedInput.mapLabels("", tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  renderer.displayBuffer();
+  displayHomeFrame();
 
   if (!firstRenderDone) {
     firstRenderDone = true;

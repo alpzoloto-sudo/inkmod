@@ -4438,9 +4438,11 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       }
     }
 
+    bool navigatedToAnchor = false;
     if (!pendingAnchor.empty()) {
       if (const auto page = section->getPageForAnchor(pendingAnchor)) {
         section->currentPage = *page;
+        navigatedToAnchor = true;
         LOG_DBG("ERS", "Resolved anchor '%s' to page %d", pendingAnchor.c_str(), *page);
       } else {
         LOG_DBG("ERS", "Anchor '%s' not found in section %d", pendingAnchor.c_str(), currentSpineIndex);
@@ -4451,7 +4453,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // handles changes in reader settings and reset to approximate position based on cached progress
     if (cachedChapterTotalPageCount > 0) {
       // only goes to relative position if spine index matches cached value
-      if (currentSpineIndex == cachedSpineIndex && section->pageCount != cachedChapterTotalPageCount) {
+      if (!navigatedToAnchor && currentSpineIndex == cachedSpineIndex &&
+          section->pageCount != cachedChapterTotalPageCount) {
         float progress = static_cast<float>(section->currentPage) / static_cast<float>(cachedChapterTotalPageCount);
         int newPage = static_cast<int>(progress * section->pageCount);
         section->currentPage = newPage;
@@ -4781,7 +4784,29 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
   };
 
   if (pageHasImages && !BoardConfig::isX4Pro()) {
-    // Image pages keep the existing double-fast cleanup technique. Both passes
+    if (gpio.deviceIsX3() &&
+        (ReaderUtils::isFullRefreshForced(pagesUntilFullRefresh) ||
+         (SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_FULL &&
+          ReaderUtils::isRefreshActionDue(pagesUntilFullRefresh)))) {
+      // Force a visible flash on the exact image page where full refresh is
+      // requested, rather than delaying it until the following page.
+      renderer.displayBufferIntermediate(HalDisplay::FULL_REFRESH);
+      // A single FULL flash is sufficient on X3 before the grayscale plane.
+      // Do not append a redundant visible AA-pre-BW(mid) settle here.
+    } else if (gpio.deviceIsX3() && ReaderUtils::isBwReinforcementForced(pagesUntilFullRefresh)) {
+      // A manual no-flash request must also work on pages containing images.
+      ReaderUtils::displayX3MaximumNoFlash(renderer, true);
+    } else if (gpio.deviceIsX3() &&
+               SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_MAXIMUM) {
+      ReaderUtils::displayX3MaximumNoFlash(renderer, true);
+    } else if (gpio.deviceIsX3() &&
+               SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_BW_REINFORCEMENT) {
+      ReaderUtils::displayX3DoubleNoFlash(renderer, true);
+    } else if (gpio.deviceIsX3() &&
+               SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_ECO) {
+      renderer.displayGrayscaleBaseIntermediate(HalDisplay::FAST_REFRESH);
+    } else {
+    // Image pages with scheduled flash retain the existing optimized path. Both passes
     // are intermediate because the grayscale overlay follows immediately.
     int16_t imgX, imgY, imgW, imgH;
     if (page->getImageBoundingBox(imgX, imgY, imgW, imgH)) {
@@ -4799,27 +4824,34 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int fo
       logImagePageProfile(imageBlankDisplayMs, imageRestoreRenderMs, imageFinalDisplayMs);
     } else {
       if (ReaderUtils::x3DoubleNoFlashEnabled()) {
-        ReaderUtils::displayX3DoubleNoFlash(renderer, true);
+        ReaderUtils::displayX3ConfiguredNoFlash(renderer, pagesUntilFullRefresh, true);
       } else {
         renderer.displayBufferIntermediate(HalDisplay::HALF_REFRESH);
         renderer.preconditionGrayscale();
       }
     }
-    // Grayscale image pages keep their conservative cleanup rule; the
-    // no-flash double pass is reserved for text-only X3 pages.
-    ReaderUtils::forceFullRefresh(pagesUntilFullRefresh);
+    }
+    // Preserve the conservative forced refresh on other devices and on X3
+    // With flash. In X3 no-flash modes, a forced flash on the next page would
+    // violate the user's cleanup selection.
+    if (gpio.deviceIsX3()) {
+      // Both flashing and non-flashing X3 modes are already applied to the
+      // current page; do not leak a forced next-page flash from this branch.
+      pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
+    } else {
+      ReaderUtils::forceFullRefresh(pagesUntilFullRefresh);
+    }
   } else if (needsAnyGrayscale) {
-    if (ReaderUtils::isRefreshActionDue(pagesUntilFullRefresh)) {
-      const bool textOnlyNoFlashReinforcement =
-          needsTextGrayscale && !needsImageGrayscale &&
-          ReaderUtils::shouldUseNoFlashReinforcement(pagesUntilFullRefresh);
-      if (textOnlyNoFlashReinforcement) {
-        // Cleanup due: two no-flash X3 reinforcement passes, then the AA
-        // overlay. With refresh frequency = 1 this happens on every page.
-        ReaderUtils::displayX3DoubleNoFlash(renderer, true);
+    if (ReaderUtils::shouldRefreshOnPage(pagesUntilFullRefresh)) {
+      if (ReaderUtils::shouldUseNoFlashReinforcement(pagesUntilFullRefresh)) {
+        // Grayscale/image pages must honor X3 no-flash too, including the
+        // first frame after opening a book.
+        ReaderUtils::displayX3ConfiguredNoFlash(renderer, pagesUntilFullRefresh, true);
       } else {
-        renderer.displayBufferIntermediate(HalDisplay::HALF_REFRESH);
-        renderer.preconditionGrayscale();
+        renderer.displayBufferIntermediate(gpio.deviceIsX3() ? HalDisplay::FULL_REFRESH : HalDisplay::HALF_REFRESH);
+        // On X3 a second settle after FULL is a redundant visible pass.
+        // Other panel families retain their grayscale preconditioning.
+        if (!gpio.deviceIsX3()) renderer.preconditionGrayscale();
       }
       pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
     } else {

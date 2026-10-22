@@ -328,15 +328,23 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
       add(SettingInfo::Toggle(StrId::STR_CLOCK_DISABLED, &InkMODSettings::clockDisabled, "clockDisabled",
                               StrId::STR_CAT_DISPLAY, /*invertedToggleDisplay=*/true));
     }
+    // Keep this entry in the shared list for JSON save/load regardless of the
+    // active X3 cleanup mode. Only the visible display submenu filters it.
     add(SettingInfo::Enum(
         StrId::STR_REFRESH_FREQ, &InkMODSettings::refreshFrequency,
-        {StrId::STR_PAGES_1, StrId::STR_PAGES_5, StrId::STR_PAGES_10, StrId::STR_PAGES_15, StrId::STR_PAGES_30},
+        {StrId::STR_PAGES_1, StrId::STR_PAGES_5, StrId::STR_PAGES_10, StrId::STR_PAGES_15,
+         StrId::STR_PAGES_30, StrId::STR_NEVER},
         "refreshFrequency", StrId::STR_CAT_DISPLAY));
     if (gpio.deviceIsX3()) {
       add(SettingInfo::Enum(
-          StrId::STR_REFRESH_ACTION, &InkMODSettings::refreshAction,
-          {StrId::STR_REFRESH_ACTION_FULL, StrId::STR_REFRESH_ACTION_BW_REINFORCEMENT},
-          "refreshAction", StrId::STR_CAT_DISPLAY));
+              StrId::STR_REFRESH_ACTION, &InkMODSettings::refreshAction,
+              {StrId::STR_REFRESH_ACTION_ECO, StrId::STR_REFRESH_ACTION_BW_REINFORCEMENT,
+               StrId::STR_REFRESH_ACTION_MAXIMUM, StrId::STR_REFRESH_ACTION_FULL},
+              "refreshAction", StrId::STR_CAT_DISPLAY)
+              .withEnumRawValues({InkMODSettings::REFRESH_ACTION_ECO,
+                                  InkMODSettings::REFRESH_ACTION_BW_REINFORCEMENT,
+                                  InkMODSettings::REFRESH_ACTION_MAXIMUM,
+                                  InkMODSettings::REFRESH_ACTION_FULL}));
     }
     add(SettingInfo::Enum(
             StrId::STR_UI_THEME, &InkMODSettings::uiTheme,
@@ -1103,7 +1111,11 @@ inline std::vector<SettingInfo> buildGroupedDisplaySettingsList(const std::vecto
     addDisplaySetting(StrId::STR_CLOCK_DISABLED);
   }
 
-  addDisplaySetting(StrId::STR_REFRESH_FREQ);
+  if (gpio.deviceIsX3()) {
+    displaySettings.push_back(SettingInfo::Submenu(StrId::STR_REFRESH_ACTION, SettingAction::DisplayScreenCleanup));
+  } else {
+    addDisplaySetting(StrId::STR_REFRESH_FREQ);
+  }
   addDisplaySetting(StrId::STR_UI_THEME);
   addDisplaySetting(StrId::STR_UI_TEXT_SIZE);
   addDisplaySetting(StrId::STR_RECENT_BOOKS_VIEW);
@@ -1111,6 +1123,29 @@ inline std::vector<SettingInfo> buildGroupedDisplaySettingsList(const std::vecto
   addDisplaySetting(StrId::STR_SUNLIGHT_FADING_FIX);
 
   return displaySettings;
+}
+
+// The X3 frequency belongs to Screen Cleanup and is meaningful only when
+// automatic full flashing is selected. Non-X3 devices retain their direct
+// frequency setting in the Display category.
+inline std::vector<SettingInfo> buildDisplayScreenCleanupSettingsList(
+    const std::vector<SettingInfo>& allSettings) {
+  std::vector<SettingInfo> settings;
+  // Keep the row order stable while a selection is being changed. The parent
+  // activity rebuilds this list after the modal option picker returns.
+  const auto addByName = [&](const StrId name) {
+    for (const auto& setting : allSettings) {
+      if (setting.nameId == name) {
+        settings.push_back(setting);
+        break;
+      }
+    }
+  };
+  addByName(StrId::STR_REFRESH_ACTION);
+  if (SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_FULL) {
+    addByName(StrId::STR_REFRESH_FREQ);
+  }
+  return settings;
 }
 
 inline std::vector<SettingInfo> buildDisplaySleepSettingsList(const std::vector<SettingInfo>& allSettings) {

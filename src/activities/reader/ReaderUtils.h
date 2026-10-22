@@ -192,21 +192,26 @@ inline void countOrdinaryRefresh(int& pagesUntilRefreshAction) {
 
 inline bool shouldUseNoFlashReinforcement(const int pagesUntilRefreshAction,
                                           const bool pageSupportsNoFlashReinforcement = true) {
-  return gpio.deviceIsX3() && pageSupportsNoFlashReinforcement &&
-         (isBwReinforcementForced(pagesUntilRefreshAction) ||
-          (!isFullRefreshForced(pagesUntilRefreshAction) &&
-           SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_BW_REINFORCEMENT));
+  if (!gpio.deviceIsX3() || !pageSupportsNoFlashReinforcement ||
+      isFullRefreshForced(pagesUntilRefreshAction)) return false;
+  return isBwReinforcementForced(pagesUntilRefreshAction) ||
+         SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_BW_REINFORCEMENT ||
+         SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_MAXIMUM;
 }
 
 inline bool x3DoubleNoFlashEnabled() {
-  return gpio.deviceIsX3() && SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_BW_REINFORCEMENT;
+  return gpio.deviceIsX3() &&
+         (SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_BW_REINFORCEMENT ||
+          SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_MAXIMUM);
 }
 
-// Two consecutive OEM AA-pre-BW(mid) passes. The first pass intentionally
-// keeps panel power on; the second is either also intermediate (when a
-// grayscale/AA overlay follows) or final (plain B/W page).
-inline void displayX3DoubleNoFlash(const GfxRenderer& renderer, const bool anotherPassFollows = false) {
-  renderer.displayGrayscaleBaseIntermediate(HalDisplay::FAST_REFRESH);
+// A normal no-flash cleanup uses two panel passes. The stronger cleanup uses
+// four. Keep the final pass intermediate if a grayscale overlay follows.
+inline void displayX3NoFlashPasses(const GfxRenderer& renderer, const uint8_t passes,
+                                  const bool anotherPassFollows = false) {
+  for (uint8_t pass = 1; pass < passes; ++pass) {
+    renderer.displayGrayscaleBaseIntermediate(HalDisplay::FAST_REFRESH);
+  }
   if (anotherPassFollows) {
     renderer.displayGrayscaleBaseIntermediate(HalDisplay::FAST_REFRESH);
   } else {
@@ -214,15 +219,47 @@ inline void displayX3DoubleNoFlash(const GfxRenderer& renderer, const bool anoth
   }
 }
 
+inline void displayX3DoubleNoFlash(const GfxRenderer& renderer, const bool anotherPassFollows = false) {
+  displayX3NoFlashPasses(renderer, 2, anotherPassFollows);
+}
+
+inline void displayX3MaximumNoFlash(const GfxRenderer& renderer, const bool anotherPassFollows = false) {
+  displayX3NoFlashPasses(renderer, 4, anotherPassFollows);
+}
+
+inline void displayX3ConfiguredNoFlash(const GfxRenderer& renderer, const int pagesUntilRefreshAction,
+                                      const bool anotherPassFollows = false) {
+  if (isBwReinforcementForced(pagesUntilRefreshAction) ||
+      SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_MAXIMUM) {
+    displayX3MaximumNoFlash(renderer, anotherPassFollows);
+  } else {
+    displayX3DoubleNoFlash(renderer, anotherPassFollows);
+  }
+}
+
+inline bool x3NoFlashEveryPage(const int pagesUntilRefreshAction) {
+  return gpio.deviceIsX3() && !isFullRefreshForced(pagesUntilRefreshAction) &&
+         (isBwReinforcementForced(pagesUntilRefreshAction) ||
+          SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_BW_REINFORCEMENT ||
+          SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_MAXIMUM);
+}
+
+inline bool shouldRefreshOnPage(const int pagesUntilRefreshAction) {
+  if (isFullRefreshForced(pagesUntilRefreshAction) ||
+      isBwReinforcementForced(pagesUntilRefreshAction)) return true;
+  // Eco must not turn into a full flash merely because a countdown saved
+  // under the previous mode reached zero.
+  if (gpio.deviceIsX3() && SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_ECO) return false;
+  return isRefreshActionDue(pagesUntilRefreshAction) || x3NoFlashEveryPage(pagesUntilRefreshAction);
+}
+
 inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilRefreshAction,
                                     const bool pageSupportsNoFlashReinforcement = true) {
-  if (isRefreshActionDue(pagesUntilRefreshAction)) {
+  if (shouldRefreshOnPage(pagesUntilRefreshAction)) {
     if (shouldUseNoFlashReinforcement(pagesUntilRefreshAction, pageSupportsNoFlashReinforcement)) {
-      // The X3 no-flash cleanup is deliberately stronger than an ordinary
-      // page turn: two consecutive OEM AA-pre-BW(mid) reinforcement passes.
-      displayX3DoubleNoFlash(renderer);
+      displayX3ConfiguredNoFlash(renderer, pagesUntilRefreshAction);
     } else {
-      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+      renderer.displayBuffer(gpio.deviceIsX3() ? HalDisplay::FULL_REFRESH : HalDisplay::HALF_REFRESH);
     }
     pagesUntilRefreshAction = SETTINGS.getRefreshFrequency();
   } else {

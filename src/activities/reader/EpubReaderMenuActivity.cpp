@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include "InkMODSettings.h"
+#include "activities/reader/ReaderUtils.h"
 #include "BookMenuConfig.h"
 #include "MappedInputManager.h"
 #include "LegacyRenderDiagnostics.h"
@@ -258,5 +259,26 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, true);
 
-  renderer.displayBuffer();
+  if (firstMenuRender && gpio.deviceIsX3()) {
+    firstMenuRender = false;
+    switch (SETTINGS.refreshAction) {
+      case InkMODSettings::REFRESH_ACTION_FULL:
+        // Entering the reader menu must not trigger a flash.
+        renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+        break;
+      case InkMODSettings::REFRESH_ACTION_BW_REINFORCEMENT:
+        ReaderUtils::displayX3DoubleNoFlash(renderer);
+        break;
+      case InkMODSettings::REFRESH_ACTION_MAXIMUM:
+        // UI transitions are latency-sensitive: cap Maximum at two passes.
+        ReaderUtils::displayX3DoubleNoFlash(renderer);
+        break;
+      default:
+        renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+        break;
+    }
+  } else {
+    firstMenuRender = false;
+    renderer.displayBuffer();
+  }
 }

@@ -571,9 +571,8 @@ bool handleGlobalShortcutAction(const InkMODSettings::SHORT_PWRBTN action) {
       return true;
     }
     case InkMODSettings::SHORT_PWRBTN::SCREENSHOT: {
-      if (activityManager.canSnapshotForSleepOverlay()) {
-        return false;
-      }
+      // Explicit screenshot actions must not be suppressed based on the
+      // current activity's ability to provide a sleep overlay snapshot.
       RenderLock lock;
       ScreenshotUtil::takeScreenshot(renderer);
       return true;

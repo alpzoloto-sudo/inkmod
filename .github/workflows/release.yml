@@ -109,7 +109,8 @@ jobs:
         with:
           tag_name: "v${{ steps.version.outputs.version }}"
           name: "inkMOD v${{ steps.version.outputs.version }}"
-          generate_release_notes: true
+          generate_release_notes: false
+          body_path: ".github/release-notes/v${{ steps.version.outputs.version }}.md"
           files: |
             ${{ steps.artifacts.outputs.x3x4 }}
             ${{ steps.artifacts.outputs.x4pro }}

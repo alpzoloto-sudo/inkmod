@@ -1141,10 +1141,10 @@ inline std::vector<SettingInfo> buildDisplayScreenCleanupSettingsList(
       }
     }
   };
+  addByName(StrId::STR_REFRESH_ACTION);
   if (SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_FULL) {
     addByName(StrId::STR_REFRESH_FREQ);
   }
-  addByName(StrId::STR_REFRESH_ACTION);
   return settings;
 }
 

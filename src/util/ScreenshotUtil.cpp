@@ -94,10 +94,12 @@ void ScreenshotUtil::takeScreenshot(GfxRenderer& renderer) {
     int height = renderer.getScreenHeight() - marginTop - marginBottom - 1;
     // Add extra margin to the border to make it more visible
     renderer.drawRect(marginLeft + 1, marginTop + 1, width - 2, height - 2, 2, true);
-    renderer.displayBuffer();
-    delay(1000);
-    renderer.restoreBwBuffer();
+    // Flash while the confirmation border is visible, not only after it
+    // disappears. This gives feedback even on standalone utility screens.
     renderer.displayBuffer(HalDisplay::RefreshMode::FULL_REFRESH);
+    delay(450);
+    renderer.restoreBwBuffer();
+    renderer.displayBuffer(HalDisplay::RefreshMode::FAST_REFRESH);
   }
 }
 

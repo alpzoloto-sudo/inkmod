@@ -19,6 +19,7 @@
 #include "components/themes/lyra/LyraCarouselTheme.h"
 #include "components/themes/lyra/LyraTheme.h"
 #include "components/themes/minimal/MinimalTheme.h"
+#include "components/themes/paper/PaperTheme.h"
 #include "components/themes/roundedraff/RoundedRaffTheme.h"
 #include "fontIds.h"
 
@@ -92,6 +93,12 @@ void UITheme::setTheme(InkMODSettings::UI_THEME type) {
       LOG_DBG("UI", "Using Minimal theme");
       currentTheme = std::make_unique<MinimalTheme>();
       currentMetrics = &MinimalMetrics::values;
+      currentType = type;
+      break;
+    case InkMODSettings::UI_THEME::PAPER:
+      LOG_DBG("UI", "Using Paper UI preview");
+      currentTheme = std::make_unique<PaperTheme>();
+      currentMetrics = &PaperMetrics::values;
       currentType = type;
       break;
     case InkMODSettings::UI_THEME::DASHBOARD:

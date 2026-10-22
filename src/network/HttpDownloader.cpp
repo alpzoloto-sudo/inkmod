@@ -17,8 +17,12 @@
 
 #include "AppVersion.h"
 #include "network/WifiPowerSaveGuard.h"
+#include "util/UrlUtils.h"
+
+#include <ctime>
 
 namespace {
+int s_lastHttpStatus = 0;
 // E-paper refreshes are slow (~500 ms on X4). Updating every 250 ms stalls
 // the HTTP read loop, increases the chance of server-side disconnects, and
 // makes changing counters ghost over each other. Keep progress useful but
@@ -176,7 +180,9 @@ struct Sink {
 
 HttpDownloader::DownloadError runGetWolfSslLowMemory(const std::string& url, Sink& sink,
                                                       const int timeoutMs = OPDS_STREAM_TIMEOUT_MS,
-                                                      const char* label = "FILE") {
+                                                      const char* label = "FILE",
+                                                      const std::string& username = "",
+                                                      const std::string& password = "") {
 #if defined(FREEINK_NET_WOLFSSL)
   // The X4 has no PSRAM.  Some servers present a certificate chain large enough
   // that system mbedTLS fails while parsing X.509 with -0x2880
@@ -197,9 +203,15 @@ HttpDownloader::DownloadError runGetWolfSslLowMemory(const std::string& url, Sin
   // first application record arrived. TLS 1.2 keeps a smaller live working set.
   http.setPreferTls12(true);
   http.setUserAgent(std::string("inkMOD-ESP32-") + INKMOD_VERSION);
-  if (!http.begin(url)) {
-    LOG_ERR("HTTP", "%s wolfSSL fallback rejected URL", label);
+  const std::string normalizedUrl = UrlUtils::ensureProtocol(url);
+  if (!http.begin(normalizedUrl)) {
+    LOG_ERR("HTTP", "%s wolfSSL fallback rejected URL: %s", label, normalizedUrl.c_str());
     return HttpDownloader::HTTP_ERROR;
+  }
+  if (!username.empty() || !password.empty()) {
+    const std::string credentials = username + ":" + password;
+    const String header = "Basic " + base64::encode(credentials.c_str());
+    http.addHeader("Authorization", header.c_str());
   }
   if (sink.resumeOffset > 0) {
     char rangeHeader[40];
@@ -230,6 +242,8 @@ HttpDownloader::DownloadError runGetWolfSslLowMemory(const std::string& url, Sin
         return true;
       },
       [&]() { return isCancelRequested(sink.cancelFlag, sink.shouldCancel); });
+
+  s_lastHttpStatus = status;
 
   if (http.callbackAborted() || http.aborted()) {
     http.end();
@@ -376,7 +390,16 @@ HttpDownloader::DownloadError runGetStreamPerform(const std::string& url, const 
     config.buffer_size = 1536;
     config.buffer_size_tx = 768;
     config.timeout_ms = timeoutMs;
-    config.crt_bundle_attach = esp_crt_bundle_attach;
+    // On ESP32 / e-ink readers without RTC battery or before SNTP sync, system time is 1970.
+    // Attaching crt_bundle with 1970 causes mbedtls -0x2700 (MBEDTLS_ERR_X509_CERT_VERIFY_FAILED).
+    // Only enforce crt_bundle if system time is valid (>= 2024-01-01).
+    const time_t now = time(nullptr);
+    if (now >= 1704067200) {
+      config.crt_bundle_attach = esp_crt_bundle_attach;
+    } else {
+      config.crt_bundle_attach = nullptr;
+      config.skip_cert_common_name_check = true;
+    }
     config.keep_alive_enable = false;
     config.disable_auto_redirect = true;
     config.event_handler = streamPerformEvent;
@@ -398,6 +421,7 @@ HttpDownloader::DownloadError runGetStreamPerform(const std::string& url, const 
     sink.downloaded = sink.resumeOffset;
     const esp_err_t err = esp_http_client_perform(client);
     const int status = esp_http_client_get_status_code(client);
+    s_lastHttpStatus = status;
     const int64_t contentLength = esp_http_client_get_content_length(client);
 
     if (ctx.aborted) {
@@ -410,7 +434,7 @@ HttpDownloader::DownloadError runGetStreamPerform(const std::string& url, const 
       esp_http_client_cleanup(client);
       return HttpDownloader::FILE_ERROR;
     }
-    if (err != ESP_OK) {
+    if (err != ESP_OK && !(err == ESP_ERR_HTTP_INCOMPLETE_DATA && contentLength < 0 && sink.downloaded > sink.resumeOffset)) {
       LOG_ERR("HTTP", "Streaming perform failed: %s", esp_err_to_name(err));
       logTlsError(client, "Streaming perform failure");
       logNetworkState("Streaming perform failure");
@@ -515,7 +539,13 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
     config.buffer_size = HTTP_RX_BUF;
     config.buffer_size_tx = HTTP_TX_BUF;
     config.timeout_ms = HTTP_TIMEOUT_MS;
-    config.crt_bundle_attach = esp_crt_bundle_attach;
+    const time_t now = time(nullptr);
+    if (now >= 1704067200) {
+      config.crt_bundle_attach = esp_crt_bundle_attach;
+    } else {
+      config.crt_bundle_attach = nullptr;
+      config.skip_cert_common_name_check = true;
+    }
     config.keep_alive_enable = false;
     config.event_handler = captureLocationHeader;
     config.user_data = &redirectLocation;
@@ -540,6 +570,7 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
 
     int64_t responseLength = esp_http_client_fetch_headers(client);
     const int status = esp_http_client_get_status_code(client);
+    s_lastHttpStatus = status;
     if (responseLength < 0) {
       LOG_ERR("HTTP", "Fetch headers failed: %lld", static_cast<long long>(responseLength));
       logNetworkState("Fetch headers failure");
@@ -688,14 +719,18 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
 }
 }  // namespace
 
+int HttpDownloader::getLastHttpStatus() {
+  return s_lastHttpStatus;
+}
+
 bool HttpDownloader::fetchUrl(const std::string& url, Stream& outContent, const std::string& username,
                               const std::string& password) {
-  WifiPowerSaveGuard wifiPowerSaveGuard;
-  (void)wifiPowerSaveGuard;
-
-  Sink sink;
-  sink.write = [&outContent](const uint8_t* data, size_t len) { return outContent.write(data, len) == len; };
-  return runGetStreamPerform(url, username, password, sink) == OK;
+  return fetchUrl(
+      url,
+      [&outContent](const uint8_t* data, size_t len) {
+        return outContent.write(data, len) == len;
+      },
+      username, password);
 }
 
 bool HttpDownloader::fetchUrl(const std::string& url, std::string& outContent, const std::string& username,
@@ -714,6 +749,7 @@ bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData
                               const std::string& password) {
   WifiPowerSaveGuard wifiPowerSaveGuard;
   (void)wifiPowerSaveGuard;
+  s_lastHttpStatus = 0;
 
   LOG_DBG("HTTP", "Fetching: %s", url.c_str());
 
@@ -729,25 +765,21 @@ bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData
   // already fragmented the heap. The perform/event path forwards body chunks
   // directly to the SD sink and also accepts chunked responses with no
   // Content-Length.
-  const bool publicHttps = url.rfind("https://", 0) == 0 && username.empty() && password.empty();
-  const bool lowContiguousHeap = ESP.getMaxAllocHeap() < 48 * 1024;
-
-  DownloadError result;
-  if (publicHttps && lowContiguousHeap) {
-    LOG_INF("HTTP", "OPDS choosing direct low-memory TLS path: free=%u maxAlloc=%u",
-            ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-    result = runGetWolfSslLowMemory(url, sink, OPDS_STREAM_TIMEOUT_MS, "OPDS");
-  } else {
-    result = runGetStreamPerform(url, username, password, sink);
+  // Direct path: SecureHttpClient handles both HTTP and HTTPS, supports
+  // readUntilClose (for close-delimited feeds like TinyOPDS with no Content-Length),
+  // decodes chunked feeds, and uses lightweight wolfSSL without mbedTLS heap fragmentation.
+  const std::string normalizedUrl = UrlUtils::ensureProtocol(url);
+  s_lastHttpStatus = 0;
+  DownloadError result = runGetWolfSslLowMemory(normalizedUrl, sink, OPDS_STREAM_TIMEOUT_MS, "OPDS", username, password);
+  if (result == OK) {
+    return true;
   }
 
-  // If system TLS could not even deliver the first body byte, retry public
-  // HTTPS feeds through the lower-memory wolfSSL path. Never retry after data
-  // has been written, otherwise a streaming sink would receive duplicate XML.
-  if (result != OK && publicHttps && sink.downloaded == 0) {
-    LOG_INF("HTTP", "OPDS retrying with low-memory TLS: free=%u maxAlloc=%u",
-            ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-    result = runGetWolfSslLowMemory(url, sink, OPDS_STREAM_TIMEOUT_MS, "OPDS");
+  // Only fall back to mbedTLS perform stream if wolfSSL failed at network transport level
+  // (status <= 0) and wrote no data. If the server already responded with HTTP 4xx/5xx,
+  // retrying is useless and would only cause TLS date verification errors.
+  if (sink.downloaded == 0 && s_lastHttpStatus <= 0) {
+    result = runGetStreamPerform(normalizedUrl, username, password, sink);
   }
   return result == OK;
 }
@@ -758,6 +790,7 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
                                                              DownloadOptions options) {
   WifiPowerSaveGuard wifiPowerSaveGuard;
   (void)wifiPowerSaveGuard;
+  s_lastHttpStatus = 0;
 
   const size_t bufferSize = options.bufferSize > 0 ? options.bufferSize : DEFAULT_DOWNLOAD_BUFFER_SIZE;
   size_t resumeOffset = 0;

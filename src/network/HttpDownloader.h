@@ -41,6 +41,11 @@ class HttpDownloader {
   };
 
   /**
+   * Return the last HTTP status code (e.g. 200, 401, 404, or <=0 on connection failure).
+   */
+  static int getLastHttpStatus();
+
+  /**
    * Fetch text content from a URL with optional credentials.
    */
   static bool fetchUrl(const std::string& url, std::string& outContent, const std::string& username = "",

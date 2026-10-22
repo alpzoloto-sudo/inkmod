@@ -1085,7 +1085,20 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path, const bool forc
         return;
       }
       state = BrowserState::ERROR;
-      errorMessage = tr(STR_FETCH_FEED_FAILED);
+      const int httpStatus = HttpDownloader::getLastHttpStatus();
+      if (httpStatus == 401) {
+        errorMessage = "HTTP 401: Нужна авторизация (логин/пароль)";
+      } else if (httpStatus == 403) {
+        errorMessage = "HTTP 403: Доступ запрещен сервером";
+      } else if (httpStatus == 404) {
+        errorMessage = "HTTP 404: Каталог не найден";
+      } else if (httpStatus > 0) {
+        char errBuf[64];
+        snprintf(errBuf, sizeof(errBuf), "Ошибка HTTP: %d", httpStatus);
+        errorMessage = errBuf;
+      } else {
+        errorMessage = tr(STR_FETCH_FEED_FAILED);
+      }
       requestUpdate();
       return;
     }
@@ -1560,7 +1573,20 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book, const size_t a
     // Resume attempts are finished; do not leave a truncated archive looking
     // like a valid book in the file browser.
     Storage.remove(filename.c_str());
-    errorMessage = tr(STR_DOWNLOAD_FAILED);
+    const int httpStatus = HttpDownloader::getLastHttpStatus();
+    if (httpStatus == 401) {
+      errorMessage = "HTTP 401: Нужна авторизация";
+    } else if (httpStatus == 403) {
+      errorMessage = "HTTP 403: Доступ запрещен сервером";
+    } else if (httpStatus == 404) {
+      errorMessage = "HTTP 404: Файл книги не найден";
+    } else if (httpStatus > 0) {
+      char errBuf[64];
+      snprintf(errBuf, sizeof(errBuf), "Ошибка скачивания: HTTP %d", httpStatus);
+      errorMessage = errBuf;
+    } else {
+      errorMessage = tr(STR_DOWNLOAD_FAILED);
+    }
     state = BrowserState::ERROR;
     requestUpdateAndWait();
     // Keep the error on screen instead of immediately snapping back to the

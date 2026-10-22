@@ -269,7 +269,8 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
         ReaderUtils::displayX3DoubleNoFlash(renderer);
         break;
       case InkMODSettings::REFRESH_ACTION_MAXIMUM:
-        ReaderUtils::displayX3MaximumNoFlash(renderer);
+        // UI transitions are latency-sensitive: cap Maximum at two passes.
+        ReaderUtils::displayX3DoubleNoFlash(renderer);
         break;
       default:
         renderer.displayBuffer(HalDisplay::FAST_REFRESH);

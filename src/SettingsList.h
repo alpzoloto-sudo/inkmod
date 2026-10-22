@@ -1131,13 +1131,20 @@ inline std::vector<SettingInfo> buildGroupedDisplaySettingsList(const std::vecto
 inline std::vector<SettingInfo> buildDisplayScreenCleanupSettingsList(
     const std::vector<SettingInfo>& allSettings) {
   std::vector<SettingInfo> settings;
-  for (const auto& setting : allSettings) {
-    if (setting.nameId == StrId::STR_REFRESH_ACTION ||
-        (setting.nameId == StrId::STR_REFRESH_FREQ &&
-         SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_FULL)) {
-      settings.push_back(setting);
+  // Keep the row order stable while a selection is being changed. The parent
+  // activity rebuilds this list after the modal option picker returns.
+  const auto addByName = [&](const StrId name) {
+    for (const auto& setting : allSettings) {
+      if (setting.nameId == name) {
+        settings.push_back(setting);
+        break;
+      }
     }
+  };
+  if (SETTINGS.refreshAction == InkMODSettings::REFRESH_ACTION_FULL) {
+    addByName(StrId::STR_REFRESH_FREQ);
   }
+  addByName(StrId::STR_REFRESH_ACTION);
   return settings;
 }
 

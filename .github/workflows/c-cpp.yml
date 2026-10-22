@@ -63,3 +63,11 @@ jobs:
           path: .pio/build/x4pro-release/*.bin
           if-no-files-found: error
           retention-days: 7
+
+      - name: Upload X4 Classic test firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: x4classic-test-firmware
+          path: .pio/build/x4classic-release/*.bin
+          if-no-files-found: error
+          retention-days: 7

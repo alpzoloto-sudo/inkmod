@@ -1889,7 +1889,8 @@ void HomeActivity::render(RenderLock&&) {
           ReaderUtils::displayX3DoubleNoFlash(renderer);
           return;
         case InkMODSettings::REFRESH_ACTION_MAXIMUM:
-          ReaderUtils::displayX3MaximumNoFlash(renderer);
+          // UI transitions are latency-sensitive: cap Maximum at two passes.
+        ReaderUtils::displayX3DoubleNoFlash(renderer);
           return;
         default:
           break;

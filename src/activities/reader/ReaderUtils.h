@@ -135,13 +135,9 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
 inline bool isTouchReaderMenuTap(const MappedInputManager& input) {
   if (!input.hasTouch()) return false;
 
-  // X4 Pro: a bottom-edge upward swipe is an explicit reader-menu gesture.
-  // The capacitive Home key means this does not collide with the global Home
-  // gesture on the Pro, and it gives full-screen tap users a menu path.
-  if (input.wasEdgeSwipe(freeink::ui::ScreenEdge::Bottom)) return true;
-
-  // In full-screen tap mode every tap belongs to page-forward; menu is reached
-  // by bottom swipe or a configured Home-key shortcut instead.
+  // Do not open the book menu on a bottom-edge swipe, especially when
+  // touch reader controls are disabled. Full-screen tap mode reserves taps
+  // for page turning; opening the menu requires a hardware shortcut.
   if (SETTINGS.touchReaderControls == InkMODSettings::TOUCH_READER_FULL_TAP) return false;
 
   int x = 0, y = 0;

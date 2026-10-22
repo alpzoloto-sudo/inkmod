@@ -1390,6 +1390,13 @@ void EpubReaderActivity::loop() {
     return;
   }
 
+  // Apply a rotation chosen in the X4 Pro quick panel after returning to the reader.
+  if (BoardConfig::isX4Pro() &&
+      renderer.getOrientation() != ReaderUtils::toRendererOrientation(SETTINGS.orientation)) {
+    applyOrientation(SETTINGS.orientation);
+    requestUpdate();
+    return;
+  }
   if (coalesceNavigationWhileLoading()) {
     return;
   }

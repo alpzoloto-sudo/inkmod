@@ -321,9 +321,8 @@ void SettingsActivity::setCurrentSettingsForCategory() {
 }
 
 void SettingsActivity::enterCategory(int categoryIndex) {
-  if (gpio.deviceIsX3() && SETTINGS.refreshAction != InkMODSettings::REFRESH_ACTION_FULL) {
-    cleanupOnNextRender = true;
-  }
+  // Switching settings tabs must stay FAST, without even two cleanup passes.
+  cleanupOnNextRender = false;
   selectedCategoryIndex = categoryIndex;
   activeSubmenu = SettingAction::None;
   parentSubmenu = SettingAction::None;
@@ -447,6 +446,13 @@ void SettingsActivity::openEnumOptionPicker(const SettingInfo& setting) {
         applyUiTextSize(renderer);
         SETTINGS.saveToFile();
         rebuildSettingsLists();
+        // Changing With flash alters the number and order of rows in this
+        // submenu. Rebind the active list and clamp the selection immediately,
+        // otherwise the stale index draws an empty selected row.
+        if (selectedCategoryIndex == 0 && activeSubmenu == SettingAction::DisplayScreenCleanup) {
+          setCurrentSettingsForCategory();
+          selectedSettingIndex = std::clamp(selectedSettingIndex, 1, std::max(1, settingsCount));
+        }
         requestUpdate();
       });
 }
@@ -533,7 +539,8 @@ void SettingsActivity::openStringEditor(const SettingInfo& setting) {
 
 void SettingsActivity::onEnter() {
   Activity::onEnter();
-  cleanupOnNextRender = true;
+  cleanupOnNextRender = gpio.deviceIsX3() &&
+      SETTINGS.refreshAction != InkMODSettings::REFRESH_ACTION_FULL;
 
   // Reset selection to first category
   selectedCategoryIndex = 0;

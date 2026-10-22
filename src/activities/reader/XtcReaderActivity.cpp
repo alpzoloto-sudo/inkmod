@@ -619,11 +619,15 @@ void XtcReaderActivity::renderPage() {
     // fast/partial turns most of the time, with a full cleanup only when the
     // configured refresh cycle says it is due.
     if (ReaderUtils::shouldRefreshOnPage(pagesUntilFullRefresh)) {
-      if (ReaderUtils::shouldUseNoFlashReinforcement(pagesUntilFullRefresh, /*pageSupportsNoFlashReinforcement=*/true)) {
+      if (ReaderUtils::shouldUseNoFlashReinforcement(pagesUntilFullRefresh)) {
+        // Grayscale/image pages must honor X3 no-flash too, including the
+        // first frame after opening a book.
         ReaderUtils::displayX3ConfiguredNoFlash(renderer, pagesUntilFullRefresh, true);
       } else {
         renderer.displayBufferIntermediate(gpio.deviceIsX3() ? HalDisplay::FULL_REFRESH : HalDisplay::HALF_REFRESH);
-        renderer.preconditionGrayscale();
+        // On X3 a second settle after FULL is a redundant visible pass.
+        // Other panel families retain their grayscale preconditioning.
+        if (!gpio.deviceIsX3()) renderer.preconditionGrayscale();
       }
       pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
     } else {
@@ -777,11 +781,15 @@ void XtcReaderActivity::renderPage() {
 
     // Display BW with conditional refresh based on pagesUntilFullRefresh
     if (ReaderUtils::shouldRefreshOnPage(pagesUntilFullRefresh)) {
-      if (ReaderUtils::shouldUseNoFlashReinforcement(pagesUntilFullRefresh, /*pageSupportsNoFlashReinforcement=*/true)) {
+      if (ReaderUtils::shouldUseNoFlashReinforcement(pagesUntilFullRefresh)) {
+        // Grayscale/image pages must honor X3 no-flash too, including the
+        // first frame after opening a book.
         ReaderUtils::displayX3ConfiguredNoFlash(renderer, pagesUntilFullRefresh, true);
       } else {
         renderer.displayBufferIntermediate(gpio.deviceIsX3() ? HalDisplay::FULL_REFRESH : HalDisplay::HALF_REFRESH);
-        renderer.preconditionGrayscale();
+        // On X3 a second settle after FULL is a redundant visible pass.
+        // Other panel families retain their grayscale preconditioning.
+        if (!gpio.deviceIsX3()) renderer.preconditionGrayscale();
       }
       pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
     } else {

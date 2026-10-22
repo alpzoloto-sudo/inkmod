@@ -141,6 +141,17 @@ void TxtReaderActivity::onExit() {
 }
 
 void TxtReaderActivity::loop() {
+  // The quick panel changes the saved orientation while this reader is suspended.
+  // Recalculate page geometry when control returns to the TXT reader.
+  if (renderer.getOrientation() != ReaderUtils::toRendererOrientation(SETTINGS.orientation)) {
+    RenderLock lock(*this);
+    ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+    pageOffsets.clear();
+    currentPageLines.clear();
+    initialized = false;
+    requestUpdate();
+    return;
+  }
   if (consumeLongPowerButtonRelease()) {
     return;
   }

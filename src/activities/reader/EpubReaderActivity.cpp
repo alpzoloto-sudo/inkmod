@@ -4030,10 +4030,17 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       bool layoutAbortedForLowMemory = false;
       bool cancelled = false;
       bool buildSucceeded = false;
-      // Always attempt the publisher-quality layout first. Memory policy may
-      // choose how we recover after a real allocation/layout failure, but it
-      // must never pre-emptively downgrade a healthy EPUB.
-      reader::ReaderMemoryMode buildMode = reader::ReaderMemoryMode::Normal;
+      // Honor the preflight memory mode on X3 FB2 instead of always forcing
+      // Normal (which can OOM before the parser's pressure callbacks run).
+      // Safe preserves the selected font, CSS, images, justification and
+      // hyphenation; it only disables optional bionic/guide overlays.
+      // For a healthy heap, keep the existing full-quality Normal layout.
+      // Other models and ordinary EPUBs retain their prior Normal-first path.
+      reader::ReaderMemoryMode buildMode =
+          (gpio.deviceIsX3() && epub->isFb2Package() &&
+           memoryPolicy.mode != reader::ReaderMemoryMode::Unavailable)
+              ? memoryPolicy.mode
+              : reader::ReaderMemoryMode::Normal;
       bool normalFontRecoveryAttempted = false;
       bool normalFallbackAttempted = false;
 

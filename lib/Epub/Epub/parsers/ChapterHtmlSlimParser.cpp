@@ -2393,6 +2393,15 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
            static_cast<uint8_t>(self->partWordBuffer[1]) == 0x80 &&
            (static_cast<uint8_t>(self->partWordBuffer[2]) == 0x93 ||
             static_cast<uint8_t>(self->partWordBuffer[2]) == 0x94));
+      if (fb2 && followsDialogueDash && self->partWordBufferIndex < MAX_WORD_SIZE) {
+        // Keep the dialogue dash, its NBSP and the first word in ONE token.
+        // The old three-token representation could still be pulled apart by
+        // line justification/streaming boundaries ("–     Шведы"). A literal
+        // fixed-width space inside the token cannot become a stretchable gap.
+        self->partWordBuffer[self->partWordBufferIndex++] = ' ';
+        i++;  // Consume the UTF-8 NBSP second byte.
+        continue;
+      }
       if (fb2 && !followsDialogueDash) {
         if (self->partWordBufferIndex > 0) self->flushPartWordBuffer();
         self->nextWordContinues = false;
@@ -2429,6 +2438,11 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
            static_cast<uint8_t>(self->partWordBuffer[1]) == 0x80 &&
            (static_cast<uint8_t>(self->partWordBuffer[2]) == 0x93 ||
             static_cast<uint8_t>(self->partWordBuffer[2]) == 0x94));
+      if (fb2 && followsDialogueDash && self->partWordBufferIndex < MAX_WORD_SIZE) {
+        self->partWordBuffer[self->partWordBufferIndex++] = ' ';
+        i += 2;  // Consume the remaining U+202F bytes.
+        continue;
+      }
       if (fb2 && !followsDialogueDash) {
         if (self->partWordBufferIndex > 0) self->flushPartWordBuffer();
         self->nextWordContinues = false;

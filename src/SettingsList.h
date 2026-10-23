@@ -880,6 +880,20 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
             v.end());
   }
 
+  // The UC8253 no-flash reinforcement waveform is exclusive to X3.
+  // Never advertise its button action on X4, X4 Classic or X4 Pro, including
+  // the Power and capacitive Home button assignment menus.
+  if (!gpio.deviceIsX3()) {
+    for (auto& setting : v) {
+      if (setting.nameId == StrId::STR_SHORT_PWR_BTN ||
+          setting.nameId == StrId::STR_LONG_PRESS_ACTION ||
+          setting.nameId == StrId::STR_HOME_DOUBLE_PRESS_ACTION ||
+          setting.nameId == StrId::STR_HOME_LONG_PRESS_ACTION) {
+        removeEnumRawValue(setting, static_cast<uint8_t>(InkMODSettings::REINFORCE_SCREEN));
+      }
+    }
+  }
+
   // Frontlight hardware is an X4 Pro feature. Keep the power-button action
   // out of X3/X4 menus where it would be a no-op.
   if (!BoardConfig::isX4Pro()) {

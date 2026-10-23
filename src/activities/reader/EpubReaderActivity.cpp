@@ -3641,6 +3641,12 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn, const char* source) {
   // Do this only after Section destruction and outside its RenderLock.
   if (changedSpine) {
     reclaimReaderNavigationMemory(renderer, "ordinary page-turn chapter boundary");
+    // Persist heap telemetry with the chapter transition. A crash on a later
+    // chapter is then distinguishable from a content-specific layout failure.
+    char breadcrumb[48];
+    snprintf(breadcrumb, sizeof(breadcrumb), "ERS boundary s=%d f=%u m=%u", currentSpineIndex,
+             static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    HalSystem::recordBreadcrumb(breadcrumb);
   }
   lastPageTurnTime = millis();
   requestUpdate();
@@ -4049,8 +4055,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
                 readerMemoryModeName(buildMode), ESP.getFreeHeap(), ESP.getMaxAllocHeap());
         {
           char breadcrumb[48];
-          snprintf(breadcrumb, sizeof(breadcrumb), "ERS build s=%d mode=%s", currentSpineIndex,
-                   readerMemoryModeName(buildMode));
+          snprintf(breadcrumb, sizeof(breadcrumb), "ERS s=%d %s f=%u m=%u", currentSpineIndex,
+                   readerMemoryModeName(buildMode), static_cast<unsigned>(ESP.getFreeHeap()),
+                   static_cast<unsigned>(ESP.getMaxAllocHeap()));
           HalSystem::recordBreadcrumb(breadcrumb);
         }
 

@@ -28,7 +28,7 @@ constexpr uint32_t SECTION_CACHE_MAGIC = 0x535843FF;  // bytes: 0xFF, "CXS"
 // the anti-giant-gap guard. Existing section caches contain already-positioned
 // word x-coordinates, so they must be rebuilt or the Justify setting will keep
 // showing the pre-fix ragged-right layout.
-constexpr uint8_t SECTION_FILE_VERSION = 64;
+constexpr uint8_t SECTION_FILE_VERSION = 65;
 constexpr uint32_t HEADER_SIZE = sizeof(SECTION_CACHE_MAGIC) + sizeof(uint8_t) + sizeof(int) + sizeof(float) +
                                  sizeof(bool) + sizeof(bool) + sizeof(uint8_t) + sizeof(uint16_t) + sizeof(uint16_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) + sizeof(uint8_t) + sizeof(bool) +

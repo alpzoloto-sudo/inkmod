@@ -1239,6 +1239,24 @@ void setup() {
   allowSleepAt = millis() + 2000;
 }
 
+namespace {
+// Only written and consumed by the main Arduino loop task; no mutex needed.
+bool deferredHomeSleepPending = false;
+bool deferredHomeSleepQuickResume = false;
+}  // namespace
+
+void requestDeferredHomeSleep(const bool quickResume) {
+  deferredHomeSleepQuickResume = quickResume;
+  deferredHomeSleepPending = true;
+}
+
+bool consumeDeferredHomeSleep(bool& quickResume) {
+  if (!deferredHomeSleepPending) return false;
+  quickResume = deferredHomeSleepQuickResume;
+  deferredHomeSleepPending = false;
+  return true;
+}
+
 void loop() {
   static unsigned long maxLoopDuration = 0;
   const unsigned long loopStartTime = millis();

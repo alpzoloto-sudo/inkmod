@@ -3577,6 +3577,7 @@ void EpubReaderActivity::setAutoPageTurnIntervalSeconds(uint16_t seconds) {
 
 void EpubReaderActivity::pageTurn(bool isForwardTurn, const char* source) {
   pageLoadRetryCount = 0;
+  bool changedSpine = false;
   if (isForwardTurn) {
     uint32_t forwardReadSeconds = 0;
     const bool shouldRecordForwardRead = forwardPageReadElapsed(forwardReadSeconds, source);
@@ -3602,6 +3603,7 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn, const char* source) {
         nextPageNumber = 0;
         currentSpineIndex++;
         section.reset();
+        changedSpine = true;
 
         // Force status aggregation to recompute for the new internal chunk.
         logicalStatusCacheSpineIndex = -1;
@@ -3628,9 +3630,17 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn, const char* source) {
         pendingPageJump = std::numeric_limits<uint16_t>::max();
         currentSpineIndex--;
         section.reset();
+        changedSpine = true;
         clearLogicalPageCarry();
       }
     }
+  }
+  // Ordinary page turning and chapter boundary crossings must release the
+  // same rebuildable glyph caches as chapter-jump navigation. Otherwise the
+  // ESP32-C3's small heap progressively fragments over several FB2 chapters.
+  // Do this only after Section destruction and outside its RenderLock.
+  if (changedSpine) {
+    reclaimReaderNavigationMemory(renderer, "ordinary page-turn chapter boundary");
   }
   lastPageTurnTime = millis();
   requestUpdate();

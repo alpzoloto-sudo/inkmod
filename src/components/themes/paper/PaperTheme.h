@@ -1,6 +1,13 @@
 #pragma once
 
 #include <BoardConfig.h>
+#include <Bitmap.h>
+#include <HalStorage.h>
+#include <I18n.h>
+
+#include "RecentBooksStore.h"
+#include "activities/reader/BookReadingStats.h"
+#include "components/UITheme.h"
 #include <GfxRenderer.h>
 
 #include <algorithm>
@@ -37,6 +44,135 @@ constexpr ThemeMetrics values = makeValues();
 
 class PaperTheme final : public RoundedRaffTheme {
  public:
+  void drawRecentBookCover(
+      GfxRenderer& renderer, Rect rect, const std::vector<RecentBook>& recentBooks,
+      int selectorIndex, bool& coverRendered, bool& coverBufferStored,
+      bool& bufferRestored, const std::function<bool()>& storeCoverBuffer,
+      const BookReadingStats* stats = nullptr, float progressPercent = -1.0f) const override {
+    (void)selectorIndex;
+    (void)coverRendered;
+    (void)coverBufferStored;
+    (void)bufferRestored;
+    (void)storeCoverBuffer;
+
+    // Paper has its own smaller cover height. Reusing RoundedRaff's image
+    // renderer requested a 260px thumbnail while Home generated a 245px one,
+    // leaving a completely empty placeholder on the X4 Pro.
+    const int pad = PaperMetrics::values.contentSidePadding;
+    const int cardX = rect.x + pad;
+    const int cardY = rect.y + 4;
+    const int cardW = std::max(1, rect.width - pad * 2);
+    const int cardH = std::max(1, rect.height - 8);
+    renderer.fillRoundedRect(cardX, cardY, cardW, cardH, 12, Color::White);
+    renderer.drawRoundedRect(cardX, cardY, cardW, cardH, 1, 12, true);
+
+    if (recentBooks.empty()) {
+      const std::string label = renderer.truncatedText(
+          UI_12_FONT_ID, tr(STR_NO_OPEN_BOOK), cardW - 24);
+      renderer.drawText(UI_12_FONT_ID, cardX + 12, cardY + cardH / 2,
+                        label.c_str(), true, EpdFontFamily::BOLD);
+      return;
+    }
+
+    const RecentBook& book = recentBooks.front();
+    const int imgH = std::max(1, std::min(PaperMetrics::values.homeCoverHeight - 16, cardH - 20));
+    const int imgW = std::max(1, std::min(imgH * 3 / 5, cardW * 40 / 100));
+    const int imgX = cardX + 12;
+    const int imgY = cardY + (cardH - imgH) / 2;
+    bool hasImage = false;
+    if (!book.coverBmpPath.empty()) {
+      // Retry the original BMP when its sized thumbnail has not been generated.
+      const std::string thumb = UITheme::getCoverThumbPath(
+          book.coverBmpPath, PaperMetrics::values.homeCoverHeight);
+      for (int pass = 0; pass < 2 && !hasImage; ++pass) {
+        const std::string& candidate = pass == 0 ? thumb : book.coverBmpPath;
+        HalFile file;
+        if (!Storage.openFileForRead("PAPER", candidate, file)) continue;
+        Bitmap bitmap(file);
+        if (bitmap.parseHeaders() == BmpReaderError::Ok) {
+          renderer.drawBitmap(bitmap, imgX, imgY, imgW, imgH);
+          hasImage = true;
+        }
+        file.close();
+      }
+    }
+    if (!hasImage) {
+      renderer.fillRoundedRect(imgX, imgY, imgW, imgH, 8, Color::LightGray);
+      renderer.drawRoundedRect(imgX, imgY, imgW, imgH, 1, 8, true);
+      const std::string title = renderer.truncatedText(
+          UI_10_FONT_ID, book.title.c_str(), imgW - 12, EpdFontFamily::BOLD);
+      renderer.drawText(UI_10_FONT_ID, imgX + 6, imgY + imgH / 2,
+                        title.c_str(), true, EpdFontFamily::BOLD);
+    }
+    renderer.drawRoundedRect(imgX, imgY, imgW, imgH, 1, 8, true);
+
+    const int tx = imgX + imgW + 14;
+    const int tw = std::max(1, cardX + cardW - 12 - tx);
+    const std::string title = renderer.truncatedText(
+        UI_12_FONT_ID, book.title.c_str(), tw, EpdFontFamily::BOLD);
+    renderer.drawText(UI_12_FONT_ID, tx, cardY + 22, title.c_str(),
+                      true, EpdFontFamily::BOLD);
+    const std::string author = renderer.truncatedText(
+        UI_10_FONT_ID, book.author.c_str(), tw);
+    renderer.drawText(UI_10_FONT_ID, tx, cardY + 54, author.c_str());
+
+    if (progressPercent >= 0.0f) {
+      const int pct = std::clamp(static_cast<int>(progressPercent + 0.5f), 0, 100);
+      const std::string progress = std::to_string(pct) + "%";
+      renderer.drawText(UI_12_FONT_ID, tx, cardY + 99,
+                        progress.c_str(), true, EpdFontFamily::BOLD);
+      const int barY = cardY + 134;
+      const int barW = std::max(1, tw - 3);
+      renderer.drawRoundedRect(tx, barY, barW, 9, 1, 4, true);
+      if (pct > 0 && barW > 4) {
+        renderer.fillRect(tx + 2, barY + 2, (barW - 4) * pct / 100, 5, true);
+      }
+    }
+    if (stats) {
+      char duration[40];
+      BookReadingStats::formatDuration(stats->totalReadingSeconds, duration, sizeof(duration));
+      const std::string time = renderer.truncatedText(UI_10_FONT_ID, duration, tw);
+      renderer.drawText(UI_10_FONT_ID, tx, cardY + 170, time.c_str());
+      const std::string sessions = std::to_string(stats->sessionCount) + " " + tr(STR_STATS_SESSIONS_LBL);
+      const std::string visible = renderer.truncatedText(UI_10_FONT_ID, sessions.c_str(), tw);
+      renderer.drawText(UI_10_FONT_ID, tx, cardY + 197, visible.c_str());
+    }
+  }
+
+  void drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2,
+                       const char* btn3, const char* btn4,
+                       bool allowInvertedText = false,
+                       bool forceOnTouch = false) const override {
+    if (!BoardConfig::isX4Pro() || !forceOnTouch) {
+      RoundedRaffTheme::drawButtonHints(renderer, btn1, btn2, btn3, btn4,
+                                        allowInvertedText, forceOnTouch);
+      return;
+    }
+    // BookStatsActivity maps the bottom 64px to four equally sized tap slots.
+    // RoundedRaff grouped two labels inside the same pill, so the long Russian
+    // "Общая статистика" and "Изменить" labels visually overlapped.
+    const GfxRenderer::Orientation original = renderer.getOrientation();
+    renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+    const int w = renderer.getScreenWidth();
+    const int h = renderer.getScreenHeight();
+    const int slotW = w / 4;
+    const int top = h - 47;
+    const char* labels[4] = {btn1, btn2, btn3, btn4};
+    for (int i = 0; i < 4; ++i) {
+      if (!labels[i] || !labels[i][0]) continue;
+      const int x = i * slotW + 3;
+      const int cellW = std::max(1, (i == 3 ? w - i * slotW : slotW) - 6);
+      renderer.fillRoundedRect(x, top, cellW, 36, 8, Color::White);
+      renderer.drawRoundedRect(x, top, cellW, 36, 1, 8, true);
+      const std::string txt = renderer.truncatedText(
+          UI_10_FONT_ID, labels[i], std::max(1, cellW - 10));
+      const int textX = x + (cellW - renderer.getTextWidth(UI_10_FONT_ID, txt.c_str())) / 2;
+      renderer.drawText(UI_10_FONT_ID, textX, top + (36 - renderer.getLineHeight(UI_10_FONT_ID)) / 2,
+                        txt.c_str(), true);
+    }
+    renderer.setOrientation(original);
+  }
+
   void drawHeader(const GfxRenderer& renderer, Rect rect, const char* title,
                   const char* subtitle = nullptr, bool readerContext = false) const override {
     // Clear the entire header on every render to avoid residual clock text.

@@ -5,6 +5,7 @@
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
+#include <HalGPIO.h>
 #include <Logging.h>
 #include <MemoryBudget.h>
 #include <ReaderWork.h>
@@ -416,15 +417,25 @@ bool ChapterHtmlSlimParser::shouldAbortForLowMemory(const char* stage) {
   // largest-free-block is therefore not by itself a reason to throw away the
   // chapter and fall back to a lower-quality memory mode.
   const bool boundedStreamingDocument = epub != nullptr;
+  // X3 FB2 crash report from 1.1.10: operator-new OOM at 27,864 bytes free /
+  // 16,372 bytes max contiguous while building spine 34. The general EPUB
+  // 24/12 KiB fatal floor allowed another large layout allocation to run
+  // before the next parser callback. Stop X3 FB2 sooner, so Section unwinds
+  // and the reader can retry with its memory fallback instead of rebooting.
+  const bool x3Fb2 = gpio.deviceIsX3() && epub && epub->isFb2Package();
   const uint32_t fatalFree =
-      boundedStreamingDocument ? EPUB_FATAL_FREE_HEAP : MIN_FREE_HEAP_FOR_TEXT_LAYOUT;
+      x3Fb2 ? 40U * 1024U
+             : (boundedStreamingDocument ? EPUB_FATAL_FREE_HEAP : MIN_FREE_HEAP_FOR_TEXT_LAYOUT);
   const uint32_t fatalMaxAlloc =
-      boundedStreamingDocument ? EPUB_FATAL_MAX_ALLOC : MIN_MAX_ALLOC_FOR_TEXT_LAYOUT;
+      x3Fb2 ? 24U * 1024U
+             : (boundedStreamingDocument ? EPUB_FATAL_MAX_ALLOC : MIN_MAX_ALLOC_FOR_TEXT_LAYOUT);
 
   // Start pressure relief early, while there is still enough contiguous RAM to
   // finish the current line. This may drain complete text lines, never a
   // partially filled screen page.
-  if (heap.freeHeap < EPUB_PRESSURE_FREE_HEAP || heap.maxAllocHeap < EPUB_PRESSURE_MAX_ALLOC) {
+  const uint32_t pressureFree = x3Fb2 ? 64U * 1024U : EPUB_PRESSURE_FREE_HEAP;
+  const uint32_t pressureMaxAlloc = x3Fb2 ? 40U * 1024U : EPUB_PRESSURE_MAX_ALLOC;
+  if (heap.freeHeap < pressureFree || heap.maxAllocHeap < pressureMaxAlloc) {
     if (relieveEpubMemoryPressure(stage, true)) {
       heap = MemoryBudget::snapshot();
     }

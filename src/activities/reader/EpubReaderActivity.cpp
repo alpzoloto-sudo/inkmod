@@ -3641,6 +3641,20 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn, const char* source) {
   // Do this only after Section destruction and outside its RenderLock.
   if (changedSpine) {
     reclaimReaderNavigationMemory(renderer, "ordinary page-turn chapter boundary");
+    // X3 FB2: SdCardFont::clearCache() deliberately retains the advance
+    // table, kerning and ligature metadata. Those tables grow as new chapter
+    // glyphs are encountered, so clearing only page-local glyphs does NOT
+    // reset the heap between chapters. Release all REBUILDABLE font caches
+    // here; the SD font stays selected and lazily reloads its metadata.
+    if (gpio.deviceIsX3() && epub && epub->isFb2Package() &&
+        renderer.isSdCardFont(SETTINGS.getReaderFontId())) {
+      const auto beforeFontRelease = MemoryBudget::snapshot();
+      renderer.releaseSdCardFontForLowMemory(SETTINGS.getReaderFontId());
+      const auto afterFontRelease = MemoryBudget::snapshot();
+      LOG_INF("ERS", "X3 FB2 chapter font full reclaim: free=%u->%u maxAlloc=%u->%u",
+              beforeFontRelease.freeHeap, afterFontRelease.freeHeap,
+              beforeFontRelease.maxAllocHeap, afterFontRelease.maxAllocHeap);
+    }
     // Persist heap telemetry with the chapter transition. A crash on a later
     // chapter is then distinguishable from a content-specific layout failure.
     char breadcrumb[48];

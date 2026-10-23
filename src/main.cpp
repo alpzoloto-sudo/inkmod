@@ -1419,6 +1419,13 @@ void loop() {
 
   const unsigned long activityStartTime = millis();
   activityManager.loop();
+  // Home-key sleep must run after ActivityManager's event dispatch and pending
+  // activity changes have completed, not from a recursively entered loop().
+  bool quickHomeSleep = false;
+  if (consumeDeferredHomeSleep(quickHomeSleep)) {
+    enterDeepSleep(quickHomeSleep);
+    return;
+  }
   const unsigned long activityDuration = millis() - activityStartTime;
 
 #ifdef SIMULATOR

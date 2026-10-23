@@ -619,7 +619,8 @@ void SettingsActivity::loop() {
           settingsCount > 0) {
         int touched = -1;
 
-        if (static_cast<InkMODSettings::UI_THEME>(SETTINGS.uiTheme) == InkMODSettings::UI_THEME::ROUNDEDRAFF) {
+        if (static_cast<InkMODSettings::UI_THEME>(SETTINGS.uiTheme) == InkMODSettings::UI_THEME::ROUNDEDRAFF ||
+            static_cast<InkMODSettings::UI_THEME>(SETTINGS.uiTheme) == InkMODSettings::UI_THEME::PAPER) {
           // RoundedRaff does not use metrics.listRowHeight verbatim on X4 Pro:
           // drawList() expands ordinary rows to at least 56 px and lays section
           // headers out with their own height/padding. Mirror that visual geometry

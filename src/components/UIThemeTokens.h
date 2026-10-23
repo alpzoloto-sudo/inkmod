@@ -38,5 +38,21 @@ inline freeink::ui::ThemeTokens uiThemeTokens(const freeink::ui::GfxRendererTarg
   tokens.capsuleRadius = 0;
   tokens.bodyText.bold = false;
 
+  // Touch-first Paper UI controls: larger hit target spacing without extra
+  // refresh passes or additional framebuffers.
+  if (SETTINGS.uiTheme == InkMODSettings::UI_THEME::PAPER) {
+    tokens.listRowGap = 6;
+    tokens.listRowRadius = 10;
+    tokens.listInset = 4;
+    tokens.listSidePadding = 16;
+    tokens.headerSidePadding = 16;
+    tokens.headerUnderline = 1;
+    tokens.headerTitleAlign = fui::TextAlign::Left;
+    tokens.controlRadius = 12;
+    tokens.sheetRadius = 14;
+    tokens.capsuleRadius = 12;
+    tokens.bodyText.bold = false;
+  }
+
   return tokens;
 }

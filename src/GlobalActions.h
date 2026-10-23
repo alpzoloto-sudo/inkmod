@@ -38,6 +38,9 @@ inline bool isPowerButtonActionAvailableOutsideReader(const InkMODSettings::SHOR
 }
 
 void enterDeepSleep(bool fromTimeout = false);
+// Home-key sleep is deferred until ActivityManager::loop() fully unwinds.
+void requestDeferredHomeSleep(bool quickResume);
+bool consumeDeferredHomeSleep(bool& quickResume);
 
 // Execute an action that is valid outside a reader. Used by both Power and
 // X4 Pro Home-key shortcuts. Reader-specific actions are offered to the

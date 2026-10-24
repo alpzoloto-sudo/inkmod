@@ -284,7 +284,12 @@ void TxtReaderActivity::loop() {
 }
 
 void TxtReaderActivity::toggleDarkMode() {
-  SETTINGS.readerDarkMode = !SETTINGS.readerDarkMode;
+  if (BoardConfig::isX4Pro()) {
+    SETTINGS.screenInverted = !SETTINGS.screenInverted;
+    renderer.promoteNextRefresh(HalDisplay::FULL_REFRESH);
+  } else {
+    SETTINGS.readerDarkMode = !SETTINGS.readerDarkMode;
+  }
   SETTINGS.saveToFile();
   requestUpdate();
 }

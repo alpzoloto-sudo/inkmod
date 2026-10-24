@@ -727,7 +727,28 @@ void WifiSelectionActivity::checkConnectionStatus() {
     // available, immediately fall back to scanning instead of retrying the
     // stale SSID (and previously hitting the WiFi watchdog/reboot path).
     if (autoConnecting) {
-      LOG_INF("WIFI", "Auto-connect failed for ssid=%s; falling back to network scan", selectedSSID.c_str());
+      // A transient AUTH_EXPIRE/NO_AP_FOUND while STA is warming up should
+      // not turn a saved-network connection into an interactive Wi-Fi prompt.
+      // The existing recovery retry was unreachable for AUTO_CONNECTING.
+      if (x4ProRecoveryRetryCount++ == 0) {
+#ifndef SIMULATOR
+        disarmWifiHangWatchdog();
+        sConnectionAttemptLoggingActive = false;
+#endif
+        WiFi.disconnect(false);
+        delay(250);
+        connectionStartTime = millis();
+        lastLoggedWifiStatus = -1;
+        lastConnectionStatusLogTime = 0;
+#ifndef SIMULATOR
+        sLastStaDisconnectReason = 0;
+        sConnectionAttemptLoggingActive = true;
+#endif
+        WiFi.begin(selectedSSID.c_str(), enteredPassword.c_str());
+        LOG_INF("WIFI", "Retrying saved network once: ssid=%s", selectedSSID.c_str());
+        return;
+      }
+      LOG_INF("WIFI", "Auto-connect failed twice for ssid=%s; starting network scan", selectedSSID.c_str());
 #ifndef SIMULATOR
       disarmWifiHangWatchdog();
       sConnectionAttemptLoggingActive = false;
@@ -801,7 +822,25 @@ void WifiSelectionActivity::checkConnectionStatus() {
   // Check for timeout
   if (millis() - connectionStartTime > CONNECTION_TIMEOUT_MS) {
     if (autoConnecting) {
-      LOG_INF("WIFI", "Auto-connect timed out for ssid=%s; falling back to network scan", selectedSSID.c_str());
+      if (x4ProRecoveryRetryCount++ == 0) {
+#ifndef SIMULATOR
+        disarmWifiHangWatchdog();
+        sConnectionAttemptLoggingActive = false;
+#endif
+        WiFi.disconnect(false);
+        delay(250);
+        connectionStartTime = millis();
+        lastLoggedWifiStatus = -1;
+        lastConnectionStatusLogTime = 0;
+#ifndef SIMULATOR
+        sLastStaDisconnectReason = 0;
+        sConnectionAttemptLoggingActive = true;
+#endif
+        WiFi.begin(selectedSSID.c_str(), enteredPassword.c_str());
+        LOG_INF("WIFI", "Auto-connect timeout; retrying saved ssid=%s once", selectedSSID.c_str());
+        return;
+      }
+      LOG_INF("WIFI", "Auto-connect timed out twice for ssid=%s; starting network scan", selectedSSID.c_str());
 #ifndef SIMULATOR
       disarmWifiHangWatchdog();
       sConnectionAttemptLoggingActive = false;

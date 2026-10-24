@@ -55,6 +55,18 @@ uint32_t lastCodepoint(const std::string& word) {
 
 bool containsSoftHyphen(const std::string& word) { return word.find(SOFT_HYPHEN_UTF8) != std::string::npos; }
 
+// FB2 dialogue punctuation may be emitted as a separate token when XML or
+// styling splits the original dash+NBSP+word sequence. Never justify the gap
+// directly after a standalone dash, even if the parser lost NBSP continuity.
+bool isDialogueDashToken(const std::string& word) {
+  return word == "-" || word == "\xE2\x80\x93" || word == "\xE2\x80\x94";
+}
+
+bool isFixedDialogueGap(const bool preserveNaturalWordSpaces, const std::string& previousWord) {
+  return preserveNaturalWordSpaces && isDialogueDashToken(previousWord);
+}
+
+
 bool isBase64LikeChar(const char c) {
   return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '+' || c == '/' || c == '=';
 }
@@ -900,7 +912,11 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
     lineWordWidthSum += lineWordWidths[wordIdx];
     // Count gaps: each word after the first creates a gap, unless it's a continuation
     if (wordIdx > 0 && !continuesVec[lastBreakAt + wordIdx]) {
-      actualGapCount++;
+      // The dash-to-word gap in FB2 dialogue is fixed-width, not a
+      // justification opportunity even if it arrived in separate tokens.
+      if (!isFixedDialogueGap(preserveNaturalWordSpaces, lineWords[wordIdx - 1])) {
+        actualGapCount++;
+      }
       totalNaturalGaps += renderer.getSpaceAdvance(fontId, lastCodepoint(lineWords[wordIdx - 1]),
                                                    firstCodepoint(lineWords[wordIdx]), lineWordStyles[wordIdx - 1]);
     } else if (wordIdx > 0 && continuesVec[lastBreakAt + wordIdx]) {
@@ -1010,7 +1026,9 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
     for (size_t wordIdx = 0; wordIdx < reorderedWidthsScratch.size(); ++wordIdx) {
       reorderedWordWidthSum += reorderedWidthsScratch[wordIdx];
       if (wordIdx > 0 && !reorderedContinuesScratch[wordIdx]) {
-        reorderedGapCount++;
+        if (!isFixedDialogueGap(preserveNaturalWordSpaces, reorderedWordsScratch[wordIdx - 1])) {
+          reorderedGapCount++;
+        }
         reorderedNaturalGaps += renderer.getSpaceAdvance(fontId, lastCodepoint(reorderedWordsScratch[wordIdx - 1]),
                                                          firstCodepoint(reorderedWordsScratch[wordIdx]),
                                                          reorderedStylesScratch[wordIdx - 1]);
@@ -1075,7 +1093,8 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
         int gap = renderer.getSpaceAdvance(fontId, lastCodepoint(reorderedWordsScratch[wordIdx]),
                                            firstCodepoint(reorderedWordsScratch[wordIdx + 1]),
                                            reorderedStylesScratch[wordIdx]);
-        if (effectiveAlignment == CssTextAlign::Justify && !isLastLine) {
+        if (effectiveAlignment == CssTextAlign::Justify && !isLastLine &&
+            !isFixedDialogueGap(preserveNaturalWordSpaces, reorderedWordsScratch[wordIdx])) {
           gap += reorderedJustifyExtra;
         }
         xpos += gap;
@@ -1116,7 +1135,9 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
             gap = renderer.getSpaceAdvance(fontId, lastCodepoint(lineWords[wordIdx]),
                                            firstCodepoint(lineWords[wordIdx + 1]), lineWordStyles[wordIdx]);
           }
-          if (effectiveAlignment == CssTextAlign::Justify && !isLastLine) {
+          if (effectiveAlignment == CssTextAlign::Justify && !isLastLine &&
+              !(wordIdx + 1 < lineWordCount &&
+                isFixedDialogueGap(preserveNaturalWordSpaces, lineWords[wordIdx]))) {
             gap += justifyExtra;
           }
           xpos -= gap;
@@ -1146,7 +1167,9 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
             gap = renderer.getSpaceAdvance(fontId, lastCodepoint(lineWords[wordIdx]),
                                            firstCodepoint(lineWords[wordIdx + 1]), lineWordStyles[wordIdx]);
           }
-          if (effectiveAlignment == CssTextAlign::Justify && !isLastLine) {
+          if (effectiveAlignment == CssTextAlign::Justify && !isLastLine &&
+              !(wordIdx + 1 < lineWordCount &&
+                isFixedDialogueGap(preserveNaturalWordSpaces, lineWords[wordIdx]))) {
             gap += justifyExtra;
           }
           xpos += lineWordWidths[wordIdx] + gap;

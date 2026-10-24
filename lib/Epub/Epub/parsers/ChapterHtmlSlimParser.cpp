@@ -416,6 +416,10 @@ bool ChapterHtmlSlimParser::shouldAbortForLowMemory(const char* stage) {
   // largest-free-block is therefore not by itself a reason to throw away the
   // chapter and fall back to a lower-quality memory mode.
   const bool boundedStreamingDocument = epub != nullptr;
+  // Keep the established abort floor for FB2: an earlier X3-only 40/24 KiB
+  // threshold rejected small valid chapters during normal reading. Use the
+  // pressure-relief watermark to free memory before a real layout failure,
+  // but do not mistake temporary fragmentation for an unrecoverable section.
   const uint32_t fatalFree =
       boundedStreamingDocument ? EPUB_FATAL_FREE_HEAP : MIN_FREE_HEAP_FOR_TEXT_LAYOUT;
   const uint32_t fatalMaxAlloc =
@@ -424,7 +428,9 @@ bool ChapterHtmlSlimParser::shouldAbortForLowMemory(const char* stage) {
   // Start pressure relief early, while there is still enough contiguous RAM to
   // finish the current line. This may drain complete text lines, never a
   // partially filled screen page.
-  if (heap.freeHeap < EPUB_PRESSURE_FREE_HEAP || heap.maxAllocHeap < EPUB_PRESSURE_MAX_ALLOC) {
+  const uint32_t pressureFree = EPUB_PRESSURE_FREE_HEAP;
+  const uint32_t pressureMaxAlloc = EPUB_PRESSURE_MAX_ALLOC;
+  if (heap.freeHeap < pressureFree || heap.maxAllocHeap < pressureMaxAlloc) {
     if (relieveEpubMemoryPressure(stage, true)) {
       heap = MemoryBudget::snapshot();
     }
@@ -2393,6 +2399,15 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
            static_cast<uint8_t>(self->partWordBuffer[1]) == 0x80 &&
            (static_cast<uint8_t>(self->partWordBuffer[2]) == 0x93 ||
             static_cast<uint8_t>(self->partWordBuffer[2]) == 0x94));
+      if (fb2 && followsDialogueDash && self->partWordBufferIndex < MAX_WORD_SIZE) {
+        // Keep the dialogue dash, its NBSP and the first word in ONE token.
+        // The old three-token representation could still be pulled apart by
+        // line justification/streaming boundaries ("–     Шведы"). A literal
+        // fixed-width space inside the token cannot become a stretchable gap.
+        self->partWordBuffer[self->partWordBufferIndex++] = ' ';
+        i++;  // Consume the UTF-8 NBSP second byte.
+        continue;
+      }
       if (fb2 && !followsDialogueDash) {
         if (self->partWordBufferIndex > 0) self->flushPartWordBuffer();
         self->nextWordContinues = false;
@@ -2429,6 +2444,11 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
            static_cast<uint8_t>(self->partWordBuffer[1]) == 0x80 &&
            (static_cast<uint8_t>(self->partWordBuffer[2]) == 0x93 ||
             static_cast<uint8_t>(self->partWordBuffer[2]) == 0x94));
+      if (fb2 && followsDialogueDash && self->partWordBufferIndex < MAX_WORD_SIZE) {
+        self->partWordBuffer[self->partWordBufferIndex++] = ' ';
+        i += 2;  // Consume the remaining U+202F bytes.
+        continue;
+      }
       if (fb2 && !followsDialogueDash) {
         if (self->partWordBufferIndex > 0) self->flushPartWordBuffer();
         self->nextWordContinues = false;

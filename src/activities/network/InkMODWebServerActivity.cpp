@@ -193,9 +193,10 @@ void InkMODWebServerActivity::onNetworkModeSelected(const NetworkMode mode) {
 
     state = WebServerActivityState::WIFI_SELECTION;
     LOG_DBG("WEBACT", "Launching WifiSelectionActivity...");
-    // "Join Network" is an explicit user request to choose/switch Wi-Fi.
-    // Never auto-connect the last SSID here; always scan and show the list.
-    startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput, false),
+    // File transfer should silently reuse the saved network first. The user
+    // can still choose/switch networks explicitly under Settings -> Network;
+    // and a failed auto-connect falls back to the scan.
+    startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput, true),
                            [this](const ActivityResult& result) {
                              if (!result.isCancelled) {
                                const auto& wifi = std::get<WifiResult>(result.data);

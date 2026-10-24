@@ -3577,6 +3577,7 @@ void EpubReaderActivity::setAutoPageTurnIntervalSeconds(uint16_t seconds) {
 
 void EpubReaderActivity::pageTurn(bool isForwardTurn, const char* source) {
   pageLoadRetryCount = 0;
+  bool changedSpine = false;
   if (isForwardTurn) {
     uint32_t forwardReadSeconds = 0;
     const bool shouldRecordForwardRead = forwardPageReadElapsed(forwardReadSeconds, source);
@@ -3602,6 +3603,7 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn, const char* source) {
         nextPageNumber = 0;
         currentSpineIndex++;
         section.reset();
+        changedSpine = true;
 
         // Force status aggregation to recompute for the new internal chunk.
         logicalStatusCacheSpineIndex = -1;
@@ -3628,9 +3630,37 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn, const char* source) {
         pendingPageJump = std::numeric_limits<uint16_t>::max();
         currentSpineIndex--;
         section.reset();
+        changedSpine = true;
         clearLogicalPageCarry();
       }
     }
+  }
+  // Ordinary page turning and chapter boundary crossings must release the
+  // same rebuildable glyph caches as chapter-jump navigation. Otherwise the
+  // ESP32-C3's small heap progressively fragments over several FB2 chapters.
+  // Do this only after Section destruction and outside its RenderLock.
+  if (changedSpine) {
+    reclaimReaderNavigationMemory(renderer, "ordinary page-turn chapter boundary");
+    // X3 FB2: SdCardFont::clearCache() deliberately retains the advance
+    // table, kerning and ligature metadata. Those tables grow as new chapter
+    // glyphs are encountered, so clearing only page-local glyphs does NOT
+    // reset the heap between chapters. Release all REBUILDABLE font caches
+    // here; the SD font stays selected and lazily reloads its metadata.
+    if (gpio.deviceIsX3() && epub && epub->isFb2Package() &&
+        renderer.isSdCardFont(SETTINGS.getReaderFontId())) {
+      const auto beforeFontRelease = MemoryBudget::snapshot();
+      renderer.releaseSdCardFontForLowMemory(SETTINGS.getReaderFontId());
+      const auto afterFontRelease = MemoryBudget::snapshot();
+      LOG_INF("ERS", "X3 FB2 chapter font full reclaim: free=%u->%u maxAlloc=%u->%u",
+              beforeFontRelease.freeHeap, afterFontRelease.freeHeap,
+              beforeFontRelease.maxAllocHeap, afterFontRelease.maxAllocHeap);
+    }
+    // Persist heap telemetry with the chapter transition. A crash on a later
+    // chapter is then distinguishable from a content-specific layout failure.
+    char breadcrumb[48];
+    snprintf(breadcrumb, sizeof(breadcrumb), "ERS boundary s=%d f=%u m=%u", currentSpineIndex,
+             static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    HalSystem::recordBreadcrumb(breadcrumb);
   }
   lastPageTurnTime = millis();
   requestUpdate();
@@ -4014,10 +4044,17 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       bool layoutAbortedForLowMemory = false;
       bool cancelled = false;
       bool buildSucceeded = false;
-      // Always attempt the publisher-quality layout first. Memory policy may
-      // choose how we recover after a real allocation/layout failure, but it
-      // must never pre-emptively downgrade a healthy EPUB.
-      reader::ReaderMemoryMode buildMode = reader::ReaderMemoryMode::Normal;
+      // Honor the preflight memory mode on X3 FB2 instead of always forcing
+      // Normal (which can OOM before the parser's pressure callbacks run).
+      // Safe preserves the selected font, CSS, images, justification and
+      // hyphenation; it only disables optional bionic/guide overlays.
+      // For a healthy heap, keep the existing full-quality Normal layout.
+      // Other models and ordinary EPUBs retain their prior Normal-first path.
+      reader::ReaderMemoryMode buildMode =
+          (gpio.deviceIsX3() && epub->isFb2Package() &&
+           memoryPolicy.mode != reader::ReaderMemoryMode::Unavailable)
+              ? memoryPolicy.mode
+              : reader::ReaderMemoryMode::Normal;
       bool normalFontRecoveryAttempted = false;
       bool normalFallbackAttempted = false;
 
@@ -4039,8 +4076,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
                 readerMemoryModeName(buildMode), ESP.getFreeHeap(), ESP.getMaxAllocHeap());
         {
           char breadcrumb[48];
-          snprintf(breadcrumb, sizeof(breadcrumb), "ERS build s=%d mode=%s", currentSpineIndex,
-                   readerMemoryModeName(buildMode));
+          snprintf(breadcrumb, sizeof(breadcrumb), "ERS s=%d %s f=%u m=%u", currentSpineIndex,
+                   readerMemoryModeName(buildMode), static_cast<unsigned>(ESP.getFreeHeap()),
+                   static_cast<unsigned>(ESP.getMaxAllocHeap()));
           HalSystem::recordBreadcrumb(breadcrumb);
         }
 

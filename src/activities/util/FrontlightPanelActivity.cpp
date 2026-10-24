@@ -151,6 +151,9 @@ void FrontlightPanelActivity::runTile(const int idx) {
   switch (idx) {
     case 0:  // Night mode (inverted output polarity, applied to the whole UI)
       SETTINGS.screenInverted = SETTINGS.screenInverted ? 0 : 1;
+      // FrontlightPanel renders immediately without going through the normal
+      // ActivityManager render-task inversion setter.
+      display.setInverted(SETTINGS.screenInverted != 0);
       SETTINGS.saveToFile();
       // Inversion rewrites every pixel; take the clean waveform so the panel
       // does not keep a ghost of the old polarity.

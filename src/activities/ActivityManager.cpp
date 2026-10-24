@@ -69,6 +69,15 @@ bool ActivityManager::executeConfiguredHomeShortcut(const uint8_t rawAction) {
   const auto action = static_cast<InkMODSettings::SHORT_PWRBTN>(rawAction);
   if (action == InkMODSettings::SHORT_PWRBTN::IGNORE) return false;
 
+  // enterDeepSleep() calls ActivityManager::goToSleep(), which recursively
+  // enters ActivityManager::loop() and replaces its current Activity.
+  // Never execute it from this very loop's Home-key event handler.
+  if (action == InkMODSettings::SHORT_PWRBTN::SLEEP ||
+      action == InkMODSettings::SHORT_PWRBTN::QUICK_RESUME_SLEEP) {
+    requestDeferredHomeSleep(action == InkMODSettings::SHORT_PWRBTN::QUICK_RESUME_SLEEP);
+    return true;
+  }
+
   // Prefer the currently visible activity so reader-only actions (bookmark,
   // stats, clipping, page turn, etc.) can reuse the exact same code path as
   // the configurable Power shortcuts. Global actions are the safe fallback.

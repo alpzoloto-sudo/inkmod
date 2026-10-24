@@ -1,6 +1,7 @@
 #pragma once
 
 #include <InkMODSettings.h>
+#include <BoardConfig.h>
 #include <GfxRenderer.h>
 #include <FreeInkUICore.h>
 #include <HalClock.h>

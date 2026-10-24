@@ -793,22 +793,39 @@ void SleepActivity::renderCoverSleepScreen() const {
 
   const bool cropped = SETTINGS.sleepScreenCoverMode == InkMODSettings::SLEEP_SCREEN_COVER_MODE::CROP;
   const bool blackBackground = SETTINGS.sleepScreenCoverMode == InkMODSettings::SLEEP_SCREEN_COVER_MODE::BLACK_BACKGROUND;
-  std::string coverBmpPath = SleepCoverAssets::cachedCoverPathFor(path, cropped);
-  if (coverBmpPath.empty() && SleepCoverAssets::prepareFullCoverForPath(path, cropped)) {
-    coverBmpPath = SleepCoverAssets::cachedCoverPathFor(path, cropped);
-  }
-  if (coverBmpPath.empty()) {
-    return (this->*renderNoCoverSleepScreen)();
-  }
 
-  FsFile file;
-  if (Storage.openFileForRead("SLP", coverBmpPath, file)) {
+  // The full-size cover may not be cached yet (e.g. a progressive JPEG was
+  // deferred to avoid expensive first-open decoding). Never discard the
+  // last-book sleep mode just because this one derived BMP is missing.
+  // The opposite crop variant and the small reader cover are valid fallbacks.
+  auto tryRenderCover = [this, blackBackground](const std::string& coverPath) -> bool {
+    if (coverPath.empty() || !Storage.exists(coverPath.c_str())) return false;
+    FsFile file;
+    if (!Storage.openFileForRead("SLP", coverPath, file)) return false;
     Bitmap bitmap(file);
-    if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-      LOG_DBG("SLP", "Rendering sleep cover: %s", coverBmpPath.c_str());
-      renderBitmapSleepScreen(bitmap, blackBackground);
-      return;
+    if (bitmap.parseHeaders() != BmpReaderError::Ok) {
+      LOG_ERR("SLP", "Invalid sleep cover BMP: %s", coverPath.c_str());
+      return false;
     }
+    LOG_INF("SLP", "Rendering sleep book cover: %s", coverPath.c_str());
+    renderBitmapSleepScreen(bitmap, blackBackground);
+    return true;
+  };
+
+  const std::string fullCover = SleepCoverAssets::cachedCoverPathFor(path, cropped);
+  if (tryRenderCover(fullCover)) return;
+
+  // Retry conversion now that the reader has released its heavy allocations.
+  if (SleepCoverAssets::prepareFullCoverForPath(path, cropped) &&
+      tryRenderCover(SleepCoverAssets::cachedCoverPathFor(path, cropped))) return;
+
+  if (BoardConfig::isX4Pro()) {
+    // Reuse existing art before giving up; the full image's other aspect
+    // variant or an already-generated thumbnail is better than a blank/default
+    // sleep screen. Reusing these avoids another image decoder allocation.
+    if (tryRenderCover(SleepCoverAssets::cachedCoverPathFor(path, !cropped))) return;
+    if (tryRenderCover(SleepCoverAssets::reusableCoverPathFor(path))) return;
+    LOG_ERR("SLP", "X4 Pro last-book cover unavailable: %s", path.c_str());
   }
 
   return (this->*renderNoCoverSleepScreen)();

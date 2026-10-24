@@ -870,6 +870,16 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
       *fontSizeIt = buildFontSizeSetting(registry);
     }
   }
+  // X4 Pro has a single full-screen Night Mode. Its book renderer uses the
+  // same global inversion, so the legacy reader-only Dark Mode setting would
+  // expose a second, conflicting switch in on-device Settings.
+  if (BoardConfig::isX4Pro()) {
+    v.erase(std::remove_if(v.begin(), v.end(), [](const SettingInfo& s) {
+              return s.nameId == StrId::STR_READER_DARK_MODE;
+            }),
+            v.end());
+  }
+
   // X4 Pro-only capacitive Home key shortcuts. Remove the settings entirely
   // from X3/X4 (including web settings) where no such key exists.
   if (!BoardConfig::isX4Pro()) {

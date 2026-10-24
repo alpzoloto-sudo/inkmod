@@ -3150,7 +3150,12 @@ void EpubReaderActivity::executeReaderQuickAction(InkMODSettings::LONG_PRESS_MEN
       }
       break;
     case InkMODSettings::LONG_MENU_TOGGLE_DARK_MODE:
-      SETTINGS.readerDarkMode = !SETTINGS.readerDarkMode;
+      if (BoardConfig::isX4Pro()) {
+        SETTINGS.screenInverted = !SETTINGS.screenInverted;
+        renderer.promoteNextRefresh(HalDisplay::FULL_REFRESH);
+      } else {
+        SETTINGS.readerDarkMode = !SETTINGS.readerDarkMode;
+      }
       SETTINGS.saveToFile();
       requestUpdate();
       break;

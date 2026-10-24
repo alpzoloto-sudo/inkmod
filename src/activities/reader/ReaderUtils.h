@@ -1,6 +1,7 @@
 #pragma once
 
 #include <InkMODSettings.h>
+#include <BoardConfig.h>
 #include <GfxRenderer.h>
 #include <FreeInkUICore.h>
 #include <HalClock.h>
@@ -44,7 +45,12 @@ inline bool shouldShowTopClockStatusBar() {
   return !SETTINGS.readerClockAtBottom && halClock.isAvailable() && SETTINGS.shouldShowClockInReader();
 }
 
-inline bool readerDarkModeEnabled() { return SETTINGS.readerDarkMode != 0; }
+// X4 Pro uses hardware/global framebuffer inversion for the ENTIRE interface.
+ // Do not also paint reader pages with inverse colors: doing both cancels
+ // each other and produces a white reader on a black UI (or the reverse).
+inline bool readerDarkModeEnabled() {
+  return !BoardConfig::isX4Pro() && SETTINGS.readerDarkMode != 0;
+}
 
 inline uint8_t readerBackgroundColor() { return readerDarkModeEnabled() ? 0x00 : 0xFF; }
 

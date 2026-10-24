@@ -5,6 +5,7 @@
 #include <GfxRenderer.h>
 #include <HalFrontlight.h>
 #include <HalGPIO.h>
+#include <HalDisplay.h>
 #include <I18n.h>
 
 #include <algorithm>

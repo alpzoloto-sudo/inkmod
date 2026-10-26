@@ -1889,6 +1889,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       }
       self->insideFootnoteLink = true;
       self->footnoteLinkDepth = self->depth;
+      self->currentFootnoteStartWordIndex =
+          self->wordsExtractedInBlock +
+          (self->currentTextBlock ? static_cast<int>(self->currentTextBlock->size()) : 0) + 1;
       strncpy(self->currentFootnote.href, href, sizeof(self->currentFootnote.href) - 1);
       self->currentFootnote.href[sizeof(self->currentFootnote.href) - 1] = '\0';
       self->currentFootnote.number[0] = '\0';

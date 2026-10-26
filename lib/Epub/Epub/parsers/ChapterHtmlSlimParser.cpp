@@ -2631,9 +2631,11 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
       entry.number[sizeof(entry.number) - 1] = '\0';
       strncpy(entry.href, self->currentFootnote.href, sizeof(entry.href) - 1);
       entry.href[sizeof(entry.href) - 1] = '\0';
-      int wordIndex =
-          self->wordsExtractedInBlock + (self->currentTextBlock ? static_cast<int>(self->currentTextBlock->size()) : 0);
-      self->pendingFootnotes.push_back({wordIndex, entry});
+      // Attribute the link to the page containing its FIRST visible word.
+      // Using the ordinal at </a> assigned a link beginning on the next
+      // page to the previous page whenever the preceding line ended exactly
+      // at its boundary (FB2 issue #52).
+      self->pendingFootnotes.push_back({self->currentFootnoteStartWordIndex, entry});
     }
     self->insideFootnoteLink = false;
   }

@@ -171,6 +171,9 @@ class ChapterHtmlSlimParser {
   // Footnote link tracking
   bool insideFootnoteLink = false;
   int footnoteLinkDepth = -1;
+  // One-based ordinal of the link's FIRST word, not its end. An end-of-link
+  // ordinal at an exact line boundary assigns the link to the previous page.
+  int currentFootnoteStartWordIndex = 0;
   FootnoteEntry currentFootnote = {};
   int currentFootnoteLinkTextLen = 0;
   std::vector<std::pair<int, FootnoteEntry>> pendingFootnotes;  // <wordIndex, entry>

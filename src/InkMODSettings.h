@@ -277,7 +277,8 @@ class InkMODSettings {
     LYRA_CAROUSEL = 4,
     MINIMAL = 5,
     DASHBOARD = 6,
-    UI_THEME_COUNT = 7
+    PAPER = 7,  // Opt-in Paper UI preview; never change persisted legacy IDs.
+    UI_THEME_COUNT = 8
   };
 
   // System-wide interface text size (home screen, menus, settings - NOT the

@@ -1841,7 +1841,8 @@ void HomeActivity::loop() {
             firstRowTop += BaseMetrics::values.verticalSpacing;
             rowHeight = BaseMetrics::values.menuRowHeight;
             rowStep = BaseMetrics::values.menuRowHeight + BaseMetrics::values.menuSpacing;
-          } else if (theme == InkMODSettings::UI_THEME::ROUNDEDRAFF) {
+          } else if (theme == InkMODSettings::UI_THEME::ROUNDEDRAFF ||
+                     theme == InkMODSettings::UI_THEME::PAPER) {
             const int available = std::max(1, pageHeight - metrics.buttonHintsHeight - menuRectTop);
             pageItems = std::max(1, available / rowStep);
           }

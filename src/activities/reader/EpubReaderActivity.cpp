@@ -2382,8 +2382,10 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
               armReadingPaceWarmup("chapter_jump");
               pauseReadingPaceTimer("chapter_jump");
             } else {
+              // Closing the TOC returns directly to the book, not through the reader menu.
+              returnToReaderMenuOnBack = false;
               resumeReadingPaceTimer("chapter_selection_cancel");
-              returnToReaderMenu();
+              requestUpdate();
             }
           });
       break;

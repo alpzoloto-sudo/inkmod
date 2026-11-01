@@ -294,6 +294,17 @@ void WifiSelectionActivity::onEnter() {
     const std::string lastSsid = WIFI_STORE.getLastConnectedSsid();
     BootLog::stepf("WIFI", "onEnter: allowAutoConnect=1, lastSsid=%s", lastSsid.empty() ? "(none)" : lastSsid.c_str());
     if (!lastSsid.empty()) {
+      // Transfer mode can reuse an existing station connection without another
+      // network selection screen or a redundant WiFi.begin()/confirmation.
+      // Only trust the actual connected station and a valid assigned IP.
+      if (WiFi.status() == WL_CONNECTED && WiFi.SSID() == lastSsid.c_str() &&
+          WiFi.localIP() != IPAddress(0, 0, 0, 0)) {
+        selectedSSID = lastSsid;
+        connectedIP = WiFi.localIP().toString().c_str();
+        BootLog::step("WIFI", "onEnter: reusing active saved connection for transfer");
+        onComplete(true);
+        return;
+      }
       const auto* cred = WIFI_STORE.findCredential(lastSsid);
       if (cred) {
         LOG_INF("WIFI", "Auto-connect candidate: ssid=%s saved=1", lastSsid.c_str());

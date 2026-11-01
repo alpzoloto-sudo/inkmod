@@ -27,8 +27,7 @@ void EpubReaderFootnotesActivity::loop() {
     return;
   }
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
-      mappedInput.wasReleased(MappedInputManager::Button::Power)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (selectedIndex >= 0 && selectedIndex < static_cast<int>(footnotes.size())) {
       setResult(FootnoteResult{footnotes[selectedIndex].href});
       finish();
@@ -63,6 +62,7 @@ void EpubReaderFootnotesActivity::loop() {
       const int index = scrollOffset + row;
       if (row >= 0 && row < visibleCount && index >= 0 && index < static_cast<int>(footnotes.size())) {
         selectedIndex = index;
+        mappedInput.suppressTouchContact();
         setResult(FootnoteResult{footnotes[selectedIndex].href});
         finish();
         return;

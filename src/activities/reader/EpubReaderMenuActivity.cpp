@@ -158,6 +158,7 @@ void EpubReaderMenuActivity::loop() {
     if (touch.handled) {
       requestUpdate();
       touchActivate = touch.activate;
+      if (touchActivate) mappedInput.suppressTouchContact();
       if (!touchActivate) return;
     }
   }

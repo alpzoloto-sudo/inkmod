@@ -2882,7 +2882,10 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
   // Track cumulative words to assign footnotes to the page containing their anchor
   wordsExtractedInBlock += line->wordCount();
   auto footnoteIt = pendingFootnotes.begin();
-  while (footnoteIt != pendingFootnotes.end() && footnoteIt->first <= wordsExtractedInBlock) {
+  // A link starts at a zero-based word boundary. Equality means its first
+  // visible word belongs to the NEXT line, possibly on the next page.
+  // Do not assign that footnote to the preceding page (issue #56).
+  while (footnoteIt != pendingFootnotes.end() && footnoteIt->first < wordsExtractedInBlock) {
     currentPage->addFootnote(footnoteIt->second.number, footnoteIt->second.href);
     ++footnoteIt;
   }

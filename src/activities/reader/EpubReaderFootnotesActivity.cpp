@@ -10,6 +10,12 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 
+namespace {
+constexpr int kFootnoteRowHeight = 52;
+constexpr int kFootnoteListTop = 60;
+constexpr int kFootnoteTextInset = 32;
+}  // namespace
+
 void EpubReaderFootnotesActivity::onEnter() {
   Activity::onEnter();
   selectedIndex = 0;
@@ -39,8 +45,10 @@ void EpubReaderFootnotesActivity::loop() {
     const auto orientation = renderer.getOrientation();
     const bool isPortraitInverted = orientation == GfxRenderer::Orientation::PortraitInverted;
     const int contentY = isPortraitInverted ? 50 : 0;
-    constexpr int lineHeight = 36;
-    const int visibleCount = std::max(1, (renderer.getScreenHeight() - contentY) / lineHeight);
+    const int listTop = kFootnoteListTop + contentY;
+    const int listHeight = std::max(1, renderer.getScreenHeight() - listTop -
+                                         UITheme::getInstance().getMetrics().buttonHintsHeight);
+    const int visibleCount = std::max(1, listHeight / kFootnoteRowHeight);
 
     const auto swipe = mappedInput.wasSwipe();
     if (swipe == MappedInputManager::SwipeDir::Up || swipe == MappedInputManager::SwipeDir::Down) {
@@ -56,9 +64,8 @@ void EpubReaderFootnotesActivity::loop() {
     }
 
     int tx = 0, ty = 0;
-    const int listTop = 60 + contentY;
-    if (mappedInput.wasScreenTapped(tx, ty) && ty >= listTop) {
-      const int row = (ty - listTop) / lineHeight;
+    if (mappedInput.wasScreenTapped(tx, ty) && ty >= listTop && ty < listTop + listHeight) {
+      const int row = (ty - listTop) / kFootnoteRowHeight;
       const int index = scrollOffset + row;
       if (row >= 0 && row < visibleCount && index >= 0 && index < static_cast<int>(footnotes.size())) {
         selectedIndex = index;
@@ -120,20 +127,21 @@ void EpubReaderFootnotesActivity::render(RenderLock&&) {
     return;
   }
 
-  constexpr int lineHeight = 36;
   const int screenWidth = renderer.getScreenWidth();
-  const int marginLeft = contentX + 20;
-
-  const int visibleCount = std::max(1, (renderer.getScreenHeight() - contentY) / lineHeight);
+  const int marginLeft = contentX + kFootnoteTextInset;
+  const int listTop = kFootnoteListTop + contentY;
+  const int listHeight = std::max(1, renderer.getScreenHeight() - listTop -
+                                       UITheme::getInstance().getMetrics().buttonHintsHeight);
+  const int visibleCount = std::max(1, listHeight / kFootnoteRowHeight);
   if (selectedIndex < scrollOffset) scrollOffset = selectedIndex;
   if (selectedIndex >= scrollOffset + visibleCount) scrollOffset = selectedIndex - visibleCount + 1;
 
   for (int i = scrollOffset; i < static_cast<int>(footnotes.size()) && i < scrollOffset + visibleCount; i++) {
-    const int y = 60 + contentY + (i - scrollOffset) * lineHeight;
+    const int y = listTop + (i - scrollOffset) * kFootnoteRowHeight;
     const bool isSelected = (i == selectedIndex);
 
     if (isSelected) {
-      renderer.fillRect(0, y, screenWidth, lineHeight, true);
+      renderer.fillRect(0, y, screenWidth, kFootnoteRowHeight, true);
     }
 
     // Show footnote number and abbreviated href
@@ -141,7 +149,7 @@ void EpubReaderFootnotesActivity::render(RenderLock&&) {
     if (label.empty()) {
       label = tr(STR_LINK);
     }
-    renderer.drawText(UI_10_FONT_ID, marginLeft, y + 4, label.c_str(), !isSelected);
+    renderer.drawText(UI_10_FONT_ID, marginLeft, y + 12, label.c_str(), !isSelected);
   }
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));

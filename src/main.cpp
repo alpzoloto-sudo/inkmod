@@ -1425,6 +1425,10 @@ void loop() {
   // Refresh the battery icon when USB is plugged or unplugged.
   // Placed after sleep guards so we never queue a render that won't be processed.
   if (gpio.wasUsbStateChanged()) {
+    // A charger plug/unplug is an asynchronous power-domain transition.
+    // Restore the normal CPU clock before rendering the new battery icon.
+    // X4 can otherwise start a full E-Ink refresh while downclocked at 10 MHz.
+    powerManager.setPowerSaving(false);
     activityManager.requestUpdate();
   }
 
@@ -1465,12 +1469,16 @@ void loop() {
     yield();
   } else {
     const unsigned long idleMs = millis() - lastActivityTime;
-    if (idleMs >= HalPowerManager::IDLE_POWER_SAVING_MS) {
+    // Keep X4 at its normal clock while USB power is present. Power saving
+    // provides no battery benefit on a charger and clock transitions during
+    // the USB/charging path are unnecessary (issue #60).
+    const bool usbPoweredX4 = gpio.deviceIsX4() && gpio.isUsbConnectedCached();
+    if (idleMs >= HalPowerManager::IDLE_POWER_SAVING_MS && !usbPoweredX4) {
       powerManager.setPowerSaving(true);
       delay(50);
     } else {
       powerManager.setPowerSaving(false);
-      delay(10);
+      delay(usbPoweredX4 ? 50 : 10);
     }
   }
 }

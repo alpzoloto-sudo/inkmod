@@ -1537,11 +1537,16 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
   auto* outputRow = bitmapScratchOutputRow_;
   auto* rowBytes = bitmapScratchRowBytes_;
 
-  // X4 Pro sleep/home covers ultimately go through a monochrome framebuffer.
-  // A 4x4 ordered matrix makes its regular lattice visible as the "grid" seen
-  // on-device. Use the same serpentine Floyd-Steinberg idea as ImageBlock for
-  // unscaled full-size grayscale BMPs, so midtones survive without a pattern.
-  const bool x4ProFs = BoardConfig::isX4Pro() && renderMode == BW && bitmap.hasGreyscale() && !isScaled;
+  // The LUT 0x02 X4 Pro panel renders the FS-converted grayscale BMPs
+  // visibly washed out in sleep screens and the standalone BMP viewer.
+  // CrossPoint's proven BW BMP path treats palette levels 0..2 as black.
+  // Limit the compatibility path to LUT 0x02; keep the existing diffusion for
+  // the other X4 Pro panel variants and leave direct reader image rendering alone.
+  const bool x4ProLut02Bw = BoardConfig::isX4Pro() &&
+                            BoardConfig::ACTIVE.displayControllerVariant == 0x02 &&
+                            renderMode == BW && bitmap.hasGreyscale();
+  const bool x4ProFs = BoardConfig::isX4Pro() && !x4ProLut02Bw &&
+                       renderMode == BW && bitmap.hasGreyscale() && !isScaled;
   int16_t* fsCurrent = nullptr;
   int16_t* fsNext = nullptr;
   bool fsReverse = false;
@@ -1599,7 +1604,7 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
       const uint8_t val = outputRow[bmpX / 4] >> (6 - ((bmpX * 2) % 8)) & 0x3;
 
       if (renderMode == BW) {
-        if (BoardConfig::isX4Pro() && bitmap.hasGreyscale()) {
+        if (BoardConfig::isX4Pro() && bitmap.hasGreyscale() && !x4ProLut02Bw) {
           if (fsCurrent) {
             static constexpr uint8_t kGray[4] = {0, 68, 145, 255};
             int adjusted = static_cast<int>(kGray[val]) + fsCurrent[bmpX + 1];

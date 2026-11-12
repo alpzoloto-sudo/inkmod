@@ -46,10 +46,10 @@ def fb2_report(path: Path) -> int:
         data=fb2_bytes(path)
         # Reject the all-zero / empty FB2 files seen in field reports.
         # A filename and nonzero file size alone do not prove this is a book.
-        if not data or not data.strip(b'\\x00\\xef\\xbb\\xbf\\x20\\t\\r\\n'):
+        if not data or not data.strip(b'\x00\xef\xbb\xbf\x20\t\r\n'):
             raise ValueError("empty or all-zero FB2 payload")
         # A minimal structural check, without loading the full FB2 XML DOM.
-        if not re.search(br'<(?:[A-Za-z0-9_]+:)?FictionBook(?:\\s|>)', data[:8192], re.I):
+        if not re.search(br'<(?:[A-Za-z0-9_]+:)?FictionBook(?:\s|>)', data[:8192], re.I):
             raise ValueError("missing FictionBook root element")
         sections=len(re.findall(br'<(?:[A-Za-z0-9_]+:)?section\b', data, re.I))
         binaries=len(re.findall(br'<(?:[A-Za-z0-9_]+:)?binary\b', data, re.I))

@@ -1,6 +1,7 @@
 #include "HalTiltSensor.h"
 
 #include <Logging.h>
+#include <BoardConfig.h>
 
 HalTiltSensor halTiltSensor;  // Singleton instance
 
@@ -25,7 +26,15 @@ bool HalTiltSensor::readReg(uint8_t reg, uint8_t* val) const {
   return true;
 }
 
-bool HalTiltSensor::readGyro(float& gx, float& gy, float& gz) const {
+bool HalTiltSensor::readGyro(float& gx, float& gy, float& gz) {
+  if (BoardConfig::isX4Classic()) {
+    Imu::Sample sample{};
+    if (!_classicImu.read(sample)) return false;
+    gx = sample.gx;
+    gy = sample.gy;
+    gz = sample.gz;
+    return true;
+  }
   Wire.beginTransmission(_i2cAddr);
   Wire.write(REG_GX_L);  // Start reading at Gyro X Low
   if (Wire.endTransmission(false) != 0) {
@@ -60,6 +69,20 @@ void HalTiltSensor::begin() {
   LOG_INF("GYR", "Tilt sensor override active via build flag");
   return;
 #endif
+
+  if (BoardConfig::isX4Classic()) {
+    // The X4 Classic has a QMI8658 on its board-configured sensor I2C bus,
+    // not the X3 Wire bus. Use the SDK driver instead of probing Wire here.
+    _available = _classicImu.begin();
+    if (_available && !_classicImu.sleep()) {
+      LOG_ERR("GYR", "X4 Classic IMU failed initial standby");
+      _available = false;
+    }
+    _initMs = millis();
+    _lastPollMs = _initMs;
+    LOG_INF("GYR", "X4 Classic tilt IMU %s", _available ? "ready" : "unavailable");
+    return;
+  }
 
   if (!gpio.deviceIsX3()) {
     _available = false;
@@ -110,6 +133,14 @@ bool HalTiltSensor::wake() {
     return false;
   }
 
+  if (BoardConfig::isX4Classic()) {
+    if (!_classicImu.wake()) return false;
+    _lastPollMs = millis();
+    _lastTiltMs = millis();
+    _wakeMs = millis();
+    return true;
+  }
+
   if (writeReg(REG_CTRL1, CTRL1_BASE) && writeReg(REG_CTRL7, CTRL7_GYRO_ENABLE)) {
     _lastPollMs = millis();
     _lastTiltMs = millis();
@@ -135,6 +166,13 @@ bool HalTiltSensor::deepSleep() {
 
   if ((millis() - _wakeMs) < SLEEP_STABILIZE_MS) {
     return false;
+  }
+
+  if (BoardConfig::isX4Classic()) {
+    if (!_classicImu.sleep()) return false;
+    clearPendingEvents();
+    _inTilt = false;
+    return true;
   }
 
   if (writeReg(REG_CTRL7, CTRL7_DISABLE_ALL) && writeReg(REG_CTRL1, CTRL1_BASE | CTRL1_SENSOR_DISABLE)) {

@@ -3,6 +3,8 @@
 ## [v1.1.11] - 2026-11-12
 
 ### Fixed
+- X4 Classic: enable QMI8658 motion-based page turns, selectable direction and button toggle through the board-specific FreeInk IMU driver. Hardware tuning still pending.
+- X4 Pro LUT 02: experimentally restore CrossPoint-style grayscale-BMP-to-BW conversion for sleep-cover and BMP viewer contrast; book-image and other display variants unchanged.
 - Unified footnote picker row geometry for touch activation and drawing, including inverted portrait and landscape. Scrolling is reconciled before hit testing.
 - Regression corpus checker rejects empty, all-zero or invalid-root FB2 files instead of reporting them as healthy books.
 

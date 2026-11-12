@@ -1487,11 +1487,12 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                                                                       self->cancellationToken);
                 cachedImageFile.flush();
                 cachedImageFile.close();
-                if (extractSuccess) {
-                  delay(50);  // Give SD card time to sync
-                } else {
+                if (!extractSuccess) {
                   Storage.remove(cachedImagePath.c_str());
                 }
+                // flush() + close() above already complete the write before
+                // getDimensions() reads the file. A fixed 50 ms pause after
+                // every image only adds avoidable cold-open latency.
               }
 
               if (extractSuccess) {

@@ -1,5 +1,20 @@
 # Changelog
 
+## [v1.1.11] - 2026-11-12
+
+### Fixed
+- Unified footnote picker row geometry for touch activation and drawing, including inverted portrait and landscape. Scrolling is reconciled before hit testing.
+- Regression corpus checker rejects empty, all-zero or invalid-root FB2 files instead of reporting them as healthy books.
+
+### Performance
+- Removed redundant fixed 50 ms pause after successfully flushing and closing each extracted EPUB/FB2 image cache file. Full image rendering remains enabled.
+
+### Notes
+- Image rendering and styles, virtual FB2 chapter limits, memory-pressure recovery and cache safety remain unchanged.
+- The corrupt FB2 detector is a host-side regression check, not a new reader-side recovery handler.
+- No claim of measured first-open speedup or hardware validation yet; test on X3/X4 and X4 Pro.
+
+
 ## [v1.1.10] - 2026-10-22
 
 ### Added

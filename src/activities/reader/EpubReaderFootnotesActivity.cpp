@@ -14,6 +14,22 @@ namespace {
 constexpr int kFootnoteRowHeight = 52;
 constexpr int kFootnoteListTop = 60;
 constexpr int kFootnoteTextInset = 32;
+
+// The hit-test and the painter must agree on the same list geometry.
+// Keep the footer reserved even in landscape / inverted portrait.
+struct FootnoteListLayout {
+  int top;
+  int height;
+  int visibleRows;
+};
+
+FootnoteListLayout footnoteListLayout(GfxRenderer& renderer) {
+  const bool inverted = renderer.getOrientation() == GfxRenderer::Orientation::PortraitInverted;
+  const int top = kFootnoteListTop + (inverted ? 50 : 0);
+  const int height = std::max(1, renderer.getScreenHeight() - top -
+                                  UITheme::getInstance().getMetrics().buttonHintsHeight);
+  return {top, height, std::max(1, height / kFootnoteRowHeight)};
+}
 }  // namespace
 
 void EpubReaderFootnotesActivity::onEnter() {
@@ -42,13 +58,13 @@ void EpubReaderFootnotesActivity::loop() {
   }
 
   if (!footnotes.empty() && mappedInput.hasTouch()) {
-    const auto orientation = renderer.getOrientation();
-    const bool isPortraitInverted = orientation == GfxRenderer::Orientation::PortraitInverted;
-    const int contentY = isPortraitInverted ? 50 : 0;
-    const int listTop = kFootnoteListTop + contentY;
-    const int listHeight = std::max(1, renderer.getScreenHeight() - listTop -
-                                         UITheme::getInstance().getMetrics().buttonHintsHeight);
-    const int visibleCount = std::max(1, listHeight / kFootnoteRowHeight);
+    const auto list = footnoteListLayout(renderer);
+    const int visibleCount = list.visibleRows;
+    // Reconcile selection and scroll *before* hit-testing. Previously this
+    // happened only in render(), so a tap after button navigation could hit
+    // a different row from the one currently visible on E-Ink.
+    if (selectedIndex < scrollOffset) scrollOffset = selectedIndex;
+    if (selectedIndex >= scrollOffset + visibleCount) scrollOffset = selectedIndex - visibleCount + 1;
 
     const auto swipe = mappedInput.wasSwipe();
     if (swipe == MappedInputManager::SwipeDir::Up || swipe == MappedInputManager::SwipeDir::Down) {
@@ -64,8 +80,8 @@ void EpubReaderFootnotesActivity::loop() {
     }
 
     int tx = 0, ty = 0;
-    if (mappedInput.wasScreenTapped(tx, ty) && ty >= listTop && ty < listTop + listHeight) {
-      const int row = (ty - listTop) / kFootnoteRowHeight;
+    if (mappedInput.wasScreenTapped(tx, ty) && ty >= list.top && ty < list.top + list.height) {
+      const int row = (ty - list.top) / kFootnoteRowHeight;
       const int index = scrollOffset + row;
       if (row >= 0 && row < visibleCount && index >= 0 && index < static_cast<int>(footnotes.size())) {
         selectedIndex = index;
@@ -129,10 +145,9 @@ void EpubReaderFootnotesActivity::render(RenderLock&&) {
 
   const int screenWidth = renderer.getScreenWidth();
   const int marginLeft = contentX + kFootnoteTextInset;
-  const int listTop = kFootnoteListTop + contentY;
-  const int listHeight = std::max(1, renderer.getScreenHeight() - listTop -
-                                       UITheme::getInstance().getMetrics().buttonHintsHeight);
-  const int visibleCount = std::max(1, listHeight / kFootnoteRowHeight);
+  const auto list = footnoteListLayout(renderer);
+  const int listTop = list.top;
+  const int visibleCount = list.visibleRows;
   if (selectedIndex < scrollOffset) scrollOffset = selectedIndex;
   if (selectedIndex >= scrollOffset + visibleCount) scrollOffset = selectedIndex - visibleCount + 1;
 

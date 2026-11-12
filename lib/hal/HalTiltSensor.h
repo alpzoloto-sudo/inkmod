@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+#include <Imu.h>
 
 #include "HalGPIO.h"
 
@@ -28,6 +29,9 @@ extern HalTiltSensor halTiltSensor;  // Singleton
 
 class HalTiltSensor {
   bool _available = false;
+  // X4 Classic uses the SDK IMU on its board-configured I2C bus.
+  // X3 keeps its existing QMI8658 driver and gesture tuning.
+  Imu _classicImu;
   uint8_t _i2cAddr = 0;
 
   // Tilt gesture state machine
@@ -74,7 +78,7 @@ class HalTiltSensor {
 
   bool writeReg(uint8_t reg, uint8_t val) const;
   bool readReg(uint8_t reg, uint8_t* val) const;
-  bool readGyro(float& gx, float& gy, float& gz) const;
+  bool readGyro(float& gx, float& gy, float& gz);
 
  public:
   // Call after gpio.begin() and powerManager.begin() (I2C already initialised for X3)

@@ -349,12 +349,13 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     add(SettingInfo::Enum(
             StrId::STR_UI_THEME, &InkMODSettings::uiTheme,
             {StrId::STR_THEME_CLASSIC, StrId::STR_THEME_MINIMAL, StrId::STR_THEME_LYRA, StrId::STR_THEME_LYRA_EXTENDED,
-             StrId::STR_THEME_LYRA_CAROUSEL, StrId::STR_THEME_ROUNDEDRAFF, StrId::STR_THEME_DASHBOARD},
+             StrId::STR_THEME_LYRA_CAROUSEL, StrId::STR_THEME_ROUNDEDRAFF, StrId::STR_THEME_DASHBOARD, StrId::STR_THEME_PAPER},
             "uiTheme", StrId::STR_CAT_DISPLAY)
             .withEnumRawValues({InkMODSettings::UI_THEME::CLASSIC, InkMODSettings::UI_THEME::MINIMAL,
                                 InkMODSettings::UI_THEME::LYRA, InkMODSettings::UI_THEME::LYRA_3_COVERS,
                                 InkMODSettings::UI_THEME::LYRA_CAROUSEL,
-                                InkMODSettings::UI_THEME::ROUNDEDRAFF, InkMODSettings::UI_THEME::DASHBOARD}));
+                                InkMODSettings::UI_THEME::ROUNDEDRAFF, InkMODSettings::UI_THEME::DASHBOARD,
+                                InkMODSettings::UI_THEME::PAPER}));
     // Accessibility: bumps SMALL/UI_10's font IDs up to the next built-in Inter
     // size (UI_12 is already the largest built-in size, so it doesn't change).
     // Applied live - see UiTextSize.h / SettingsActivity::toggleCurrentSetting().

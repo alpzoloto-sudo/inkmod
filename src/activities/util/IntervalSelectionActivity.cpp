@@ -120,10 +120,13 @@ void IntervalSelectionActivity::loop() {
     buttonNavigator.onPressAndContinuous({MappedInputManager::Button::PageForward},
                                          [this] { adjustValue(smallStep); });
   } else {
-    // Keep the existing X3/X4 four-button behaviour unchanged.
-    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Left, MappedInputManager::Button::PageBack},
+    // On X4 the logical PageBack/PageForward keys can map to the SAME physical
+    // side buttons as Up/Down. Including both here applied an extra +/-10 s
+    // small step alongside the +/-60 s large step (net 50 s).
+    // The front Left/Right keys own fine adjustment; side Up/Down own large.
+    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Left},
                                          [this] { adjustValue(-smallStep); });
-    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right, MappedInputManager::Button::PageForward},
+    buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right},
                                          [this] { adjustValue(smallStep); });
     buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this] { adjustValue(largeStep); });
     buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [this] { adjustValue(-largeStep); });
